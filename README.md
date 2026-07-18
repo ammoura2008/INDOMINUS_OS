@@ -1,0 +1,2 @@
+i am new to github , but this is a project i made after i got hacked , i found out tht windows security is trash and it takes a lot of space , linux on the other hand needs a lot to create a folder and just makes eveything harder
+so i am trying to make an operating system that can have the security of linux and the effeciency of windows , the project is mostly AI tbh but i am trying to interfer since i am a python devooper mainly and have a surface level understanding of rust and assembly 
