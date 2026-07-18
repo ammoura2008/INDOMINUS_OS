@@ -1,0 +1,23 @@
+[package]
+name        = "indo-boot"
+version.workspace = true
+authors.workspace = true
+edition.workspace = true
+license.workspace = true
+
+# CRITICAL: The bootloader is a UEFI application.
+# UEFI applications are PE32+ executables. Rust supports this natively
+# via the x86_64-unknown-uefi target. We do NOT use a standard main(),
+# we use a UEFI entry point signature.
+
+[dependencies]
+indo-core    = { path = "../libs/indo-core" }
+uefi      = { version = "0.24.0", features = ["logger", "alloc", "global_allocator"] }
+log          = { workspace = true }
+x86_64       = { workspace = true }
+
+# The bootloader needs an allocator because UEFI provides one
+# (EFI Boot Services memory allocation). We use the uefi crate's
+# allocator which hooks into EFI AllocatePool.
+[features]
+default = []

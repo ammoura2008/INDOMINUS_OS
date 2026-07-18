@@ -1,0 +1,29 @@
+# INDOMINUS OS — Shared Core Library
+#
+# indo-core is a no_std library shared between the bootloader and the kernel.
+# Its PRIMARY job in Phase 0 is to define the BootInfo struct — the data
+# structure the bootloader passes to the kernel at handoff.
+#
+# WHY a shared library?
+# The bootloader writes a BootInfo struct into memory, then jumps to the
+# kernel's entry point with a pointer to it. The kernel reads it back.
+# If the bootloader and kernel define BootInfo independently, any mismatch
+# in field layout, alignment, or ordering causes silent memory corruption.
+# Sharing the type from one crate makes this IMPOSSIBLE to get wrong.
+
+[package]
+name        = "indo-core"
+version.workspace = true
+authors.workspace = true
+edition.workspace = true
+license.workspace = true
+
+[dependencies]
+# No external dependencies — this crate must be maximally portable
+# and usable in both UEFI and bare-metal contexts.
+
+[features]
+default = []
+
+# This crate must compile for both the UEFI target and bare-metal kernel.
+# no_std is set in the source file itself via #![no_std].

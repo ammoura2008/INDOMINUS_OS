@@ -1,0 +1,40 @@
+# INDOMINUS OS — Cargo Workspace Root
+#
+# NOTE: This MUST include a [package] section to work around a cargo/build-std bug
+# where virtual workspaces (no root package) cause rust-lld "offset is not a multiple
+# of 16" errors on Windows with panic=abort + build-std.
+
+[package]
+name = "indominus-workspace"
+version = "0.0.1-alpha"
+edition = "2021"
+description = "Root package for INDOMINUS workspace (workaround for cargo build-std virtual workspace bug)"
+publish = false
+
+[workspace]
+members = [
+    "indo-kernel",
+    "indo-boot",
+    "libs/indo-core",
+]
+resolver = "2"
+
+[workspace.package]
+version = "0.0.1-alpha"
+edition = "2021"
+authors = ["INDOMINUS OS Project"]
+license = "GPL-2.0-only"
+
+[workspace.dependencies]
+x86_64     = "0.15.5"
+spin       = "0.9.9"
+log        = "0.4.33"
+
+[profile.dev]
+opt-level    = 1
+panic        = "abort"
+
+[profile.release]
+opt-level    = 3
+lto          = "thin"
+codegen-units = 1
