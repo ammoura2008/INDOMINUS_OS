@@ -27,7 +27,7 @@
 
 # Rust toolchain and profile
 CARGO     := cargo
-PROFILE   := debug
+PROFILE   := release
 RUST_TARGET_DIR := target
 
 # Bootloader build artifacts
@@ -160,6 +160,15 @@ build/OVMF_VARS.fd: | build
 
 build:
 	mkdir -p build
+
+# ─────────────────────────────────────────────────────────────────────────────
+# Verify kernel ELF
+# ─────────────────────────────────────────────────────────────────────────────
+
+.PHONY: verify
+verify: kernel
+	@echo "[VERIFY] Validating kernel ELF..."
+	python3 tools/verify_kernel.py $(KERNEL_ELF)
 
 # ─────────────────────────────────────────────────────────────────────────────
 # Run in QEMU

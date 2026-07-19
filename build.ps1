@@ -13,7 +13,7 @@ param (
 )
 
 $ErrorActionPreference = "Stop"
-$Profile = "debug"
+$Profile = "release"
 $BootTarget = "x86_64-unknown-uefi"
 $KernelTarget = "x86_64-unknown-none"
 $RustTargetDir = "target"
@@ -29,13 +29,15 @@ $OvmfFile = "C:\Program Files\qemu\share\edk2-x86_64-code.fd"
 
 function Build-Bootloader {
     Write-Host "[BUILD] Compiling bootloader (indo-boot)..." -ForegroundColor Cyan
-    cargo build --package indo-boot --target $BootTarget
+    $releaseFlag = if ($Profile -eq "release") { "--release" } else { "" }
+    cargo build --package indo-boot --target $BootTarget $releaseFlag
     if ($LASTEXITCODE -ne 0) { throw "Bootloader build failed" }
 }
 
 function Build-Kernel {
     Write-Host "`n[BUILD] Compiling kernel (indo-kernel)..." -ForegroundColor Cyan
-    cargo build --package indo-kernel --target $KernelTarget
+    $releaseFlag = if ($Profile -eq "release") { "--release" } else { "" }
+    cargo build --package indo-kernel --target $KernelTarget $releaseFlag
     if ($LASTEXITCODE -ne 0) { throw "Kernel build failed" }
 }
 
@@ -53,9 +55,14 @@ function Setup-ESP {
     Copy-Item $BootEfi -Destination "$EspDir\EFI\BOOT\BOOTX64.EFI" -Force
     Write-Host "  -> Bootloader installed"
 
+    # Remove stale kernel before copy
+    $dest = "$EspDir\EFI\INDOMINUS\kernel.elf"
+    if (Test-Path $dest) { Remove-Item $dest -Force }
+
     # Copy kernel
-    Copy-Item $KernelElf -Destination "$EspDir\EFI\INDOMINUS\kernel.elf" -Force
-    Write-Host "  -> Kernel installed"
+    Copy-Item $KernelElf -Destination $dest -Force
+    $size = (Get-Item $dest).Length
+    Write-Host "  -> Kernel installed ($([math]::Round($size/1024, 1)) KB)"
 }
 
 function Setup-OVMF {
@@ -105,6 +112,20 @@ if ($Action -eq "clean") {
 Setup-OVMF
 Build-Bootloader
 Build-Kernel
+
+# Verify kernel ELF before deploying
+Write-Host "`n[VERIFY] Validating kernel ELF..." -ForegroundColor Cyan
+$verifyScript = Join-Path $PSScriptRoot "tools\verify_kernel.py"
+if (Test-Path $verifyScript) {
+    python $verifyScript $KernelElf
+    if ($LASTEXITCODE -ne 0) {
+        Write-Host "[ERROR] Kernel verification FAILED — not deploying" -ForegroundColor Red
+        throw "Kernel verification failed"
+    }
+} else {
+    Write-Host "  [SKIP] verify_kernel.py not found" -ForegroundColor Yellow
+}
+
 Setup-ESP
 
 if ($Action -eq "run") {
