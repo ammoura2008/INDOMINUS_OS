@@ -506,3 +506,88 @@ pub unsafe extern "C" fn schedule_force(saved_rsp: u64) -> u64 {
 
     new_sp
 }
+
+/// Kill the current process and return the next process's stack pointer.
+///
+/// Called from the page fault handler when a user process faults.
+/// Marks the current process as Zombie and performs CR3 switch + TSS update
+/// for the next process.
+#[no_mangle]
+pub unsafe extern "C" fn kill_process() -> u64 {
+    use super::scheduler::SCHEDULER;
+    use crate::memory::vmm;
+
+    let mut sched = SCHEDULER.lock();
+    let new_sp = sched.kill_process();
+
+    if let Some(new_proc) = sched.current_process() {
+        let new_pml4 = new_proc.pml4_phys;
+
+        let (current_cr3, _) = x86_64::registers::control::Cr3::read();
+        if current_cr3.start_address().as_u64() != new_pml4 {
+            vmm::switch_page_table(crate::memory::PhysAddr::new(new_pml4));
+        }
+
+        let rsp0 = new_proc.kernel_stack_base + super::process::KERNEL_STACK_SIZE as u64;
+        crate::gdt::set_tss_rsp0(rsp0);
+        crate::syscall::set_kernel_rsp(rsp0);
+    }
+
+    new_sp
+}
+
+/// Naked page fault return — called from the page fault handler after kill_process().
+///
+/// Handles the stack switch, EOI, and iretq back to the next process.
+///
+/// # Stack layout of the new process (built by setup_initial_stack_frame_user):
+/// ```text
+/// [RSP+0]  = GP: rax (15 qwords total)
+/// [RSP+8]  = GP: rbx
+/// ...      (15 GP registers)
+/// [RSP+120] = IRET RIP            ← iretq reads from here
+/// [RSP+128] = IRET CS
+/// [RSP+136] = IRET RFLAGS
+/// [RSP+144] = IRET RSP            (user RSP)
+/// [RSP+152] = IRET SS             (user SS)
+/// ```
+///
+/// NOTE: The error code from the page fault is on the OLD (faulting) process's
+/// stack, not the new process's stack. After `mov rsp, r12` to the new stack,
+/// there is no error code to skip — RSP already points at the 15 GP registers.
+#[unsafe(naked)]
+#[unsafe(link_section = ".text")]
+pub unsafe extern "C" fn page_fault_return_to_user() {
+    core::arch::naked_asm!(
+        // RDI = new_sp (from kill_process)
+        "mov r12, rdi",
+
+        // Send EOI to LAPIC (upper-half virtual address)
+        "mov rax, 0xFFFFFFFFFEE000B0",
+        "mov dword ptr [rax], 0",
+
+        // Switch to new process's stack
+        "mov rsp, r12",
+
+        // Restore GP registers from new process's frame
+        "pop rax",
+        "pop rbx",
+        "pop rcx",
+        "pop rdx",
+        "pop rsi",
+        "pop rdi",
+        "pop rbp",
+        "pop r8",
+        "pop r9",
+        "pop r10",
+        "pop r11",
+        "pop r12",
+        "pop r13",
+        "pop r14",
+        "pop r15",
+
+        // RSP now points to IRET frame: RIP, CS, RFLAGS, RSP, SS
+        // Do NOT pop these — iretq reads from [RSP] directly.
+        "iretq",
+    );
+}

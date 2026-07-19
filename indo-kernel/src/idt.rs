@@ -363,37 +363,113 @@ extern "x86-interrupt" fn general_protection_fault_handler(
     crate::halt();
 }
 
-/// Handle Page Faults — fatal with full diagnostics.
+/// Handle Page Faults — classify and kill user processes, halt on kernel faults.
 ///
-/// #PF has an error code. For Ring 0→Ring 0 (no CPL change), the CPU pushes:
+/// #PF has an error code. For Ring 3→Ring 0 (CPL change), the CPU pushes:
 /// ```text
 /// [RSP+0]  = error code (PageFaultErrorCode bitfield)
 /// [RSP+8]  = RIP
 /// [RSP+16] = CS
 /// [RSP+24] = RFLAGS
+/// [RSP+32] = RSP (user)
+/// [RSP+40] = SS  (user)
 /// ```
 /// CR2 contains the faulting virtual address.
-extern "x86-interrupt" fn page_fault_handler(
-    stack_frame: InterruptStackFrame,
-    error_code: PageFaultErrorCode,
-) {
-    let faulting_addr: u64;
-    unsafe {
-        core::arch::asm!("mov {}, cr2", out(reg) faulting_addr);
-    }
-    let rip = stack_frame.instruction_pointer.as_u64();
-    let cs = stack_frame.code_segment.0;
-    let rflags = stack_frame.cpu_flags.bits();
+///
+/// For Ring 0→Ring 0 (no CPL change), only 4 qwords are pushed (no RSP/SS).
+///
+/// This is a naked handler because we need to:
+/// 1. Read CR2 and CS for classification
+/// 2. Print diagnostics (on the faulting process's kernel stack)
+/// 3. For user faults: call kill_process(), then context-switch via
+///    page_fault_return_to_user (which does EOI + stack switch + iretq)
+/// 4. For kernel faults: halt (no recovery)
+#[unsafe(naked)]
+#[unsafe(link_section = ".text")]
+pub unsafe extern "C" fn page_fault_handler() {
+    core::arch::naked_asm!(
+        // ═══ Save GP registers (same order as timer handler) ═══
+        // Push R15 first (highest addr) → RAX last (lowest = RSP)
+        "push r15",
+        "push r14",
+        "push r13",
+        "push r12",
+        "push r11",
+        "push r10",
+        "push r9",
+        "push r8",
+        "push rbp",
+        "push rdi",
+        "push rsi",
+        "push rdx",
+        "push rcx",
+        "push rbx",
+        "push rax",
+
+        // ═══ Read CR2 and CS for classification ═══
+        "mov rdi, rsp",          // rdi = frame pointer (GP regs base)
+        "mov rsi, cr2",          // rsi = faulting address
+        // Read CS from the interrupt frame pushed by CPU
+        // Stack: [0]=rax ... [14]=r15, [15]=error_code, [16]=RIP, [17]=CS, [18]=RFLAGS, ...
+        "mov rdx, [rsp + 136]",  // rdx = CS (offset 17*8 = 136 bytes from GP frame base)
+        "call {page_fault_classify}",
+        // rax = 0 for kernel fault (halt), 1 for user fault (kill + context switch)
+
+        // ═══ Check classification result ═══
+        "cmp rax, 0",
+        "je .kernel_fault",
+
+        // ═══ User fault: kill process and context switch ═══
+        "call {kill_process}",
+        // rax = new process's stack pointer
+        "mov rdi, rax",
+        "call {page_fault_return_to_user}",
+        // page_fault_return_to_user does EOI + stack switch + iretq (never returns here)
+
+        // ═══ Kernel fault: halt ═══
+        ".kernel_fault:",
+        "call {halt}",
+
+        page_fault_classify = sym page_fault_classify,
+        kill_process = sym crate::process::context_switch::kill_process,
+        page_fault_return_to_user = sym crate::process::context_switch::page_fault_return_to_user,
+        halt = sym crate::halt,
+    );
+}
+
+/// Classify a page fault as user-mode (kill process) or kernel-mode (halt).
+///
+/// Called from the naked page_fault_handler with:
+/// - rdi = frame pointer (saved GP regs on stack)
+/// - rsi = CR2 (faulting address)
+/// - rdx = CS selector
+///
+/// Returns:
+/// - rax = 1 → user fault (caller should kill process + context switch)
+/// - rax = 0 → kernel fault (caller should halt)
+///
+/// Also prints diagnostic information.
+#[no_mangle]
+unsafe extern "C" fn page_fault_classify(frame: u64, faulting_addr: u64, cs: u64) -> u64 {
+    let rpl = cs & 3;
+    // Frame layout: [0..14]=GP regs (15 qwords), [15]=error_code, [16]=RIP, [17]=CS
+    let rip = core::ptr::read_volatile((frame + 16 * 8) as *const u64); // RIP slot
 
     crate::serial::write_str_nl("!! PAGE FAULT !!");
     crate::serial::write_str("  CR2="); crate::serial::write_hex(faulting_addr); crate::serial::write_nl();
     crate::serial::write_str("  RIP="); crate::serial::write_hex(rip); crate::serial::write_nl();
-    crate::serial::write_str("  CS=");  crate::serial::write_hex(cs as u64);
-    crate::serial::write_str(" RPL="); crate::serial::write_hex((cs & 3) as u64); crate::serial::write_nl();
-    crate::serial::write_str("  RFLAGS="); crate::serial::write_hex(rflags); crate::serial::write_nl();
-    crate::serial::write_str("  err="); crate::serial::write_hex(error_code.bits()); crate::serial::write_nl();
-    crate::serial::write_str_nl("  HALTING");
-    crate::halt();
+    crate::serial::write_str("  CS=");  crate::serial::write_hex(cs);
+    crate::serial::write_str(" RPL="); crate::serial::write_hex(rpl); crate::serial::write_nl();
+
+    if rpl == 3 {
+        // User-mode fault: kill the process, continue with next
+        crate::serial::write_str_nl("  USER FAULT: killing process");
+        1 // return value → caller will kill + context switch
+    } else {
+        // Kernel-mode fault: unrecoverable
+        crate::serial::write_str_nl("  KERNEL FAULT: halting");
+        0 // return value → caller will halt
+    }
 }
 
 /// Handle Double Faults — fatal, always.
