@@ -46,6 +46,9 @@ const SVR_ENABLE: u32 = 1 << 8;
 /// LVT Timer mode bits.
 const LVT_TIMER_PERIODIC: u32 = 1 << 17;
 
+/// LVT Timer mask bit (bit 16). When set, the timer interrupt is masked.
+const LVT_TIMER_MASK: u32 = 1 << 16;
+
 /// LVT Timer vector for the APIC timer interrupt.
 const TIMER_VECTOR: u8 = 32;
 
@@ -128,4 +131,18 @@ pub fn init() {
 #[inline]
 pub unsafe fn send_eoi() {
     lapic_write(LAPIC_EOI, 0);
+}
+
+/// Mask (disable) the LAPIC timer.
+///
+/// Sets the mask bit (bit 16) in the LVT Timer register.
+/// This prevents the LAPIC timer from delivering interrupts,
+/// independent of the IO-APIC mask.
+///
+/// # Safety
+/// Must be called after LAPIC init.
+pub unsafe fn mask_lapic_timer() {
+    let current = lapic_read(LAPIC_LVT_TIMER);
+    lapic_write(LAPIC_LVT_TIMER, current | LVT_TIMER_MASK);
+    crate::serial::write_str_nl("[LAPIC] Timer masked");
 }
