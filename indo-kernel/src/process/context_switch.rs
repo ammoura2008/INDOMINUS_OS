@@ -70,12 +70,6 @@ pub unsafe extern "C" fn timer_interrupt_handler() {
         // ── Switch to new process's stack ────────────────────────────────
         "mov rsp, r12",
 
-        // ── Inspect frame BEFORE any pops ────────────────────────────────
-        // RSP points to frame[0] (R15 slot).
-        // Function grows stack DOWNWARD; frame is ABOVE RSP — safe.
-        "mov rdi, rsp",
-        "call {dump_frame_before_pop}",
-
         // ── Restore new process's registers ──────────────────────────────
         "pop r15",
         "pop r14",
@@ -98,7 +92,6 @@ pub unsafe extern "C" fn timer_interrupt_handler() {
         "iretq",
 
         schedule = sym crate::process::context_switch::schedule,
-        dump_frame_before_pop = sym crate::process::context_switch::dump_frame_before_pop,
     );
 }
 

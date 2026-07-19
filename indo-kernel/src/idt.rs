@@ -134,11 +134,11 @@ pub fn init() {
 
         // Vector 32 (PIT timer) uses a special naked handler for context switching.
         // This handler saves/restores all registers manually and calls the scheduler.
-        // NOTE: The handler address is physical (PIC relocation), which works because
-        // the identity map is active. The IDT is set up before kernel_phys_start is known.
+        // Convert the physical address (PIC relocation) to virtual for the VMM page tables.
         unsafe {
-            let handler_addr = crate::process::context_switch::timer_interrupt_handler as *const () as u64;
-            idt[32].set_handler_addr(x86_64::VirtAddr::new(handler_addr));
+            let handler_phys = crate::process::context_switch::timer_interrupt_handler as *const () as u64;
+            let handler_virt = crate::memory::phys_to_kernel_virt(handler_phys);
+            idt[32].set_handler_addr(x86_64::VirtAddr::new(handler_virt));
         }
         idt[33].set_handler_fn(irq_handler_33);
         idt[34].set_handler_fn(irq_handler_34);
@@ -271,12 +271,45 @@ extern "x86-interrupt" fn general_protection_fault_handler(
     stack_frame: InterruptStackFrame,
     error_code: u64,
 ) {
+    let captured_rsp = unsafe { crate::CAPTURED_RSP };
+    let cr3_val: u64;
+    let cs_val: u16;
+    let ss_val: u16;
+    unsafe {
+        core::arch::asm!("mov {}, cr3", out(reg) cr3_val);
+        core::arch::asm!("mov {}, cs", out(reg) cs_val);
+        core::arch::asm!("mov {}, ss", out(reg) ss_val);
+    }
+
     crate::kprintln!("━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━");
     crate::kprintln!("[EXCEPTION] #GP General Protection Fault");
     crate::kprintln!("  Error code : {:#x}", error_code);
-    crate::kprintln!("  RIP        : {:#x}", stack_frame.instruction_pointer.as_u64());
-    crate::kprintln!("  CS         : {:#x}", stack_frame.code_segment.0);
-    crate::kprintln!("  RFLAGS     : {:#x}", stack_frame.cpu_flags.bits());
+    crate::kprintln!("  RIP (from CPU frame) : {:#x}", stack_frame.instruction_pointer.as_u64());
+    crate::kprintln!("  CS  (from CPU frame) : {:#x}", stack_frame.code_segment.0);
+    crate::kprintln!("  RFLAGS (CPU frame)   : {:#x}", stack_frame.cpu_flags.bits());
+    crate::kprintln!("  CR3 (actual)          : {:#x}", cr3_val);
+    crate::kprintln!("  CS  (actual selector) : {:#x}  (RPL={})", cs_val, cs_val & 3);
+    crate::kprintln!("  SS  (actual selector) : {:#x}  (RPL={})", ss_val, ss_val & 3);
+    crate::kprintln!("  CAPTURED_RSP (before iretq): {:#x}", captured_rsp);
+
+    if captured_rsp != 0 {
+        crate::kprintln!("  ── IRET frame at CAPTURED_RSP ──");
+        for i in 0..3u64 {
+            let addr = captured_rsp + i * 8;
+            let val = unsafe { core::ptr::read_volatile(addr as *const u64) };
+            let label = match i {
+                0 => "  ← IRET RIP",
+                1 => "  ← IRET CS",
+                2 => "  ← IRET RFLAGS",
+                _ => "",
+            };
+            crate::kprintln!("    [{:#x}] = {:#018x}{}", addr, val, label);
+        }
+        let cur_rsp: u64;
+        unsafe { core::arch::asm!("mov {}, rsp", out(reg) cur_rsp); }
+        crate::kprintln!("  Current RSP in GP handler: {:#x}", cur_rsp);
+    }
+
     crate::kprintln!("  HALTING");
     crate::kprintln!("━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━");
     crate::halt();
@@ -348,6 +381,15 @@ extern "x86-interrupt" fn double_fault_handler(
         .map(|v| v.as_u64())
         .unwrap_or(0);
 
+    let cr3_val: u64;
+    let cs_val: u16;
+    let ss_val: u16;
+    unsafe {
+        core::arch::asm!("mov {}, cr3", out(reg) cr3_val);
+        core::arch::asm!("mov {}, cs", out(reg) cs_val);
+        core::arch::asm!("mov {}, ss", out(reg) ss_val);
+    }
+
     crate::kprintln!("━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━");
     crate::kprintln!("[EXCEPTION] *** DOUBLE FAULT ***");
     crate::kprintln!("  DF error code : {:#x}", error_code);
@@ -366,6 +408,9 @@ extern "x86-interrupt" fn double_fault_handler(
     crate::kprintln!("  RSP     : {:#x}", frame_rsp);
     crate::kprintln!("  SS      : {:#x}", frame_ss);
     crate::kprintln!("  CR2     : {:#x}", cr2);
+    crate::kprintln!("  CR3     : {:#x}", cr3_val);
+    crate::kprintln!("  CS (actual) : {:#x}  (RPL={})", cs_val, cs_val & 3);
+    crate::kprintln!("  SS (actual) : {:#x}  (RPL={})", ss_val, ss_val & 3);
 
     if frame_cs & 3 == 3 {
         crate::kprintln!("  DF CPL=3: RSP/SS in DF frame are from Ring 3 transition");
@@ -468,18 +513,8 @@ extern "x86-interrupt" fn double_fault_handler(
     // ════════════════════════════════════════════════════════════════════
     // Naked task RSP: what the CPU actually delivered
     // ════════════════════════════════════════════════════════════════════
-    let task_a_rsp = unsafe { crate::TASK_A_RSP };
-    let task_b_rsp = unsafe { crate::TASK_B_RSP };
     crate::kprintln!("  ── Naked task RSP (CPU-delivered) ──");
-    crate::kprintln!("  TASK_A_RSP : {:#x}", task_a_rsp);
-    crate::kprintln!("  TASK_B_RSP : {:#x}", task_b_rsp);
-    if task_a_rsp == 0 && rsp_after_load != 0 {
-        crate::kprintln!("  TASK_A_RSP = 0 → naked task never executed its first instruction");
-        crate::kprintln!("  RSP_AFTER_LOAD was {:#x} but task never saw it", rsp_after_load);
-    } else if task_a_rsp != 0 {
-        crate::kprintln!("  TASK_A_RSP matches RSP_AFTER_LOAD? {}",
-            if task_a_rsp == rsp_after_load { "YES" } else { "NO" });
-    }
+    crate::kprintln!("  (task globals removed for minimal test)");
 
     crate::kprintln!("━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━");
     crate::kprintln!("  SYSTEM HALTED — cannot recover from double fault");
