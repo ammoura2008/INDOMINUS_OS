@@ -287,6 +287,51 @@ impl Scheduler {
             .unwrap_or(0)
     }
 
+    /// Kill the current process (mark as Zombie) and return the next process's
+    /// saved stack pointer. Used by the page fault handler when a user process
+    /// faults — the kernel continues with the next process instead of halting.
+    ///
+    /// Unlike `switch_next_force`, this ALWAYS marks the current process as
+    /// Zombie (not Ready), regardless of its current state.
+    ///
+    /// Returns the stack pointer of the next Ready process, or the idle process.
+    pub fn kill_process(&mut self) -> u64 {
+        let old_pid = self.current_pid;
+
+        // Mark current process as Zombie (even if it was Running)
+        if let Some(old) = old_pid {
+            if let Some(ref mut proc) = self.processes[old as usize] {
+                proc.state = ProcessState::Zombie;
+                #[cfg(DEBUG_KERNEL)]
+                {
+                    crate::serial::write_str("[SCHED] KILLED PID=");
+                    crate::serial::write_u64(old);
+                    crate::serial::write_nl();
+                }
+            }
+        }
+
+        // Find next Ready process (skips idle, skips zombies)
+        let next_pid = if let Some(old) = old_pid {
+            self.find_next_ready(old)
+        } else {
+            self.find_next_ready(0)
+        };
+
+        let new_pid = next_pid.unwrap_or(self.idle_pid);
+
+        if let Some(ref mut proc) = self.processes[new_pid as usize] {
+            proc.state = ProcessState::Running;
+        }
+
+        self.current_pid = Some(new_pid);
+
+        self.processes[new_pid as usize]
+            .as_ref()
+            .map(|p| p.stack_pointer)
+            .unwrap_or(0)
+    }
+
     pub fn current_pid(&self) -> Option<Pid> {
         self.current_pid
     }
