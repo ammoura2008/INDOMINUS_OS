@@ -40,17 +40,9 @@ pub static mut IRET_SS: u64 = 0;
 
 // Marker strings as static byte arrays.
 #[no_mangle]
-static TIMER_MSG: [u8; 15] = *b"[TIMER] entered";
+static TICK_MSG: [u8; 6] = *b"[TICK]";
 #[no_mangle]
-static SCHED_MSG: [u8; 24] = *b"[SCHED] calling schedule";
-#[no_mangle]
-static CTX_MSG: [u8; 26] = *b"[CTX] -- context switch --";
-#[no_mangle]
-static OLD_RSP_MSG: [u8; 14] = *b"[CTX] old_rsp=";
-#[no_mangle]
-static NEW_RSP_MSG: [u8; 14] = *b"[CTX] new_rsp=";
-#[no_mangle]
-static RETURNED_MSG: [u8; 14] = *b"[CTX] returned";
+static SWITCH_MSG: [u8; 8] = *b"[SWITCH]";
 
 /// Helper: write_marker_raw(ptr, len) — writes raw bytes to serial.
 /// write_hex(value) — writes hex to serial.
@@ -64,17 +56,15 @@ static RETURNED_MSG: [u8; 14] = *b"[CTX] returned";
 #[unsafe(link_section = ".text")]
 pub unsafe extern "C" fn timer_interrupt_handler() {
     core::arch::naked_asm!(
-        // ── [TIMER] marker ──────────────────────────────────────────────
+        // ── [TICK] marker ──────────────────────────────────────────────
         "push rax",
-        "push rcx",
-        "push rdx",
+        "push rdi",
         "push rsi",
-        "lea rdi, [rip + {timer_msg}]",
-        "mov rsi, {timer_len}",
+        "lea rdi, [rip + {tick_msg}]",
+        "mov rsi, {tick_len}",
         "call {write_marker}",
         "pop rsi",
-        "pop rdx",
-        "pop rcx",
+        "pop rdi",
         "pop rax",
 
         // ── Save current process's registers ─────────────────────────────
@@ -94,50 +84,15 @@ pub unsafe extern "C" fn timer_interrupt_handler() {
         "push r14",
         "push r15",
 
-        // ── [SCHED] marker ──────────────────────────────────────────────
-        "lea rdi, [rip + {sched_msg}]",
-        "mov rsi, {sched_len}",
-        "call {write_marker}",
-
         // ── Call schedule(saved_rsp: u64) → returns new SP in RAX ────────
         "mov rdi, rsp",
         "call {schedule}",
         // RAX = new process's saved RSP
 
-        // ── [CTX] marker: context switch ────────────────────────────────
+        // ── [SWITCH] marker ──────────────────────────────────────────────
         "push rax",
-        "lea rdi, [rip + {ctx_msg}]",
-        "mov rsi, {ctx_len}",
-        "call {write_marker}",
-        "pop rax",
-
-        // ── [CTX] marker: old_rsp ───────────────────────────────────────
-        "push rax",
-        "lea rdi, [rip + {old_rsp_msg}]",
-        "mov rsi, {old_rsp_len}",
-        "call {write_marker}",
-        "lea rdi, [rip + {saved_rsp}]",
-        "mov rdi, [rdi]",
-        "call {write_hex}",
-        "mov rdi, 0x0A",
-        "call {write_byte}",
-        "pop rax",
-
-        // ── [CTX] marker: new_rsp ───────────────────────────────────────
-        "push rax",
-        "lea rdi, [rip + {new_rsp_msg}]",
-        "mov rsi, {new_rsp_len}",
-        "call {write_marker}",
-        "mov rdi, [rsp]",
-        "call {write_hex}",
-        "mov rdi, 0x0A",
-        "call {write_byte}",
-        "pop rax",
-
-        // ── [CTX] marker: returned ──────────────────────────────────────
-        "push rax",
-        "lea rdi, [rip + {returned_msg}]",
-        "mov rsi, {returned_len}",
+        "lea rdi, [rip + {switch_msg}]",
+        "mov rsi, {switch_len}",
         "call {write_marker}",
         "pop rax",
 
@@ -168,46 +123,15 @@ pub unsafe extern "C" fn timer_interrupt_handler() {
         "pop rbx",
         "pop rax",
 
-        // ── Diagnostics before iretq ─────────────────────────────────
-        // RSP at this point = post-pop IRET frame base (RIP slot).
-        // The 15 popped GP reg slots below RSP are dead (already consumed).
-        // Use slot at [RSP-16] (rbx, dead) as GDTR scratch.
-        //   GDTR = 10 bytes: [RSP-16..RSP-7] → limit(2B) + base(8B)
-        //   RDI = IRET frame base (RSP itself)
-        //   RSI = GDTR base = [RSP-14]
-        "sgdt [rsp - 16]",          // GDTR → rsp-16 (dead rbx slot area)
-        "lea rdi, [rsp]",           // RDI = IRET frame base
-        "mov rsi, [rsp - 14]",      // RSI = GDTR base (8 bytes at rsp-14)
-
-        // Align RSP to 16 bytes for call.
-        // frame is 8-mod-16 (stack_top is 16-aligned, frame = stack_top-40).
-        // sub 8 → RSP is 16-aligned → call pushes 8 → callee gets RSP%16=8.
-        "sub rsp, 8",
-        "call {cpl_diag}",
-        "add rsp, 8",
-
         // ── Return from interrupt ────────────────────────────────────────
-        // NO calls, pushes, or modifications between last pop and iretq.
         "iretq",
 
         schedule = sym crate::process::context_switch::schedule,
-        cpl_diag = sym crate::process::context_switch::print_iret_cpl_diagnostics,
         write_marker = sym crate::serial::write_marker_raw,
-        write_hex = sym crate::serial::write_hex,
-        write_byte = sym crate::serial::write_byte,
-        timer_msg = sym TIMER_MSG,
-        timer_len = const TIMER_MSG.len(),
-        sched_msg = sym SCHED_MSG,
-        sched_len = const SCHED_MSG.len(),
-        ctx_msg = sym CTX_MSG,
-        ctx_len = const CTX_MSG.len(),
-        old_rsp_msg = sym OLD_RSP_MSG,
-        old_rsp_len = const OLD_RSP_MSG.len(),
-        new_rsp_msg = sym NEW_RSP_MSG,
-        new_rsp_len = const NEW_RSP_MSG.len(),
-        returned_msg = sym RETURNED_MSG,
-        returned_len = const RETURNED_MSG.len(),
-        saved_rsp = sym SAVED_RSP,
+        tick_msg = sym TICK_MSG,
+        tick_len = const TICK_MSG.len(),
+        switch_msg = sym SWITCH_MSG,
+        switch_len = const SWITCH_MSG.len(),
     );
 }
 
