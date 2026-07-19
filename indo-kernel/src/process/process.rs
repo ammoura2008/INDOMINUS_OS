@@ -126,23 +126,15 @@ fn alloc_kernel_stack() -> u64 {
 /// by the context switch `iretq`, will start the process at `entry_point`
 /// with interrupts enabled.
 ///
-/// Register order matches the timer handler's push/pop convention.
-/// The timer handler pushes: rax, rbx, ..., r15 (rax first = lowest addr).
-/// After all pushes, RSP points to R15 (lowest addr of saved regs).
-/// So stack_pointer must point to the R15 slot = frame base.
+/// Register order matches the timer handler's push convention:
+/// R15 pushed first (highest address), RAX last (lowest = RSP).
 ///
-/// Stack layout (grows downward from `stack_top`):
-///
+/// Canonical SyscallFrame layout (15 GP regs):
 /// ```text
-/// [R15] [R14] ... [RAX] [RIP] [CS] [RFLAGS] [RSP] [SS]
-///  ^                                            ^
-///  sp (RSP after 15 pushes)                  sp + 20*8
+/// [RAX] [RBX] [RCX] ... [R15] [RIP] [CS] [RFLAGS] [RSP] [SS]
+///  ^                                              ^
+///  sp (RSP after 15 pushes)                     sp + 20*8
 /// ```
-///
-/// NOTE: All 5 IRET entries (RIP/CS/RFLAGS/RSP/SS) are always written,
-/// even for same-privilege (CPL→CPL) returns. On x86-64, iretq may pop
-/// RSP/SS regardless of CPL change when the saved CS RPL equals CPL.
-/// Writing valid RSP and SS prevents the CPU from reading garbage.
 fn setup_initial_stack_frame_kernel(stack_top: u64, entry_point: u64) -> u64 {
     let mut sp = stack_top;
 
@@ -164,26 +156,22 @@ fn setup_initial_stack_frame_kernel(stack_top: u64, entry_point: u64) -> u64 {
     crate::serial::write_nl();
 
     unsafe {
-        // After push rax..push r15, the stack from bottom to top is:
-        // [RSP+0]=R15, [RSP+8]=R14, ..., [RSP+14*8]=RAX
-        // But we need the frame to match what the pops expect.
-        // The handler pops: r15, r14, ..., rax
-        // So [sp+0]=R15, [sp+8]=R14, ..., [sp+14*8]=RAX
-        frame.add(0).write(0);   // R15
-        frame.add(1).write(0);   // R14
-        frame.add(2).write(0);   // R13
-        frame.add(3).write(0);   // R12
-        frame.add(4).write(0);   // R11
-        frame.add(5).write(0);   // R10
-        frame.add(6).write(0);   // R9
+        // Canonical SyscallFrame: [sp+0]=RAX, [sp+8]=RBX, ..., [sp+112]=R15
+        frame.add(0).write(0);   // RAX (syscall number)
+        frame.add(1).write(0);   // RBX
+        frame.add(2).write(0);   // RCX (user RIP)
+        frame.add(3).write(0);   // RDX
+        frame.add(4).write(0);   // RSI
+        frame.add(5).write(0);   // RDI
+        frame.add(6).write(0);   // RBP
         frame.add(7).write(0);   // R8
-        frame.add(8).write(0);   // RBP
-        frame.add(9).write(0);   // RDI
-        frame.add(10).write(0);  // RSI
-        frame.add(11).write(0);  // RDX
-        frame.add(12).write(0);  // RCX
-        frame.add(13).write(0);  // RBX
-        frame.add(14).write(0);  // RAX
+        frame.add(8).write(0);   // R9
+        frame.add(9).write(0);   // R10
+        frame.add(10).write(0);  // R11 (user RFLAGS)
+        frame.add(11).write(0);  // R12
+        frame.add(12).write(0);  // R13
+        frame.add(13).write(0);  // R14
+        frame.add(14).write(0);  // R15
         // Interrupt frame (restored by iretq — 5 entries)
         frame.add(15).write(entry_virt);  // RIP (virtual address)
         frame.add(16).write(0x08);         // CS = kernel code selector (DPL=0, RPL=0)
@@ -201,15 +189,11 @@ fn setup_initial_stack_frame_kernel(stack_top: u64, entry_point: u64) -> u64 {
 /// 1. Switch to Ring 3 (CS = user code selector, SS = user data selector)
 /// 2. Jump to `user_rip` with the user stack at `user_rsp`
 ///
-/// Register order matches the timer handler's push/pop convention:
-/// R15 at lowest address, RAX at highest (of the GP regs).
-///
-/// Stack layout (grows downward from `stack_top`):
-///
+/// Canonical SyscallFrame layout:
 /// ```text
-/// [R15] [R14] ... [RAX] [RIP] [CS] [RFLAGS] [RSP] [SS]
-///  ^                                            ^
-///  sp                                          sp + 20*8
+/// [RAX] [RBX] [RCX] ... [R15] [RIP] [CS] [RFLAGS] [RSP] [SS]
+///  ^                                              ^
+///  sp                                            sp + 20*8
 /// ```
 fn setup_initial_stack_frame_user(stack_top: u64, user_rip: u64, user_rsp: u64) -> u64 {
     let mut sp = stack_top;
@@ -220,23 +204,22 @@ fn setup_initial_stack_frame_user(stack_top: u64, user_rip: u64, user_rsp: u64) 
     let frame = sp as *mut u64;
 
     unsafe {
-        // 15 GP registers (all zeroed) — stored in reverse order to match
-        // the timer handler's push convention (R15 at lowest address, RAX at highest)
-        frame.add(0).write(0);   // R15
-        frame.add(1).write(0);   // R14
-        frame.add(2).write(0);   // R13
-        frame.add(3).write(0);   // R12
-        frame.add(4).write(0);   // R11
-        frame.add(5).write(0);   // R10
-        frame.add(6).write(0);   // R9
+        // Canonical SyscallFrame: [sp+0]=RAX, [sp+8]=RBX, ..., [sp+112]=R15
+        frame.add(0).write(0);   // RAX (syscall number)
+        frame.add(1).write(0);   // RBX
+        frame.add(2).write(0);   // RCX (user RIP)
+        frame.add(3).write(0);   // RDX
+        frame.add(4).write(0);   // RSI
+        frame.add(5).write(0);   // RDI
+        frame.add(6).write(0);   // RBP
         frame.add(7).write(0);   // R8
-        frame.add(8).write(0);   // RBP
-        frame.add(9).write(0);   // RDI
-        frame.add(10).write(0);  // RSI
-        frame.add(11).write(0);  // RDX
-        frame.add(12).write(0);  // RCX
-        frame.add(13).write(0);  // RBX
-        frame.add(14).write(0);  // RAX
+        frame.add(8).write(0);   // R9
+        frame.add(9).write(0);   // R10
+        frame.add(10).write(0);  // R11 (user RFLAGS)
+        frame.add(11).write(0);  // R12
+        frame.add(12).write(0);  // R13
+        frame.add(13).write(0);  // R14
+        frame.add(14).write(0);  // R15
         // Ring 3 IRET frame
         frame.add(15).write(user_rip);                    // RIP
         frame.add(16).write(crate::gdt::user_code_selector().0 as u64); // CS (Ring 3)

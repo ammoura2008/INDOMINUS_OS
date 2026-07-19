@@ -13,29 +13,40 @@
 //! stack modifications of any kind.
 
 /// RSP passed into schedule() (the old task's frame base).
+#[cfg(DEBUG_KERNEL)]
 pub static mut SAVED_RSP: u64 = 0;
 
 /// RSP immediately after `mov rsp, r12` (the new task's frame base).
+#[cfg(DEBUG_KERNEL)]
 pub static mut RSP_AFTER_LOAD: u64 = 0;
 
 /// RSP after 15 pops, before iretq (= RSP_AFTER_LOAD + 15*8).
 /// This is the address the CPU reads the IRET frame from.
+#[cfg(DEBUG_KERNEL)]
 pub static mut RSP_BEFORE_IRETQ: u64 = 0;
 
 /// Expected RSP after iretq (= RSP_AFTER_LOAD + 18*8).
+#[cfg(DEBUG_KERNEL)]
 pub static mut EXPECTED_RSP: u64 = 0;
 
 /// CS slot value from the IRET frame (read before pops).
+#[cfg(DEBUG_KERNEL)]
 pub static mut CS_IN_FRAME: u64 = 0;
 
 /// RIP slot value from the IRET frame (read before pops).
+#[cfg(DEBUG_KERNEL)]
 pub static mut RIP_IN_FRAME: u64 = 0;
 
 /// IRET frame values captured by diagnostics (for DF handler).
+#[cfg(DEBUG_KERNEL)]
 pub static mut IRET_RIP: u64 = 0;
+#[cfg(DEBUG_KERNEL)]
 pub static mut IRET_CS: u64 = 0;
+#[cfg(DEBUG_KERNEL)]
 pub static mut IRET_RFLAGS: u64 = 0;
+#[cfg(DEBUG_KERNEL)]
 pub static mut IRET_RSP_VAL: u64 = 0;
+#[cfg(DEBUG_KERNEL)]
 pub static mut IRET_SS: u64 = 0;
 
 // Marker strings as static byte arrays.
@@ -56,6 +67,12 @@ static SWITCH_MSG: [u8; 8] = *b"[SWITCH]";
 #[unsafe(link_section = ".text")]
 pub unsafe extern "C" fn timer_interrupt_handler() {
     core::arch::naked_asm!(
+        // ══ DIAGNOSTIC: QEMU debug port marker ═════════════════════════
+        // If this 'T' appears after [SWITCH], the timer fires from Ring 3.
+        // If it does NOT appear, the interrupt is not being delivered.
+        "mov dil, 0x54",
+        "call {ddbg_tick}",
+
         // ── [TICK] marker ──────────────────────────────────────────────
         "push rax",
         "push rdi",
@@ -68,21 +85,22 @@ pub unsafe extern "C" fn timer_interrupt_handler() {
         "pop rax",
 
         // ── Save current process's registers ─────────────────────────────
-        "push rax",
-        "push rbx",
-        "push rcx",
-        "push rdx",
-        "push rsi",
-        "push rdi",
-        "push rbp",
-        "push r8",
-        "push r9",
-        "push r10",
-        "push r11",
-        "push r12",
-        "push r13",
-        "push r14",
+        // Canonical frame: push R15 first (highest addr) → RAX last (lowest = RSP)
         "push r15",
+        "push r14",
+        "push r13",
+        "push r12",
+        "push r11",
+        "push r10",
+        "push r9",
+        "push r8",
+        "push rbp",
+        "push rdi",
+        "push rsi",
+        "push rdx",
+        "push rcx",
+        "push rbx",
+        "push rax",
 
         // ── Call schedule(saved_rsp: u64) → returns new SP in RAX ────────
         "mov rdi, rsp",
@@ -100,34 +118,46 @@ pub unsafe extern "C" fn timer_interrupt_handler() {
         "mov r12, rax",
 
         // ── Send EOI to LAPIC ────────────────────────────────────────────
-        "mov rax, 0xFEE000B0",
+        // NOTE: Must use the upper-half virtual address (0xFFFFFFFFFEE000B0),
+        // NOT the physical identity-mapped address (0xFEE000B0).
+        // After schedule() switches CR3 to a user PML4, the identity map
+        // is gone, but the upper-half mapping is shared by all PML4s.
+        "mov rax, 0xFFFFFFFFFEE000B0",
         "mov dword ptr [rax], 0",
 
         // ── Switch to new process's stack ────────────────────────────────
         "mov rsp, r12",
 
         // ── Restore new process's registers ──────────────────────────────
-        "pop r15",
-        "pop r14",
-        "pop r13",
-        "pop r12",
-        "pop r11",
-        "pop r10",
-        "pop r9",
-        "pop r8",
-        "pop rbp",
-        "pop rdi",
-        "pop rsi",
-        "pop rdx",
-        "pop rcx",
-        "pop rbx",
+        // Canonical frame: pop RAX first (lowest addr) → R15 last (highest)
         "pop rax",
+        "pop rbx",
+        "pop rcx",
+        "pop rdx",
+        "pop rsi",
+        "pop rdi",
+        "pop rbp",
+        "pop r8",
+        "pop r9",
+        "pop r10",
+        "pop r11",
+        "pop r12",
+        "pop r13",
+        "pop r14",
+        "pop r15",
 
+        // ── DIAGNOSTIC: dump RAX before iretq ───────────────────────────
+        // RAX here = the value user code will have when it starts.
+        "mov rdi, 0x49",
+        "mov rsi, rax",
+        "call {dump_rax}",
         // ── Return from interrupt ────────────────────────────────────────
         "iretq",
 
         schedule = sym crate::process::context_switch::schedule,
+        dump_rax = sym crate::serial::dump_rax,
         write_marker = sym crate::serial::write_marker_raw,
+        ddbg_tick = sym crate::serial::ddbg,
         tick_msg = sym TICK_MSG,
         tick_len = const TICK_MSG.len(),
         switch_msg = sym SWITCH_MSG,
@@ -143,6 +173,7 @@ pub unsafe extern "C" fn timer_interrupt_handler() {
 ///
 /// # Safety
 /// Must only be called from the naked timer handler with valid pointers.
+#[cfg(DEBUG_KERNEL)]
 #[no_mangle]
 pub unsafe extern "C" fn print_iret_cpl_diagnostics(iret_frame: u64, gdt_base: u64) {
     use crate::serial::{write_str, write_hex, write_nl};
@@ -202,7 +233,12 @@ pub unsafe extern "C" fn print_iret_cpl_diagnostics(iret_frame: u64, gdt_base: u
     write_str("── END ──\n");
 }
 
+#[cfg(not(DEBUG_KERNEL))]
+#[no_mangle]
+pub unsafe extern "C" fn print_iret_cpl_diagnostics(_iret_frame: u64, _gdt_base: u64) {}
+
 /// Print one GDT entry: selector, raw lo/hi, DPL, type, present.
+#[cfg(DEBUG_KERNEL)]
 unsafe fn dump_gdt(gdt_base: u64, sel: u64) {
     use crate::serial::{write_str, write_hex, write_nl};
     let idx = ((sel >> 3) & 0x1FFF) as u64;
@@ -220,6 +256,7 @@ unsafe fn dump_gdt(gdt_base: u64, sel: u64) {
 }
 
 /// Print DPL/type/present for a GDT entry looked up by index.
+#[cfg(DEBUG_KERNEL)]
 unsafe fn dump_gdt_entry_info(gdt_base: u64, idx: u64) {
     use crate::serial::{write_str, write_hex};
     if idx >= 128 {
@@ -238,6 +275,7 @@ unsafe fn dump_gdt_entry_info(gdt_base: u64, idx: u64) {
 ///
 /// This is the only diagnostic call between stack switch and pops.
 /// It runs before the 15 pops, so it does not consume the IRET frame.
+#[cfg(DEBUG_KERNEL)]
 #[no_mangle]
 pub unsafe extern "C" fn dump_frame_before_pop(rsp: u64) {
     RSP_AFTER_LOAD = rsp;
@@ -296,13 +334,18 @@ pub unsafe extern "C" fn dump_frame_before_pop(rsp: u64) {
     crate::serial::write_nl();
 }
 
+#[cfg(not(DEBUG_KERNEL))]
+#[no_mangle]
+pub unsafe extern "C" fn dump_frame_before_pop(_rsp: u64) {}
+
 /// The Rust-side schedule function called from the naked timer handler.
 #[no_mangle]
 pub unsafe extern "C" fn schedule(saved_rsp: u64) -> u64 {
     use super::scheduler::SCHEDULER;
     use crate::memory::vmm;
 
-    SAVED_RSP = saved_rsp;
+    #[cfg(DEBUG_KERNEL)]
+    { SAVED_RSP = saved_rsp; }
 
     crate::interrupts::pit::on_tick();
 
@@ -315,15 +358,19 @@ pub unsafe extern "C" fn schedule(saved_rsp: u64) -> u64 {
         if let Some(first_pid) = sched.find_next_ready(0) {
             let sp = sched.dispatch_first(first_pid);
 
-            crate::serial::write_str("[SCHED] FIRST DISPATCH: PID=");
-            crate::serial::write_u64(first_pid);
-            crate::serial::write_str(" sp=");
-            crate::serial::write_hex(sp);
-            crate::serial::write_str(" saved_rsp(old)=");
-            crate::serial::write_hex(saved_rsp);
-            crate::serial::write_nl();
+            #[cfg(DEBUG_KERNEL)]
+            {
+                crate::serial::write_str("[SCHED] FIRST DISPATCH: PID=");
+                crate::serial::write_u64(first_pid);
+                crate::serial::write_str(" sp=");
+                crate::serial::write_hex(sp);
+                crate::serial::write_str(" saved_rsp(old)=");
+                crate::serial::write_hex(saved_rsp);
+                crate::serial::write_nl();
+            }
 
-            EXPECTED_RSP = sp + 18 * 8;
+            #[cfg(DEBUG_KERNEL)]
+            { EXPECTED_RSP = sp + 18 * 8; }
 
             return sp;
         }
@@ -339,11 +386,14 @@ pub unsafe extern "C" fn schedule(saved_rsp: u64) -> u64 {
     let new_sp = sched.on_tick();
     let new_pid = sched.current_pid().unwrap_or(99);
 
-    crate::serial::write_str("[SCHED] current_pid=");
-    crate::serial::write_u64(old_pid);
-    crate::serial::write_str(" next_pid=");
-    crate::serial::write_u64(new_pid);
-    crate::serial::write_nl();
+    #[cfg(DEBUG_KERNEL)]
+    {
+        crate::serial::write_str("[SCHED] current_pid=");
+        crate::serial::write_u64(old_pid);
+        crate::serial::write_str(" next_pid=");
+        crate::serial::write_u64(new_pid);
+        crate::serial::write_nl();
+    }
 
     if let Some(new_proc) = sched.current_process() {
         let new_pml4 = new_proc.pml4_phys;
@@ -364,6 +414,92 @@ pub unsafe extern "C" fn schedule(saved_rsp: u64) -> u64 {
         crate::serial::write_str("[SCHED] FATAL: new_sp=0 for PID=");
         crate::serial::write_u64(current_pid);
         crate::serial::write_nl();
+        sched.dump_table();
+        return 0;
+    }
+
+    new_sp
+}
+
+/// Force-switch scheduler — called from syscall_entry force_switch path.
+///
+/// Unlike schedule() which goes through on_tick() (quantum-gated), this
+/// function ALWAYS performs a context switch. Used by sys_exit and sys_yield
+/// where the current process must yield immediately regardless of quantum.
+#[no_mangle]
+pub unsafe extern "C" fn schedule_force(saved_rsp: u64) -> u64 {
+    use super::scheduler::SCHEDULER;
+    use crate::memory::vmm;
+
+    let mut sched = SCHEDULER.lock();
+
+    // Save current process's SP (for sys_yield; ignored by sys_exit).
+    sched.save_current_sp(saved_rsp);
+
+    let old_pid = sched.current_pid().unwrap_or(99);
+
+    // ── Checkpoint F: before switch_next_force ────────────────────────
+    crate::serial::ddbg(b'F');
+
+    // Force switch: always call switch_next() regardless of quantum.
+    let new_sp = sched.switch_next_force();
+    let new_pid = sched.current_pid().unwrap_or(99);
+
+    // ── Checkpoint S: after switch_next_force ─────────────────────────
+    crate::serial::ddbg(b'S');
+
+    #[cfg(DEBUG_KERNEL)]
+    {
+        crate::serial::write_str("[FORCE] old=");
+        crate::serial::write_u64(old_pid);
+        crate::serial::write_str(" new=");
+        crate::serial::write_u64(new_pid);
+        crate::serial::write_str(" sp=");
+        crate::serial::write_hex(new_sp);
+        crate::serial::write_nl();
+
+        // Dump the new task's IRET frame (at new_sp + 15*8)
+        if new_sp != 0 {
+            let iret_ptr = (new_sp + 15 * 8) as *const u64;
+            let iret_rip   = core::ptr::read_volatile(iret_ptr);
+            let iret_cs    = core::ptr::read_volatile(iret_ptr.add(1));
+            let iret_rsp   = core::ptr::read_volatile(iret_ptr.add(3));
+            let iret_ss    = core::ptr::read_volatile(iret_ptr.add(4));
+            crate::serial::write_str("[FORCE] IRET RIP="); crate::serial::write_hex(iret_rip);
+            crate::serial::write_str(" CS="); crate::serial::write_hex(iret_cs);
+            crate::serial::write_str(" RSP="); crate::serial::write_hex(iret_rsp);
+            crate::serial::write_str(" SS="); crate::serial::write_hex(iret_ss);
+            crate::serial::write_nl();
+        }
+    }
+
+    // ── Checkpoint D: IRET frame dumped ──────────────────────────────
+    crate::serial::ddbg(b'D');
+
+    if let Some(new_proc) = sched.current_process() {
+        let new_pml4 = new_proc.pml4_phys;
+
+        let (current_cr3, _) = x86_64::registers::control::Cr3::read();
+        if current_cr3.start_address().as_u64() != new_pml4 {
+            vmm::switch_page_table(crate::memory::PhysAddr::new(new_pml4));
+        }
+
+        // ── Checkpoint C: CR3 switched ───────────────────────────────
+        crate::serial::ddbg(b'C');
+
+        let rsp0 = new_proc.kernel_stack_base + super::process::KERNEL_STACK_SIZE as u64;
+        crate::gdt::set_tss_rsp0(rsp0);
+        crate::syscall::set_kernel_rsp(rsp0);
+
+        // ── Checkpoint T: TSS/RSP0 set ───────────────────────────────
+        crate::serial::ddbg(b'T');
+    }
+
+    // ── Checkpoint R: about to return ────────────────────────────────
+    crate::serial::ddbg(b'R');
+
+    if new_sp == 0 {
+        crate::serial::write_str("[SCHED] FATAL: new_sp=0 in force_switch\n");
         sched.dump_table();
         return 0;
     }

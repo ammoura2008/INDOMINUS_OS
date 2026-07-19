@@ -242,6 +242,16 @@ pub fn init_kernel_page_tables(
         addr += PAGE_SIZE;
     }
 
+    // Map LAPIC MMIO in the upper half so it survives CR3 switches to user PML4s.
+    // The timer handler writes the LAPIC EOI register at physical 0xFEE000B0.
+    // User PML4s don't have the identity map, so the physical address is unmapped.
+    // By mapping it in the upper half (shared via PML4 entries 256-511), all PML4s
+    // can access the LAPIC.
+    let lapic_phys: u64 = 0xFEE0_0000;
+    let lapic_virt: u64 = 0xFFFF_FFFF_FEE0_0000;
+    let flags = PageTableFlags::PRESENT | PageTableFlags::WRITABLE;
+    map_page(pml4_phys, VirtAddr::new(lapic_virt), super::PhysAddr::new(lapic_phys), flags);
+
     pml4_phys
 }
 
@@ -276,6 +286,12 @@ pub fn create_user_pml4(kernel_pml4_phys: super::PhysAddr) -> super::PhysAddr {
 
         // Copy PML4 entries 256..512 (upper half = kernel space) as raw bytes.
         // Each PageTableEntry is 8 bytes, 256 entries = 2048 bytes.
+        //
+        // We intentionally do NOT copy PML4 entry 0 (identity map).
+        // The identity map covers virtual 0..4 GiB which overlaps with
+        // user-space virtual addresses (e.g., ELF at 0x400000).
+        // All timer/interrupt handler code, statics, and LAPIC MMIO are
+        // in the upper half and survive CR3 switches.
         let src_bytes = (src as *const _ as *const u8).add(256 * 8);
         let dst_bytes = (dst as *mut _ as *mut u8).add(256 * 8);
         core::ptr::copy_nonoverlapping(src_bytes, dst_bytes, 256 * 8);

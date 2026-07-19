@@ -1,302 +1,219 @@
-# INDOMINUS OS Architecture
+# INDOMINUS OS — Architecture
 
-This document describes the internal architecture of the INDOMINUS kernel. It is written for contributors who need to understand how the system works before making changes.
-
----
-
-## Boot Flow
-
-```
-Power On
-  │
-  ▼
-UEFI Firmware (OVMF in QEMU)
-  │  Initializes hardware, loads EFI binaries
-  │
-  ▼
-indo-boot (EFI/BOOT/BOOTX64.EFI)
-  │  1. Load kernel ELF from EFI\INDOMINUS\kernel.elf
-  │  2. Parse ELF, copy PT_LOAD segments to physical memory
-  │  3. Apply R_X86_64_RELATIVE relocations (PIC fixups)
-  │  4. Query UEFI memory map
-  │  5. Build BootInfo struct (phys addr, memory map, framebuffer, RSDP)
-  │  6. Exit UEFI Boot Services (point of no return)
-  │  7. Jump to kernel_main(boot_info_ptr) with sysv64 ABI
-  │
-  ▼
-kernel_main (indo-kernel/src/main.rs)
-  │  1. gdt::init()           — Build GDT, load TSS, set segment registers
-  │  2. pmm::init()           — Read UEFI memory map, build bitmap allocator
-  │  3. vmm::init_kernel_page_tables()  — Create new PML4:
-  │  │     - Higher-half mapping (kernel phys → 0xFFFFFFFF80000000)
-  │  │     - Heap mapping (KERNEL_HEAP_BASE, 4 MiB)
-  │  │     - Identity map first 4 GiB
-  │  4. vmm::switch_page_table()  — Write new PML4 to CR3
-  │  5. init_heap()           — Initialize linked_list_allocator
-  │  6. idt::init()           — Build IDT, set exception/IRQ handlers
-  │  7. interrupts::init()    — Configure LAPIC, IO-APIC, PIT
-  │  8. [process/spawn calls] — Create kernel processes
-  │  9. [start_scheduler]     — sti + hlt loop (first timer IRQ dispatches)
-  │
-  ▼
-First timer interrupt fires
-  │
-  ▼
-timer_interrupt_handler (naked)
-  │  1. push rax-r15 (save current registers)
-  │  2. call schedule(saved_rsp) → returns new RSP
-  │  3. mov r12, rax (save new SP before EOI)
-  │  4. Write EOI to LAPIC
-  │  5. mov rsp, r12 (switch to new process stack)
-  │  6. pop r15-rax (restore new registers)
-  │  7. iretq (resume new process)
-```
-
----
-
-## Memory Model
-
-### Physical Memory
-
-Physical memory is managed by the PMM (Physical Memory Manager), a bitmap allocator that tracks 4 KiB frames across a 16 GiB address space. The PMM is initialized from the UEFI memory map passed by the bootloader.
-
-Key regions:
-
-| Physical Range | Owner | Notes |
-|---|---|---|
-| 0x0000 - 0x0FFF | BIOS/IVT | Reserved |
-| 0x1000 - 0x1FFF | Boot page table | UEFI or kernel PML4 (depends on allocation) |
-| 0x08000 - 0x0FFFF | EBDA | Extended BIOS Data Area |
-| 0xA0000 - 0xBFFFF | VGA | Video memory (MMIO) |
-| 0xC0000 - 0xFFFFF | ROMs | Option ROMs |
-| kernel_phys_start .. kernel_phys_end | Kernel | Loaded by bootloader |
-| remainder | PMM bitmap | Tracks all frames |
-
-### Virtual Address Layout
-
-```
-0x0000_0000_0000_0000 .. 0x0000_7FFF_FFFF_FFFF  User space (lower half)
-  0x0000_0000_0040_0000  User code base (ELF)
-  0x0000_7FFF_FFFF_0000  User stack top (grows down)
-
-0xFFFF_8000_0000_0000 .. 0xFFFF_FFFF_FFFF_FFFF  Kernel space (upper half)
-  0xFFFF_FFFF_8000_0000  Kernel .text start (linked address)
-  0xFFFF_FFFF_C000_0000  Kernel heap start (4 MiB)
-  0xFFFF_FFFF_D000_0000  Kernel stack top (16 KiB)
-```
-
-### Page Tables
-
-The kernel creates its own PML4 during boot. The PML4 contains three mapping regions:
-
-**1. Higher-half kernel mapping:**
-- Virtual: `0xFFFFFFFF80000000 + offset`
-- Physical: `kernel_phys_start + offset`
-- Flags: PRESENT | WRITABLE
-
-**2. Kernel heap mapping:**
-- Virtual: `0xFFFFFFFFC000_0000 .. 0xFFFFFFFFC000_0000 + 4 MiB`
-- Physical: PMM-allocated frames
-- Flags: PRESENT | WRITABLE
-
-**3. Identity mapping (first 4 GiB):**
-- Virtual: `0x0000_0000 .. 0x0000_FFFF_FFFF`
-- Physical: Same as virtual
-- Flags: PRESENT | WRITABLE
-- Purpose: Safe CR3 transition; allows kernel code to execute at physical addresses during early boot
-
-### Address Translation Functions
-
-```
-phys_to_kernel_virt(phys) → phys + KERNEL_VIRT_BASE - kernel_phys_start
-  Used for: Converting PIC-relocated addresses to virtual addresses
-
-phys_to_virt(phys) → VirtAddr::new(phys)
-  Used for: Page table manipulation (identity map is active)
-
-virt_to_phys(virt) → PhysAddr::new(virt)
-  Used for: Reverse lookup (identity map assumed)
-```
-
-### PIC (Position-Independent Code)
-
-The kernel is compiled with `-C relocation-model=pic`. This means:
-
-- The linker places code at virtual address `0xFFFFFFFF80000000` in the ELF
-- Function pointers and static addresses contain PIC offsets in the binary
-- The bootloader applies `R_X86_64_RELATIVE` relocations: `*P = base_phys + (vaddr - min_vaddr)`
-- At runtime, all "address" values in the kernel are **physical addresses**, not virtual
-
-This is critical to understand: when Rust code reads `&some_static as *const _ as u64`, it gets the physical address. The `phys_to_kernel_virt()` function must be used to convert to the higher-half virtual address.
-
----
-
-## Context Switching
+## Syscall ABI
 
 ### Overview
 
-The scheduler implements preemptive round-robin multitasking. The timer interrupt (vector 32) triggers a context switch every ~10 ms.
+INDOMINUS uses the `syscall`/`sysret` mechanism for user→kernel transitions.
+The CPU saves RIP→RCX and RFLAGS→R11, then jumps to the LSTAR entry point.
+Stack switching is manual (via `swapgs` + per-CPU data).
 
-### Stack Layout (per-process)
+### Calling Convention
 
-Each kernel process has an 8 KiB kernel stack. The initial stack frame is constructed by `setup_initial_stack_frame_kernel`:
+| Register | Purpose |
+|----------|---------|
+| RAX | Syscall number (0=sys_write, 1=sys_exit, 2=sys_yield, 3=sys_getpid) |
+| RDI | Arg0 |
+| RSI | Arg1 |
+| RDX | Arg2 |
+| R10 | Arg3 |
+| R8  | Arg4 |
+| R9  | Arg5 |
+
+Return value in RAX. On error, RAX = `u64::MAX` (-ENOSYS).
+
+### Canonical SyscallFrame Layout
+
+Both the timer interrupt handler and the syscall entry handler save/restore
+GP registers in the **same canonical order**. This frame is 15 qwords (120 bytes),
+followed by the 5-qword IRET frame (40 bytes).
 
 ```
-Stack top (kernel_stack_base + KERNEL_STACK_SIZE)
-  │
-  │  [15 GP registers pushed by timer handler]     ← saved_rsp points here
-  │  rax, rbx, rcx, rdx, rsi, rdi, rbp,
-  │  r8, r9, r10, r11, r12, r13, r14, r15
-  │
-  │  IRET frame (manually constructed):            ← RSP after 15 pops
-  │  [rsp+0]  = RIP  (entry point)
-  │  [rsp+8]  = CS   (kernel code selector 0x08)
-  │  [rsp+16] = RFLAGS (0x202, IF enabled)
-  │
-  │  [rsp+24] = RSP  (new RSP if privilege change)
-  │  [rsp+32] = SS   (new SS if privilege change)
-  │
-Stack bottom
+Offset  Size  Register  Notes
+──────  ────  ────────  ──────────────────────────────────
+  +0     8    RAX       Syscall number / return value
+  +8     8    RBX
+ +16     8    RCX       User RIP (saved by CPU on syscall)
+ +24     8    RDX       Arg2
+ +32     8    RSI       Arg1
+ +40     8    RDI       Arg0
+ +48     8    RBP
+ +56     8    R8        Arg4
+ +64     8    R9        Arg5
+ +72     8    R10       Arg3
+ +80     8    R11       User RFLAGS (saved by CPU on syscall)
+ +88     8    R12
+ +96     8    R13
++104     8    R14
++112     8    R15
+─────── IRET frame (read by `iretq`) ───────
++120     8    RIP
++128     8    CS
++136     8    RFLAGS
++144     8    RSP       (only on privilege-level change)
++152     8    SS        (only on privilege-level change)
 ```
 
-### Timer Interrupt Handler (naked, vector 32)
+### Push/Pop Order
+
+**Save (push order):** R15 first → RAX last.
+This places RAX at `[RSP+0]` (lowest address = top of stack).
 
 ```asm
-push rax            ; Save all 15 GP registers
-push rbx
+push r15    ; highest address
+push r14
 ...
-push r15
+push rax    ; lowest address = RSP
+```
 
-mov rdi, rsp       ; First arg = saved RSP
-call schedule       ; Returns new RSP in RAX
+**Restore (pop order):** RAX first → R15 last.
 
-mov r12, rax       ; Save new SP (before EOI)
-mov rax, 0xFEE000B0 ; LAPIC EOI register
-mov dword [rax], 0  ; Send EOI
-
-mov rsp, r12       ; Switch to new process stack
-
-pop r15             ; Restore all 15 GP registers
+```asm
+pop rax     ; reads [RSP+0]
+pop rbx     ; reads [RSP+8]
 ...
-pop rax
-
-iretq              ; Return to new process
+pop r15     ; reads [RSP+112]
 ```
 
-### schedule() Function
+### Frame Setup (Initial Process Spawn)
 
-Called from the naked timer handler with interrupts disabled:
+`setup_initial_stack_frame_kernel` and `setup_initial_stack_frame_user` in
+`process.rs` write the frame in the same order as the pop sequence:
 
-1. **First dispatch:** If no current process, find first Ready task, call `dispatch_first()` which returns its initial stack pointer
-2. **Normal path:** Save current process SP, call `on_tick()` for round-robin, switch CR3 if new process has different page tables, update TSS.RSP0
-
----
-
-## Interrupt Subsystem
-
-### Initialization Order
-
-1. **GDT:** Ring 0/3 code/data segments, TSS with IST[0] for double-fault
-2. **IDT:** 256 entries, CPU exception handlers, hardware IRQ handlers
-3. **LAPIC:** Memory-mapped at 0xFEE00000, timer configured for ~100 Hz
-4. **IO-APIC:** IRQ0 (PIT) → vector 32, IRQ1 (keyboard) → vector 33
-5. **PIT:** Channel 0, divisor 11931 (~100 Hz), connected to IRQ0
-
-### Exception Handlers
-
-| Vector | Name | Handler | Behavior |
-|---|---|---|---|
-| 0 | #DE | divide_error_handler | Fatal |
-| 8 | #DF | double_fault_handler | Fatal, uses IST stack |
-| 10 | #TS | invalid_tss_handler | Fatal |
-| 12 | #SS | stack_segment_fault_handler | Fatal |
-| 13 | #GP | general_protection_fault_handler | Fatal, dumps IRET frame |
-| 14 | #PF | page_fault_handler | Fatal, dumps CR2 |
-
-### Hardware IRQs
-
-| Vector | Source | Handler |
-|---|---|---|
-| 32 | PIT (IRQ0) | timer_interrupt_handler (naked) |
-| 33 | Keyboard (IRQ1) | irq_handler_33 → dispatch |
-| 34-47 | Other | irq_handler_XX → dispatch |
-
----
-
-## Key Data Structures
-
-### BootInfo (passed from bootloader)
-
-```rust
-struct BootInfo {
-    magic: u64,              // 0x494E444F4D494E55 ("INDOMINU")
-    protocol_version: u64,
-    memory_map: MemoryMap,   // Physical memory regions
-    framebuffer: FramebufferInfo,
-    rsdp_addr: PhysAddr,     // ACPI RSDP
-    kernel_phys_start: PhysAddr,
-    kernel_phys_end: PhysAddr,
-    kernel_virt_base: VirtAddr,
-}
+```
+frame[0]  = RAX = 0
+frame[1]  = RBX = 0
+...
+frame[14] = R15 = 0
+frame[15] = RIP (entry point)
+frame[16] = CS  (kernel: 0x08, user: 0x1B)
+frame[17] = RFLAGS = 0x202 (IF=1)
+frame[18] = RSP (kernel: stack_top, user: user_rsp)
+frame[19] = SS  (kernel: 0x10, user: 0x23)
 ```
 
-### Process
+### Syscall Entry Flow (`syscall_entry`)
 
-```rust
-struct Process {
-    pid: Pid,
-    state: ProcessState,       // Ready, Running, Blocked, Exited
-    kernel_stack_base: u64,    // Physical address of stack allocation
-    pml4_phys: u64,            // Physical address of process PML4
-    entry_addr: u64,           // PIC physical address of entry point
-    is_user: bool,
-    user_rip: Option<u64>,
-    user_rsp: Option<u64>,
-}
+1. `swapgs` — switch to kernel GSBase (per-CPU data)
+2. `mov gs:[0], rsp` — save user RSP
+3. `mov rsp, gs:[8]` — load kernel RSP
+4. Push 15 GP registers (R15→RAX) onto kernel stack
+5. `mov rdi, rsp` — pass frame pointer to Rust
+6. `call syscall_dispatch`
+7. Check `gs:[16]` (force_switch flag)
+   - If 0: pop 15 GP registers, `swapgs`, `sysretq`
+   - If 1: construct IRET frame, call `schedule()`, switch stack, pop, `iretq`
+
+### Timer Interrupt Flow (`timer_interrupt_handler`)
+
+1. Push 15 GP registers (R15→RAX)
+2. `call schedule(saved_rsp)` → returns new SP
+3. EOI to LAPIC
+4. `mov rsp, r12` — switch to new process stack
+5. Pop 15 GP registers (RAX→R15)
+6. `iretq`
+
+### Per-CPU Data (GS-relative)
+
+| Offset | Field | Description |
+|--------|-------|-------------|
+| 0 | user_rsp | User RSP saved on syscall entry |
+| 8 | kernel_rsp | Top of current process's kernel stack |
+| 16 | force_switch | 1 = context switch after syscall, 0 = sysret |
+
+KERNEL_GS_BASE = `phys_to_kernel_virt(&raw const PER_CPU)` (higher-half, mapped in all PML4s).
+GS_BASE = 0 (user mode).
+
+### Key Invariants
+
+1. **Frame layout is canonical.** Both timer handler and syscall entry use the
+   exact same push/pop order. The frame setup code writes in pop order.
+2. **IRET frame follows GP frame.** Always at offset +120 from frame base.
+3. **Higher-half addresses only.** After CR3 switch to user PML4, all kernel
+   code/data/LAPIC/per-CPU use higher-half virtual addresses (entries 256–511).
+4. **No identity map in user PML4.** Only upper-half entries are copied.
+
+### Current Syscall Table
+
+| Num | Name | Args | Returns |
+|-----|------|------|---------|
+| 0 | sys_write | fd, buf_ptr, count | bytes written or u64::MAX |
+| 1 | sys_exit | exit_code | never (force_switch) |
+| 2 | sys_yield | — | 0 (force_switch) |
+| 3 | sys_getpid | — | current PID |
+
+## Process Lifecycle
+
+### State Machine
+
+```text
+                    spawn()
+                       │
+                       ▼
+    ┌──────────────────────────────────┐
+    │            READY                  │
+    │  (in run queue, waiting for CPU) │
+    └──────────┬───────────────────────┘
+               │
+          dispatch()
+               │
+               ▼
+    ┌──────────────────────────────────┐
+    │           RUNNING                 │
+    │  (currently executing on CPU)    │
+    └──────┬────────────────┬──────────┘
+           │                │
+      timer tick       sys_exit()
+      (quantum expired)     │
+           │                ▼
+           │    ┌──────────────────────────────────┐
+           │    │           ZOMBIE                  │
+           │    │  (exited, resources not freed)    │
+           │    └──────────────────────────────────┘
+           │
+           ▼
+    ┌──────────────────────────────────┐
+    │            READY                 │
+    │  (returned to run queue)         │
+    └──────────────────────────────────┘
 ```
 
-### Scheduler
+### State Transitions
 
-```rust
-struct Scheduler {
-    processes: [Option<Process>; MAX_PROCESSES],
-    current_pid: Option<Pid>,
-    next_pid: Pid,
-    idle_pid: Pid,
-}
-```
+| From | To | Trigger | Code |
+|------|----|---------|------|
+| — | READY | `spawn()` / `spawn_user()` | `Scheduler::spawn*()` |
+| READY | RUNNING | `dispatch_first()` or `switch_next()` | `Scheduler::switch_next*()` |
+| RUNNING | READY | Timer quantum expires | `switch_next()` |
+| RUNNING | Zombie | `sys_exit()` | `sys_exit()` |
+| Zombie | — | Never returns to RUNNING | `find_next_ready()` skips non-Ready |
 
----
+### Key Rules
 
-## Build Configuration
+1. **Zombie processes are never scheduled.** `find_next_ready()` only returns
+   processes in `Ready` state. A Zombie process is permanently excluded.
+2. **force_switch always yields.** `schedule_force()` (used by sys_exit, sys_yield)
+   calls `switch_next_force()` which always performs a context switch, regardless
+   of the time quantum.
+3. **Timer-driven preemption is quantum-gated.** `schedule()` → `on_tick()` only
+   calls `switch_next()` when the quantum expires (every 5 ticks = 50ms).
 
-### .cargo/config.toml
+### Scheduler Selection
 
-```toml
-[build]
-target = "x86_64-unknown-none"
+`find_next_ready(after_pid)` performs round-robin scanning:
 
-[target.x86_64-unknown-none]
-rustflags = [
-    "-C", "link-arg=-Tkernel.ld",
-    "-C", "target-feature=-mmx,-sse,-sse2,...",
-    "-C", "target-feature=+soft-float",
-    "-C", "relocation-model=pic",
-    "-C", "linker-flavor=ld.lld",
-    "-C", "linker=rust-lld",
-]
-```
+1. **Pass 1:** Scan from `after_pid+1` to `after_pid`, skipping PID 0 (idle).
+   Return the first `Ready` process found.
+2. **Pass 2:** If no non-idle Ready process exists, return PID 0 (idle) as fallback.
+3. **Return None** if no process is ready at all (should never happen with idle).
 
-### kernel.ld
+### Process Table
 
-- Linked at `0xFFFFFFFF80000000` (upper half, -2 GiB)
-- Sections: .text → .rodata → .data → .bss
-- Page-aligned sections for permission control
+Maximum 8 concurrent processes (`MAX_PROCESSES = 8`).
 
-### Dependencies
-
-| Crate | Version | Purpose |
-|---|---|---|
-| x86_64 | 0.15.5 | Page tables, IDT, GDT, control registers |
-| spin | 0.9.9 | Spinlock for scheduler |
-| linked_list_allocator | — | Kernel heap |
+| PID | Role | Kernel Stack | Page Table |
+|-----|------|-------------|------------|
+| 0 | Idle (HLT loop) | Boot stack | Kernel PML4 |
+| 1 | task_a (kernel) | Heap-allocated | Kernel PML4 |
+| 2 | task_b (kernel) | Heap-allocated | Kernel PML4 |
+| 3+ | User processes | Heap-allocated | Per-process PML4 |

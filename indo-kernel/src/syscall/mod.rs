@@ -28,6 +28,31 @@
 use x86_64::registers::model_specific::{Efer, EferFlags, LStar, SFMask, Msr};
 use x86_64::VirtAddr;
 
+// ─────────────────────────────────────────────────────────────────────────────
+// User address validation
+// ─────────────────────────────────────────────────────────────────────────────
+
+/// Maximum valid user-space virtual address (lower half, canonical).
+/// x86-64 canonical lower half: 0x0000_0000_0000_0000 .. 0x0000_7FFF_FFFF_FFFF
+const USER_ADDR_MAX: u64 = 0x0000_7FFF_FFFF_FFFF;
+
+/// Check if a user-space address range is valid.
+///
+/// Returns `true` if:
+/// - `addr` is in user space (below USER_ADDR_MAX)
+/// - `addr + len` does not overflow
+/// - `addr + len` is still in user space
+///
+/// This prevents user processes from tricking the kernel into
+/// reading/writing kernel memory via syscall arguments.
+fn is_valid_user_range(addr: u64, len: u64) -> bool {
+    if addr == 0 || len == 0 {
+        return false;
+    }
+    let end = addr.wrapping_add(len);
+    end > addr && end <= USER_ADDR_MAX
+}
+
 /// Per-CPU data structure pointed to by GSBase.
 ///
 /// Layout matches the naked handler's `gs:[offset]` accesses:
@@ -156,14 +181,19 @@ pub fn init() {
         Efer::write(efer);
     }
 
-    // Set GSBase to point to our per-CPU data.
-    // TODO Phase 5.4: Before removing identity map, convert to virtual address:
-    //   let gs_virt = crate::memory::phys_to_kernel_virt(&raw const PER_CPU as u64);
-    //   x86_64::registers::model_specific::GsBase::write(VirtAddr::new(gs_virt));
-    // Currently relies on identity mapping (phys == virt for first 4 GiB).
+    // Set KERNEL_GS_BASE to point to our per-CPU data using the kernel virtual address.
+    // The syscall_entry handler does `swapgs` which swaps GS_BASE and KERNEL_GS_BASE.
+    // After swapgs, the kernel uses KERNEL_GS_BASE for GS-relative accesses.
+    // So KERNEL_GS_BASE must point to PER_CPU, while GS_BASE (used in user mode) can be 0.
+    // The user PML4 does NOT have the identity map, so we must use the higher-half
+    // virtual address which IS mapped in all PML4s.
     unsafe {
-        let gs_base = &raw const PER_CPU as u64;
-        x86_64::registers::model_specific::GsBase::write(VirtAddr::new(gs_base));
+        let gs_phys = &raw const PER_CPU as u64;
+        let gs_virt = crate::memory::phys_to_kernel_virt(gs_phys);
+        // KERNEL_GS_BASE (MSR 0xC0000102) — used in kernel mode after swapgs
+        Msr::new(0xC000_0102).write(gs_virt);
+        // GS_BASE (MSR 0xC0000101) — not used, but clear it for sanity
+        Msr::new(0xC000_0101).write(0u64);
     }
 
     crate::serial::write_str("[SYSCALL] MSRs configured\n");
@@ -197,6 +227,33 @@ use x86_64::structures::gdt::SegmentSelector;
 pub unsafe extern "C" fn syscall_entry() {
     core::arch::naked_asm!(
         // ═══════════════════════════════════════════════════════════════════
+        // DIAGNOSTIC: dump RAX at syscall entry (before any register changes)
+        // ═══════════════════════════════════════════════════════════════════
+        // Save all caller-saved registers so the diagnostic call doesn't
+        // corrupt anything the normal flow needs.
+        "push rax",
+        "push rcx",
+        "push rdx",
+        "push rsi",
+        "push rdi",
+        "push r8",
+        "push r9",
+        "push r10",
+        "push r11",
+        "mov rdi, 0x53",            // 'S' marker
+        "mov rsi, [rsp + 64]",      // RAX is at [rsp+64] (first pushed)
+        "call {dump_rax}",
+        "pop r11",
+        "pop r10",
+        "pop r9",
+        "pop r8",
+        "pop rdi",
+        "pop rsi",
+        "pop rdx",
+        "pop rcx",
+        "pop rax",
+
+        // ═══════════════════════════════════════════════════════════════════
         // PHASE 1: Switch to kernel stack and save user context
         // ═══════════════════════════════════════════════════════════════════
         "swapgs",                                // Switch to kernel GSBase
@@ -204,21 +261,38 @@ pub unsafe extern "C" fn syscall_entry() {
         "mov rsp, gs:[8]",                       // Load kernel RSP from per-CPU
 
         // Save user context on kernel stack (15 GP regs)
-        "push rax",      // [0]  syscall number / return value
-        "push rbx",      // [1]
-        "push rcx",      // [2]  user RIP (saved by CPU)
-        "push rdx",      // [3]
-        "push rsi",      // [4]  arg1
-        "push rdi",      // [5]  arg0
-        "push rbp",      // [6]
-        "push r8",       // [7]  arg4
-        "push r9",       // [8]  arg5
-        "push r10",      // [9]  arg3
-        "push r11",      // [10] user RFLAGS (saved by CPU)
-        "push r12",      // [11]
-        "push r13",      // [12]
-        "push r14",      // [13]
-        "push r15",      // [14]
+        // Push R15 first (highest addr) → RAX last (lowest addr = RSP).
+        // Canonical SyscallFrame layout:
+        //   [rsp+0]   = RAX  (syscall number / return value)
+        //   [rsp+8]   = RBX
+        //   [rsp+16]  = RCX  (user RIP, saved by CPU)
+        //   [rsp+24]  = RDX
+        //   [rsp+32]  = RSI  (arg1)
+        //   [rsp+40]  = RDI  (arg0)
+        //   [rsp+48]  = RBP
+        //   [rsp+56]  = R8   (arg4)
+        //   [rsp+64]  = R9   (arg5)
+        //   [rsp+72]  = R10  (arg3)
+        //   [rsp+80]  = R11  (user RFLAGS, saved by CPU)
+        //   [rsp+88]  = R12
+        //   [rsp+96]  = R13
+        //   [rsp+104] = R14
+        //   [rsp+112] = R15
+        "push r15",
+        "push r14",
+        "push r13",
+        "push r12",
+        "push r11",
+        "push r10",
+        "push r9",
+        "push r8",
+        "push rbp",
+        "push rdi",
+        "push rsi",
+        "push rdx",
+        "push rcx",
+        "push rbx",
+        "push rax",
 
         // ═══════════════════════════════════════════════════════════════════
         // PHASE 2: Call Rust dispatch function
@@ -243,8 +317,9 @@ pub unsafe extern "C" fn syscall_entry() {
         "mov qword ptr gs:[16], 0",             // Clear force_switch
 
         // Read user state from saved GP register frame
-        "mov rax, [rsp + 16]",                  // [2] = user RIP
-        "mov rbx, [rsp + 80]",                  // [10] = user RFLAGS
+        // New canonical layout: [rsp+16]=RCX (user RIP), [rsp+80]=R11 (user RFLAGS)
+        "mov rax, [rsp + 16]",                  // RCX = user RIP
+        "mov rbx, [rsp + 80]",                  // R11 = user RFLAGS
         "mov rcx, gs:[0]",                      // user RSP (saved at syscall entry)
 
         // Construct 5-qword IRET frame above the GP regs
@@ -261,64 +336,85 @@ pub unsafe extern "C" fn syscall_entry() {
         // pop the GP regs and iretq will find the IRET frame immediately after.
         "sub rsp, 40",                          // 5 * 8 = 40 bytes
 
-        // Call schedule(GP_regs_ptr) → returns new SP in RAX
+        // Call schedule_force(GP_regs_ptr) → always switches, returns new SP in RAX
         "mov rdi, rsp",
-        "call {schedule}",
+        "call {schedule_force}",
         // RAX = new process's saved RSP
 
-        // Save new SP into r12 BEFORE EOI (clobbers RAX)
+        // ── Checkpoint P: first instruction after schedule_force returns ──
         "mov r12, rax",
+        "push rax",
+        "push rdi",
+        "mov dil, 0x50",
+        "call {ddbg}",
+        "pop rdi",
+        "pop rax",
 
-        // Send EOI to LAPIC
-        "mov rax, 0xFEE000B0",
+        // Send EOI to LAPIC (upper-half virtual address)
+        "mov rax, 0xFFFFFFFFFEE000B0",
         "mov dword ptr [rax], 0",
 
         // Switch to new process's stack
         "mov rsp, r12",
 
-        // Restore new process's GP registers
-        "pop r15",
-        "pop r14",
-        "pop r13",
-        "pop r12",
-        "pop r11",
-        "pop r10",
-        "pop r9",
-        "pop r8",
-        "pop rbp",
-        "pop rdi",
-        "pop rsi",
-        "pop rdx",
-        "pop rcx",
-        "pop rbx",
+        // Restore new process's GP registers (canonical order: RAX first, R15 last)
         "pop rax",
+        "pop rbx",
+        "pop rcx",
+        "pop rdx",
+        "pop rsi",
+        "pop rdi",
+        "pop rbp",
+        "pop r8",
+        "pop r9",
+        "pop r10",
+        "pop r11",
+        "pop r12",
+        "pop r13",
+        "pop r14",
+        "pop r15",
+
+        // ── Checkpoint I: about to iretq ────────────────────────────────
+        "push rax",
+        "push rdi",
+        "mov dil, 0x49",
+        "call {ddbg}",
+        "pop rdi",
+        "pop rax",
+
+        // Restore user GS before returning to Ring 3.
+        // The syscall_entry swapgs'd at entry (GS_BASE ↔ KERNEL_GS_BASE).
+        // We must swap back so Ring 3 sees GS_BASE=0 (user value).
+        "swapgs",
 
         // Return from interrupt (pops IRET frame: RIP, CS, RFLAGS, [RSP, SS])
         "iretq",
 
         // ── Normal return path: sysretq ───────────────────────────────────
         ".normal_return:",
-        "pop r15",
-        "pop r14",
-        "pop r13",
-        "pop r12",
-        "pop r11",
-        "pop r10",
-        "pop r9",
-        "pop r8",
-        "pop rbp",
-        "pop rdi",
-        "pop rsi",
-        "pop rdx",
-        "pop rcx",
-        "pop rbx",
         "pop rax",
+        "pop rbx",
+        "pop rcx",
+        "pop rdx",
+        "pop rsi",
+        "pop rdi",
+        "pop rbp",
+        "pop r8",
+        "pop r9",
+        "pop r10",
+        "pop r11",
+        "pop r12",
+        "pop r13",
+        "pop r14",
+        "pop r15",
 
         "swapgs",                                // Switch back to user GSBase
         "sysretq",                               // Return to Ring 3
 
         dispatch = sym syscall_dispatch,
-        schedule = sym crate::process::context_switch::schedule,
+        schedule_force = sym crate::process::context_switch::schedule_force,
+        dump_rax = sym crate::serial::dump_rax,
+        ddbg = sym crate::serial::ddbg,
     );
 }
 
@@ -334,18 +430,18 @@ pub unsafe extern "C" fn syscall_entry() {
 /// Syscall return value (placed in RAX for `sysret`).
 #[no_mangle]
 pub unsafe extern "C" fn syscall_dispatch(regs: *mut u64) -> u64 {
-    // Register frame layout (15 qwords, pushed in order):
+    // Canonical SyscallFrame layout (15 qwords, pushed R15→RAX):
     //   [0]  RAX  = syscall number (also return value)
     //   [1]  RBX
-    //   [2]  RCX  = user RIP
-    //   [3]  RDX
+    //   [2]  RCX  = user RIP (saved by CPU)
+    //   [3]  RDX  = arg2
     //   [4]  RSI  = arg1
     //   [5]  RDI  = arg0
     //   [6]  RBP
     //   [7]  R8   = arg4
     //   [8]  R9   = arg5
-    //   [9]  R10  (used as arg3 in Linux convention)
-    //   [10] R11  = user RFLAGS
+    //   [9]  R10  = arg3
+    //   [10] R11  = user RFLAGS (saved by CPU)
     //   [11] R12
     //   [12] R13
     //   [13] R14
@@ -386,14 +482,22 @@ pub unsafe extern "C" fn syscall_dispatch(regs: *mut u64) -> u64 {
 /// For now, only fd=1 (serial/stdout) is supported.
 ///
 /// Arguments: fd, buf_ptr, count
-/// Returns: number of bytes written, or u64::MAX on error
+/// Returns: number of bytes written, or u64::MAX on error (-EINVAL)
 fn sys_write(fd: u64, buf_ptr: u64, count: u64) -> u64 {
     if fd != 1 {
         return u64::MAX; // Only stdout supported
     }
 
-    // Safety: buf_ptr is a user-space address. We trust the user for now.
-    // Phase 6 will add proper address validation.
+    // Validate the user buffer address range
+    if !is_valid_user_range(buf_ptr, count) {
+        crate::serial::write_str("[SYSCALL] sys_write: invalid user buffer addr=");
+        crate::serial::write_hex(buf_ptr);
+        crate::serial::write_str(" len=");
+        crate::serial::write_hex(count);
+        crate::serial::write_nl();
+        return u64::MAX; // -EINVAL
+    }
+
     let slice = unsafe { core::slice::from_raw_parts(buf_ptr as *const u8, count as usize) };
 
     for &byte in slice {

@@ -50,6 +50,9 @@ pub extern "sysv64" fn kernel_main(boot_info: *const BootInfo) -> ! {
         bi.kernel_phys_end.as_u64(),
     );
     unsafe { crate::memory::vmm::switch_page_table(new_pml4); }
+    // Now the kernel higher-half is mapped. Switch GDTR to virtual address
+    // so it survives CR3 switches to user PML4s (which lack the identity map).
+    crate::gdt::switch_gdt_to_virtual();
     unsafe {
         crate::memory::init_heap(
             crate::memory::KERNEL_HEAP_BASE,
@@ -59,10 +62,40 @@ pub extern "sysv64" fn kernel_main(boot_info: *const BootInfo) -> ! {
     idt::init();
     interrupts::init();
 
+    // Initialize syscall MSRs (STAR, LSTAR, SFMASK, EFER SCE, GSBase)
+    crate::syscall::init();
+
     write_str_nl("[KERNEL] All init done.");
 
     crate::process::init();
     crate::process::spawn(crate::process::tasks::task_a as *const () as u64);
     crate::process::spawn(crate::process::tasks::task_b as *const () as u64);
+
+    // Load and spawn the user test ELF program
+    let user_elf: &[u8] = include_bytes!("../user_test.bin");
+    write_str("[KERNEL] User test ELF size: ");
+    write_hex(user_elf.len() as u64);
+    write_nl();
+    match crate::process::spawn_user(user_elf) {
+        Some(pid) => {
+            write_str("[KERNEL] Spawned user process PID=");
+            write_hex(pid);
+            write_nl();
+        }
+        None => {
+            write_str_nl("[KERNEL] Failed to spawn user process");
+        }
+    }
+    match crate::process::spawn_user(user_elf) {
+        Some(pid) => {
+            write_str("[KERNEL] Spawned user process PID=");
+            write_hex(pid);
+            write_nl();
+        }
+        None => {
+            write_str_nl("[KERNEL] Failed to spawn user process");
+        }
+    }
+
     crate::process::start_scheduler();
 }

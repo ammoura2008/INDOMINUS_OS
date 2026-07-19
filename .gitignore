@@ -5,9 +5,6 @@
 # Rust / Cargo
 # ─────────────────────────────────────────────────────────────────────────────
 /target/
-Cargo.lock          # Committed for applications, ignored for library-only crates.
-                    # We COMMIT Cargo.lock because this is a binary project.
-                    # Delete this line if you want to commit it (recommended).
 
 # ─────────────────────────────────────────────────────────────────────────────
 # Build output
@@ -32,3 +29,13 @@ Cargo.lock          # Committed for applications, ignored for library-only crate
 # ─────────────────────────────────────────────────────────────────────────────
 *.log
 *.dump
+out_*.txt
+test_b*.txt
+qemu_output.txt
+
+# ─────────────────────────────────────────────────────────────────────────────
+# Generated / temporary
+# ─────────────────────────────────────────────────────────────────────────────
+tmp/
+venv/
+*.jpg

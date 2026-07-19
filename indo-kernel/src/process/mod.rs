@@ -79,6 +79,13 @@ pub fn spawn_user(elf_data: &[u8]) -> Option<Pid> {
     };
 
     // 4. Map a user stack page below USER_STACK_TOP (4 KiB for now)
+    //
+    // x86 stacks grow downward: RSP starts at the top and decrements on push.
+    // RSP = USER_STACK_TOP, first push writes to USER_STACK_TOP - 8.
+    // Map page at USER_STACK_TOP - PAGE_SIZE (covers 0x7FFFFFFEF000..0x7FFFFFFEFFFF).
+    // NOTE: USER_STACK_TOP itself is NOT in this page — the CPU never accesses it
+    // on push (it decrements RSP BEFORE writing), so the first write goes to
+    // USER_STACK_TOP - 8 = 0x7FFFFFFEEFF8 which IS in this page.
     let stack_frame = vmm::PmmFrameAllocator.allocate_frame()
         .expect("PMM: out of memory for user stack page");
     let stack_virt = VirtAddr::new(USER_STACK_TOP - PAGE_SIZE);
@@ -87,7 +94,7 @@ pub fn spawn_user(elf_data: &[u8]) -> Option<Pid> {
         | PageTableFlags::USER_ACCESSIBLE;
     vmm::map_page(user_pml4, stack_virt, memory::PhysAddr::new(stack_frame.start_address().as_u64()), stack_flags);
 
-    // User RSP starts at top of the mapped stack page
+    // User RSP starts at the top of the stack region
     let user_rsp = USER_STACK_TOP;
 
     crate::serial::write_str("[PROC] ELF loaded: entry=");

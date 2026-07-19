@@ -141,13 +141,47 @@ pub fn write_str_nl(s: &str) {
 }
 
 /// Debug: write a single marker byte to QEMU debug console (port 0xE9).
-pub fn ddbg(_marker: u8) {
-    // Placeholder — enable after VMM is up
+///
+/// Port 0xE9 is QEMU's debug output — any byte written here appears on
+/// stderr immediately, independent of UART state. Works from Ring 0
+/// without any driver initialization.
+///
+/// Compiled to a no-op when `DEBUG_KERNEL` is not set.
+#[cfg(DEBUG_KERNEL)]
+pub fn ddbg(marker: u8) {
+    unsafe {
+        core::arch::asm!("out dx, al", in("dx") 0xE9u16, in("al") marker, options(nostack, nomem));
+    }
 }
 
+#[cfg(not(DEBUG_KERNEL))]
+#[inline(always)]
+pub fn ddbg(_marker: u8) {}
+
+/// Diagnostic: print [X RAX=0x...] to serial. Called from naked handlers.
+/// `label` = 'I' for iretq path, 'S' for syscall entry path.
+///
+/// Compiled to a no-op when `DEBUG_KERNEL` is not set.
+#[cfg(DEBUG_KERNEL)]
+#[no_mangle]
+pub unsafe extern "C" fn dump_rax(label: u8, rax: u64) {
+    write_byte(b'[');
+    write_byte(label);
+    write_str(" RAX=0x");
+    write_hex(rax);
+    write_str("]\n");
+}
+
+#[cfg(not(DEBUG_KERNEL))]
+#[no_mangle]
+pub unsafe extern "C" fn dump_rax(_label: u8, _rax: u64) {}
+
 /// Write a marker string to serial. Used from naked_asm.
+///
+/// Compiled to a no-op when `DEBUG_KERNEL` is not set.
 /// # Safety
 /// `ptr` must point to a valid buffer of `len` bytes.
+#[cfg(DEBUG_KERNEL)]
 #[no_mangle]
 pub unsafe extern "C" fn write_marker_raw(ptr: *const u8, len: u64) {
     let slice = core::slice::from_raw_parts(ptr, len as usize);
@@ -156,3 +190,7 @@ pub unsafe extern "C" fn write_marker_raw(ptr: *const u8, len: u64) {
         outb(UART_DATA, byte);
     }
 }
+
+#[cfg(not(DEBUG_KERNEL))]
+#[no_mangle]
+pub unsafe extern "C" fn write_marker_raw(_ptr: *const u8, _len: u64) {}

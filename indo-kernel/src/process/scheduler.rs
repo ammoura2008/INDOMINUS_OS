@@ -110,9 +110,12 @@ impl Scheduler {
         self.tick_counter += 1;
         if self.tick_counter >= self.quantum {
             self.tick_counter = 0;
-            crate::serial::write_str("[SCHED] Q=");
-            crate::serial::write_u64(self.current_pid.unwrap_or(99));
-            crate::serial::write_nl();
+            #[cfg(DEBUG_KERNEL)]
+            {
+                crate::serial::write_str("[SCHED] Q=");
+                crate::serial::write_u64(self.current_pid.unwrap_or(99));
+                crate::serial::write_nl();
+            }
             return self.switch_next();
         }
         self.current_stack_pointer()
@@ -162,6 +165,40 @@ impl Scheduler {
     fn switch_next(&mut self) -> u64 {
         let old_pid = self.current_pid;
 
+        if let Some(old) = old_pid {
+            if let Some(ref mut proc) = self.processes[old as usize] {
+                if proc.state == ProcessState::Running {
+                    proc.state = ProcessState::Ready;
+                }
+            }
+        }
+
+        let next_pid = if let Some(old) = old_pid {
+            self.find_next_ready(old)
+        } else {
+            self.find_next_ready(0)
+        };
+
+        let new_pid = next_pid.unwrap_or(self.idle_pid);
+
+        if let Some(ref mut proc) = self.processes[new_pid as usize] {
+            proc.state = ProcessState::Running;
+        }
+
+        self.current_pid = Some(new_pid);
+
+        self.processes[new_pid as usize]
+            .as_ref()
+            .map(|p| p.stack_pointer)
+            .unwrap_or(0)
+    }
+
+    /// Force-switch: always picks the next Ready process, ignoring quantum.
+    /// Used by sys_exit/sys_yield where the current process must yield now.
+    pub(crate) fn switch_next_force(&mut self) -> u64 {
+        let old_pid = self.current_pid;
+
+        // Mark old process: if Running → Ready, if Zombie → stay Zombie
         if let Some(old) = old_pid {
             if let Some(ref mut proc) = self.processes[old as usize] {
                 if proc.state == ProcessState::Running {

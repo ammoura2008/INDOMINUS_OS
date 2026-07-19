@@ -16,6 +16,7 @@ rustflags = [
     "-C", "relocation-model=pic",
     "-C", "linker-flavor=ld.lld",
     "-C", "linker=rust-lld",
+    "--cfg=DEBUG_KERNEL",
 ]
 
 [unstable]

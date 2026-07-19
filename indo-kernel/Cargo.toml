@@ -12,3 +12,6 @@ spin = "0.9.9"
 bitflags = "2.13.1"
 log = "0.4.33"
 linked_list_allocator = "0.10.6"
+
+[lints.rust]
+unexpected_cfgs = { level = "warn", check-cfg = ['cfg(DEBUG_KERNEL)'] }

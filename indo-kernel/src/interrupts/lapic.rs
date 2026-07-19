@@ -24,8 +24,9 @@
 
 use core::ptr;
 
-/// LAPIC base physical address (standard x86, QEMU Q35).
-const LAPIC_BASE: u64 = 0xFEE0_0000;
+/// LAPIC base virtual address (mapped in the upper half so it survives
+/// CR3 switches to user PML4s that lack the identity map).
+const LAPIC_BASE: u64 = 0xFFFF_FFFF_FEE0_0000;
 
 /// LAPIC register offsets (in bytes, each register is 16-byte aligned).
 const LAPIC_ID: u32 = 0x020;
