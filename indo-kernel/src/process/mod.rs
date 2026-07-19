@@ -17,6 +17,7 @@ pub mod context_switch;
 pub mod idle;
 pub mod process;
 pub mod scheduler;
+pub mod tasks;
 
 pub use process::{Process, ProcessState, Pid, MAX_PROCESSES, KERNEL_STACK_SIZE};
 pub use scheduler::{Scheduler, SCHEDULER};

@@ -134,15 +134,20 @@ fn alloc_kernel_stack() -> u64 {
 /// Stack layout (grows downward from `stack_top`):
 ///
 /// ```text
-/// [RAX] [RBX] [RCX] ... [R15] [RIP] [CS] [RFLAGS]
-///  ^                                 ^
-///  sp (RSP after 15 pushes)       sp + 15*8
+/// [R15] [R14] ... [RAX] [RIP] [CS] [RFLAGS] [RSP] [SS]
+///  ^                                            ^
+///  sp (RSP after 15 pushes)                  sp + 20*8
 /// ```
+///
+/// NOTE: All 5 IRET entries (RIP/CS/RFLAGS/RSP/SS) are always written,
+/// even for same-privilege (CPL→CPL) returns. On x86-64, iretq may pop
+/// RSP/SS regardless of CPL change when the saved CS RPL equals CPL.
+/// Writing valid RSP and SS prevents the CPU from reading garbage.
 fn setup_initial_stack_frame_kernel(stack_top: u64, entry_point: u64) -> u64 {
     let mut sp = stack_top;
 
-    // Reserve 18 qwords: 15 GP regs + RIP + CS + RFLAGS
-    sp -= 18 * 8;
+    // Reserve 20 qwords: 15 GP regs + RIP + CS + RFLAGS + RSP + SS
+    sp -= 20 * 8;
 
     let frame = sp as *mut u64;
 
@@ -179,10 +184,12 @@ fn setup_initial_stack_frame_kernel(stack_top: u64, entry_point: u64) -> u64 {
         frame.add(12).write(0);  // RCX
         frame.add(13).write(0);  // RBX
         frame.add(14).write(0);  // RAX
-        // Interrupt frame (restored by iretq)
+        // Interrupt frame (restored by iretq — 5 entries)
         frame.add(15).write(entry_virt);  // RIP (virtual address)
-        frame.add(16).write(0x08);         // CS = kernel code selector
+        frame.add(16).write(0x08);         // CS = kernel code selector (DPL=0, RPL=0)
         frame.add(17).write(0x202);        // RFLAGS = IF=1
+        frame.add(18).write(stack_top);    // RSP = top of kernel stack
+        frame.add(19).write(0x10);         // SS = kernel data selector (DPL=0, RPL=0)
     }
 
     sp

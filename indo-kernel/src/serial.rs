@@ -63,7 +63,7 @@ pub fn init() {
     }
 }
 
-#[inline]
+#[no_mangle]
 pub fn write_byte(byte: u8) {
     wait_for_transmit();
     unsafe {
@@ -103,6 +103,7 @@ macro_rules! kprintln {
     });
 }
 
+#[no_mangle]
 pub fn write_hex(value: u64) {
     const HEX: [u8; 16] = *b"0123456789ABCDEF";
     write_byte(b'0');
@@ -142,4 +143,16 @@ pub fn write_str_nl(s: &str) {
 /// Debug: write a single marker byte to QEMU debug console (port 0xE9).
 pub fn ddbg(_marker: u8) {
     // Placeholder — enable after VMM is up
+}
+
+/// Write a marker string to serial. Used from naked_asm.
+/// # Safety
+/// `ptr` must point to a valid buffer of `len` bytes.
+#[no_mangle]
+pub unsafe extern "C" fn write_marker_raw(ptr: *const u8, len: u64) {
+    let slice = core::slice::from_raw_parts(ptr, len as usize);
+    for &byte in slice {
+        wait_for_transmit();
+        outb(UART_DATA, byte);
+    }
 }
