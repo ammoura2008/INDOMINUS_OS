@@ -9,69 +9,107 @@ Indominus Kernel is an experimental x86_64 operating system kernel written from 
 
 ---
 
-# Current Status
+Current Vision
 
-The kernel currently successfully supports:
+INDOMINUS OS focuses on three core principles:
 
-✅ UEFI bootloader integration  
-✅ 64-bit x86_64 kernel initialization  
-✅ GDT and TSS setup  
-✅ IDT and exception handling foundation  
-✅ Physical Memory Manager (PMM)  
-✅ Virtual Memory Manager (VMM)  
-✅ Kernel heap allocator  
-✅ High-half kernel mapping  
-✅ LAPIC / IO-APIC initialization  
-✅ PIT timer interrupts  
-✅ Preemptive round-robin scheduling  
-✅ SYSCALL/SYSRET user-kernel transitions  
-✅ ELF64 user program loading  
-✅ Ring 3 user execution  
-✅ Multiple user processes  
-✅ Process lifecycle management  
-✅ Zombie process handling  
-✅ Basic syscall interface (`write`, `exit`, `yield`, `getpid`)  
+🛡️ Security First
 
----
+The operating system is designed around strong isolation:
 
-# Current Development Phase
+User programs run separately from the kernel
+Ring 3 user-space execution
+Page fault isolation
+NX (No Execute) memory protection
+Future application sandboxing
+Future memory protection improvements
 
-The kernel has completed the first major multitasking milestone.
+The goal is to make unsafe behavior fail safely instead of compromising the entire system.
 
-The system can now:
+⚡ Lightweight Performance
 
-1. Boot into a 64-bit kernel environment.
-2. Initialize memory and interrupts.
-3. Create kernel tasks.
-4. Load user-space ELF programs.
-5. Transition between Ring 0 and Ring 3.
-6. Handle multiple processes.
-7. Execute syscalls safely.
-8. Terminate user processes while keeping the kernel alive.
+INDOMINUS OS aims to remain small and efficient:
 
-The current focus is moving from "running programs" to "protecting the system from programs."
+Minimal kernel footprint
+Custom memory management
+No unnecessary background services
+Direct hardware interaction
+Controlled resource usage
 
----
+Current release kernel size:
 
-# Next Phase: Memory Protection
+~126 KB release ELF kernel
+🧩 Native User Experience
 
-The next development stage is implementing a complete page fault handling system.
+Instead of relying on many external extensions, future versions aim to integrate useful features directly into the operating system:
 
-Goals:
+Native application isolation
+Intelligent window management
+Built-in recovery/versioning systems
+Lightweight customization engine
+Efficient system tools
+Current Kernel Status
+Boot & Hardware
 
-- Detect invalid memory access.
-- Separate user faults from kernel faults.
-- Terminate faulty user programs safely.
-- Improve process isolation.
-- Build the foundation for more advanced virtual memory features.
+✅ UEFI boot integration
+✅ x86_64 kernel
+✅ GDT initialization
+✅ TSS setup
+✅ IDT interrupt handling
+✅ LAPIC initialization
+✅ PIT timer interrupts
 
-Future plans include:
+Memory Management
 
-- Better virtual memory management.
-- Filesystem support.
-- Device drivers.
-- More complete user-space environment.
-- Security-focused architecture experiments.
-- AI-assisted system tools.
+✅ Physical Memory Manager (PMM)
+✅ Virtual Memory Manager (VMM)
+✅ High-half kernel mapping
+✅ Kernel heap allocator
+✅ Page table management foundation
+✅ Memory frame zeroing
+✅ NX memory protection support
 
----
+Processes & Execution
+
+✅ Process structures
+✅ Kernel task creation
+✅ Round-robin scheduler
+✅ User-space Ring 3 execution
+✅ ELF64 loader prototype
+✅ SYSCALL/SYSRET setup
+✅ User process isolation
+
+Fault Handling & Security
+
+✅ User page fault detection
+✅ User process termination on invalid memory access
+✅ Kernel fault separation
+✅ Page fault diagnostics
+✅ NX protection for non-executable memory
+
+Development Philosophy
+
+INDOMINUS OS follows a simple rule:
+Every feature must first have a stable foundation.
+The project prioritizes:
+
+Correctness
+Security
+Stability
+Performance
+User experience
+
+New features are added only after the underlying architecture can support them safely.
+Roadmap Ideas
+Future exploration:
+
+Application sandboxing
+Copy-on-write memory
+Demand paging
+Better filesystem design
+Device abstraction
+Native desktop environment
+Lightweight security model
+AI-assisted system management
+
+THIS README WAS MDE BY CHATGPT BUT REVIEWED BY OMAR MOUAKHAR
