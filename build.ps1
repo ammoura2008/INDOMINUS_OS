@@ -113,8 +113,63 @@ Setup-OVMF
 Build-Bootloader
 Build-Kernel
 
-# Verify kernel ELF before deploying
-Write-Host "`n[VERIFY] Validating kernel ELF..." -ForegroundColor Cyan
+# Verify binary formats before deploying.
+# This catches the most dangerous build mistake: swapping targets.
+# Bootloader must be a PE32+ (UEFI) binary. Kernel must be ELF.
+Write-Host "`n[VERIFY] Validating binary formats..." -ForegroundColor Cyan
+
+function Verify-BootloaderPE {
+    param ([string]$Path)
+    if (-not (Test-Path $Path)) {
+        Write-Host "[ERROR] Bootloader not found at: $Path" -ForegroundColor Red
+        throw "Bootloader not found"
+    }
+    $bytes = [System.IO.File]::ReadAllBytes($Path)
+    # PE32+ must start with "MZ" (0x4D, 0x5A)
+    if ($bytes[0] -ne 0x4D -or $bytes[1] -ne 0x5A) {
+        $got = "0x$($bytes[0].ToString('X2')) 0x$($bytes[1].ToString('X2'))"
+        Write-Host "[ERROR] Bootloader is NOT a PE32+ binary!" -ForegroundColor Red
+        Write-Host "  Expected: MZ header (0x4D 0x5A) — this is a UEFI application" -ForegroundColor Red
+        Write-Host "  Got:      $got ($($bytes.Length) bytes)" -ForegroundColor Red
+        Write-Host "  Cause:    Built with wrong target (x86_64-unknown-none instead of x86_64-unknown-uefi)" -ForegroundColor Red
+        throw "Bootloader format check failed — wrong cargo target"
+    }
+    if ($bytes.Length -lt 40000) {
+        Write-Host "[ERROR] Bootloader suspiciously small: $($bytes.Length) bytes (expected >= 40000)" -ForegroundColor Red
+        throw "Bootloader size check failed"
+    }
+    Write-Host "  Bootloader OK: $($bytes.Length) bytes, PE32+ header confirmed" -ForegroundColor Green
+}
+
+function Verify-KernelELF {
+    param ([string]$Path)
+    if (-not (Test-Path $Path)) {
+        Write-Host "[ERROR] Kernel not found at: $Path" -ForegroundColor Red
+        throw "Kernel not found"
+    }
+    $bytes = [System.IO.File]::ReadAllBytes($Path)
+    # ELF must start with 0x7F 'E' 'L' 'F' (0x7F, 0x45, 0x4C, 0x46)
+    if ($bytes[0] -ne 0x7F -or $bytes[1] -ne 0x45 -or $bytes[2] -ne 0x4C -or $bytes[3] -ne 0x46) {
+        $got = ($bytes[0..3] | ForEach-Object { "0x$($_.ToString('X2'))" }) -join " "
+        Write-Host "[ERROR] Kernel is NOT an ELF binary!" -ForegroundColor Red
+        Write-Host "  Expected: 0x7F 0x45 0x4C 0x46 (\\x7fELF)" -ForegroundColor Red
+        Write-Host "  Got:      $got ($($bytes.Length) bytes)" -ForegroundColor Red
+        Write-Host "  Cause:    Built with wrong target (x86_64-unknown-uefi instead of x86_64-unknown-none)" -ForegroundColor Red
+        throw "Kernel format check failed — wrong cargo target"
+    }
+    if ($bytes.Length -lt 30000) {
+        Write-Host "[ERROR] Kernel suspiciously small: $($bytes.Length) bytes (expected >= 30000)" -ForegroundColor Red
+        throw "Kernel size check failed"
+    }
+    Write-Host "  Kernel OK: $($bytes.Length) bytes, ELF header confirmed" -ForegroundColor Green
+}
+
+# Bootloader: must be PE32+ (UEFI)
+Verify-BootloaderPE $BootEfi
+# Kernel: must be ELF
+Verify-KernelELF $KernelElf
+
+# Kernel verification (existing check)
 $verifyScript = Join-Path $PSScriptRoot "tools\verify_kernel.py"
 if (Test-Path $verifyScript) {
     python $verifyScript $KernelElf
@@ -122,8 +177,6 @@ if (Test-Path $verifyScript) {
         Write-Host "[ERROR] Kernel verification FAILED — not deploying" -ForegroundColor Red
         throw "Kernel verification failed"
     }
-} else {
-    Write-Host "  [SKIP] verify_kernel.py not found" -ForegroundColor Yellow
 }
 
 Setup-ESP

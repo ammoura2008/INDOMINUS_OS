@@ -262,8 +262,12 @@ pub fn load_elf(elf_data: &[u8], pml4_phys: memory::PhysAddr) -> Result<ElfImage
         if phdr.p_flags & PF_W != 0 {
             flags |= PageTableFlags::WRITABLE;
         }
-        // Note: NX bit would go here if we support it. For now, all segments
-        // are executable (no DEP). Phase 9 can add NX support.
+        // NX (No Execute): apply to segments that are NOT executable.
+        // This enforces DEP — data/stack/heap cannot be executed.
+        // Requires EFER.NXE to be set (done in syscall::init).
+        if phdr.p_flags & PF_X == 0 {
+            flags |= PageTableFlags::NO_EXECUTE;
+        }
 
         // Calculate page-aligned bounds
         let virt_start = phdr.p_vaddr & !(PAGE_SIZE - 1); // align down

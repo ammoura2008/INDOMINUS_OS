@@ -1,4 +1,11 @@
 # .cargo/config.toml — Cargo Build Configuration
+#
+# WARNING: This sets the DEFAULT target for the whole workspace.
+# The kernel (indo-kernel) uses this default (x86_64-unknown-none).
+# The bootloader (indo-boot) OVERRIDES this in indo-boot/.cargo/config.toml
+# to use x86_64-unknown-uefi. If you run `cargo build -p indo-boot` without
+# the override, you get a raw ELF binary instead of a UEFI PE32+ application,
+# and the bootloader will fail silently at boot. ALWAYS use build.ps1.
 
 [target.x86_64-unknown-uefi]
 rustflags = [
@@ -16,7 +23,6 @@ rustflags = [
     "-C", "relocation-model=pic",
     "-C", "linker-flavor=ld.lld",
     "-C", "linker=rust-lld",
-    "--cfg=DEBUG_KERNEL",
 ]
 
 [unstable]

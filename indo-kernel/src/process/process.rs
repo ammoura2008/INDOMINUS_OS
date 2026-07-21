@@ -49,6 +49,8 @@ pub struct Process {
     pub exit_code: u64,
     /// Whether this is a user-mode process.
     pub is_user: bool,
+    /// Parent process PID. None for the idle process and kernel tasks spawned at boot.
+    pub parent_pid: Option<Pid>,
 }
 
 impl Process {
@@ -78,6 +80,7 @@ impl Process {
             entry_addr: entry_phys,
             exit_code: 0,
             is_user: false,
+            parent_pid: None,
         }
     }
 
@@ -86,7 +89,8 @@ impl Process {
     /// - `user_rip`: virtual address of the user entry point
     /// - `user_rsp`: initial user stack pointer
     /// - `pml4`: per-process page table (from `create_user_pml4`)
-    pub fn new_user(pid: Pid, user_rip: u64, user_rsp: u64, pml4: u64) -> Self {
+    /// - `parent_pid`: PID of the parent process (the spawner)
+    pub fn new_user(pid: Pid, user_rip: u64, user_rsp: u64, pml4: u64, parent_pid: Option<Pid>) -> Self {
         let stack_base = alloc_kernel_stack();
         let stack_top = stack_base + KERNEL_STACK_SIZE as u64;
         let sp = setup_initial_stack_frame_user(stack_top, user_rip, user_rsp);
@@ -102,6 +106,7 @@ impl Process {
             entry_addr: 0,
             exit_code: 0,
             is_user: true,
+            parent_pid,
         }
     }
 }
@@ -117,6 +122,23 @@ fn alloc_kernel_stack() -> u64 {
         }
         core::ptr::write_bytes(ptr, 0, KERNEL_STACK_SIZE);
         ptr as u64
+    }
+}
+
+/// Free a previously allocated kernel stack back to the heap.
+///
+/// # Safety
+/// - `stack_base` must have been returned by `alloc_kernel_stack()`
+/// - Must not have been freed already (double-free is UB)
+/// - Must only be called when the stack is no longer in use
+pub fn free_kernel_stack(stack_base: u64) {
+    if stack_base == 0 {
+        return;
+    }
+    let layout = core::alloc::Layout::from_size_align(KERNEL_STACK_SIZE, 16)
+        .expect("Invalid kernel stack layout");
+    unsafe {
+        alloc::alloc::dealloc(stack_base as *mut u8, layout);
     }
 }
 

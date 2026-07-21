@@ -49,6 +49,20 @@ pub static mut IRET_RSP_VAL: u64 = 0;
 #[cfg(DEBUG_KERNEL)]
 pub static mut IRET_SS: u64 = 0;
 
+/// Deferred CR3 value for the first dispatch.
+///
+/// When the first dispatch happens, the timer handler is still running on the
+/// UEFI boot stack (lower-half physical address). Switching CR3 here would
+/// unmap the boot stack (user PML4 lacks the identity map) → page fault → DF.
+///
+/// Instead, schedule() stores the target PML4 here and returns. The naked
+/// handler reads this AFTER `mov rsp, r12` (when RSP is on the new process's
+/// upper-half kernel stack), then switches CR3 safely.
+///
+/// Zero means "no deferred switch pending".
+#[no_mangle]
+pub static mut DEFERRED_CR3: u64 = 0;
+
 // Marker strings as static byte arrays.
 #[no_mangle]
 static TICK_MSG: [u8; 6] = *b"[TICK]";
@@ -128,6 +142,22 @@ pub unsafe extern "C" fn timer_interrupt_handler() {
         // ── Switch to new process's stack ────────────────────────────────
         "mov rsp, r12",
 
+        // ── Deferred CR3 switch (first dispatch only) ─────────────────
+        // On the first dispatch, schedule() stored the target PML4 in
+        // DEFERRED_CR3 instead of switching CR3 directly. This is because
+        // the timer handler was on the UEFI boot stack (lower-half) which
+        // becomes unmapped after a CR3 switch to user PML4.
+        //
+        // NOW RSP is on the new process's kernel stack (upper half, heap-
+        // allocated, mapped in all PML4s). It is safe to switch CR3.
+        "lea rbx, [rip + {deferred_cr3}]",
+        "mov rax, [rbx]",
+        "test rax, rax",
+        "jz .Lno_deferred_cr3",
+        "mov cr3, rax",
+        "mov qword ptr [rbx], 0",
+        ".Lno_deferred_cr3:",
+
         // ── Restore new process's registers ──────────────────────────────
         // Canonical frame: pop RAX first (lowest addr) → R15 last (highest)
         "pop rax",
@@ -151,16 +181,24 @@ pub unsafe extern "C" fn timer_interrupt_handler() {
         "mov rdi, 0x49",
         "mov rsi, rax",
         "call {dump_rax}",
+
+        // ── DIAGNOSTIC: dump IRET frame before iretq ──────────────────
+        // RSP now points at the IRET frame: RIP, CS, RFLAGS, RSP, SS
+        "mov rdi, rsp",
+        "call {dump_iret_before_iretq}",
+
         // ── Return from interrupt ────────────────────────────────────────
         "iretq",
 
         schedule = sym crate::process::context_switch::schedule,
         dump_rax = sym crate::serial::dump_rax,
+        dump_iret_before_iretq = sym crate::process::context_switch::dump_iret_before_iretq,
         write_marker = sym crate::serial::write_marker_raw,
         ddbg_tick = sym crate::serial::ddbg,
         tick_msg = sym TICK_MSG,
         tick_len = const TICK_MSG.len(),
         switch_msg = sym SWITCH_MSG,
+        deferred_cr3 = sym DEFERRED_CR3,
         switch_len = const SWITCH_MSG.len(),
     );
 }
@@ -338,6 +376,37 @@ pub unsafe extern "C" fn dump_frame_before_pop(rsp: u64) {
 #[no_mangle]
 pub unsafe extern "C" fn dump_frame_before_pop(_rsp: u64) {}
 
+/// Dump the 5-qword IRET frame right before iretq.
+///
+/// Called from the naked timer handler with:
+///   rdi = RSP pointing at the IRET frame [RIP, CS, RFLAGS, RSP, SS]
+///
+/// Must use write_str/write_hex (NOT kprintln!) — we may be running with
+/// a user PML4 (no identity map), so format_args! function pointers
+/// (physical addresses) would page-fault.
+#[cfg(DEBUG_KERNEL)]
+#[no_mangle]
+pub unsafe extern "C" fn dump_iret_before_iretq(rsp: u64) {
+    use crate::serial::{write_str, write_hex, write_nl, write_u64};
+    let iret_rip    = core::ptr::read_volatile(rsp as *const u64);
+    let iret_cs     = core::ptr::read_volatile((rsp + 8) as *const u64);
+    let iret_rflags = core::ptr::read_volatile((rsp + 16) as *const u64);
+    let iret_rsp    = core::ptr::read_volatile((rsp + 24) as *const u64);
+    let iret_ss     = core::ptr::read_volatile((rsp + 32) as *const u64);
+    write_str("[IRET-FRAME] RIP=0x"); write_hex(iret_rip);
+    write_str(" CS=0x"); write_hex(iret_cs);
+    write_str("(RPL="); write_u64(iret_cs & 3); write_str(")");
+    write_str(" RFLAGS=0x"); write_hex(iret_rflags);
+    write_str(" RSP=0x"); write_hex(iret_rsp);
+    write_str(" SS=0x"); write_hex(iret_ss);
+    write_str("(RPL="); write_u64(iret_ss & 3); write_str(")");
+    write_nl();
+}
+
+#[cfg(not(DEBUG_KERNEL))]
+#[no_mangle]
+pub unsafe extern "C" fn dump_iret_before_iretq(_rsp: u64) {}
+
 /// The Rust-side schedule function called from the naked timer handler.
 #[no_mangle]
 pub unsafe extern "C" fn schedule(saved_rsp: u64) -> u64 {
@@ -357,6 +426,25 @@ pub unsafe extern "C" fn schedule(saved_rsp: u64) -> u64 {
     if sched.current_pid().is_none() {
         if let Some(first_pid) = sched.find_next_ready(0) {
             let sp = sched.dispatch_first(first_pid);
+
+            // FIX: First dispatch must NOT switch CR3 here. The timer handler
+            // is running on the UEFI boot stack (lower-half physical address).
+            // User PML4s lack the identity map, so switching CR3 here would
+            // unmap the boot stack → page fault → double fault.
+            //
+            // Instead, store the target PML4 in DEFERRED_CR3. The naked handler
+            // reads this AFTER `mov rsp, r12` (when RSP is on the new process's
+            // upper-half kernel stack) and switches CR3 there safely.
+            if let Some(new_proc) = sched.current_process() {
+                let new_pml4 = new_proc.pml4_phys;
+                let (current_cr3, _) = x86_64::registers::control::Cr3::read();
+                if current_cr3.start_address().as_u64() != new_pml4 {
+                    DEFERRED_CR3 = new_pml4;
+                }
+                let rsp0 = new_proc.kernel_stack_base + super::process::KERNEL_STACK_SIZE as u64;
+                crate::gdt::set_tss_rsp0(rsp0);
+                crate::syscall::set_kernel_rsp(rsp0);
+            }
 
             #[cfg(DEBUG_KERNEL)]
             {
@@ -380,6 +468,31 @@ pub unsafe extern "C" fn schedule(saved_rsp: u64) -> u64 {
     // ═══════════════════════════════════════════════════════════════════
     // NORMAL PATH
     // ═══════════════════════════════════════════════════════════════════
+    let old_pid_for_diag = sched.current_pid();
+    let old_sp_for_diag = saved_rsp;
+
+    // ── DIAGNOSTIC: dump IRET frame of process BEING SAVED (preempted) ──
+    // The IRET frame is at saved_rsp + 15*8 (after 15 GP register pushes)
+    #[cfg(DEBUG_KERNEL)]
+    {
+        let iret_addr = saved_rsp + 15 * 8;
+        let iret_rip   = core::ptr::read_volatile(iret_addr as *const u64);
+        let iret_cs    = core::ptr::read_volatile((iret_addr + 8) as *const u64);
+        let iret_rflags = core::ptr::read_volatile((iret_addr + 16) as *const u64);
+        let iret_rsp   = core::ptr::read_volatile((iret_addr + 24) as *const u64);
+        let iret_ss    = core::ptr::read_volatile((iret_addr + 32) as *const u64);
+        crate::serial::write_str("[SAVE] pid=");
+        crate::serial::write_u64(old_pid_for_diag.unwrap_or(99));
+        crate::serial::write_str(" sp=");
+        crate::serial::write_hex(saved_rsp);
+        crate::serial::write_str(" IRET: RIP="); crate::serial::write_hex(iret_rip);
+        crate::serial::write_str(" CS="); crate::serial::write_hex(iret_cs);
+        crate::serial::write_str(" RFLAGS="); crate::serial::write_hex(iret_rflags);
+        crate::serial::write_str(" RSP="); crate::serial::write_hex(iret_rsp);
+        crate::serial::write_str(" SS="); crate::serial::write_hex(iret_ss);
+        crate::serial::write_nl();
+    }
+
     sched.save_current_sp(saved_rsp);
 
     let old_pid = sched.current_pid().unwrap_or(99);
@@ -408,6 +521,28 @@ pub unsafe extern "C" fn schedule(saved_rsp: u64) -> u64 {
         crate::syscall::set_kernel_rsp(rsp0);
     }
 
+    // ── DIAGNOSTIC: dump IRET frame of process BEING RESTORED (resumed) ──
+    // The IRET frame is at new_sp + 15*8 (after 15 GP register pushes)
+    #[cfg(DEBUG_KERNEL)]
+    {
+        let iret_addr = new_sp + 15 * 8;
+        let iret_rip   = core::ptr::read_volatile(iret_addr as *const u64);
+        let iret_cs    = core::ptr::read_volatile((iret_addr + 8) as *const u64);
+        let iret_rflags = core::ptr::read_volatile((iret_addr + 16) as *const u64);
+        let iret_rsp   = core::ptr::read_volatile((iret_addr + 24) as *const u64);
+        let iret_ss    = core::ptr::read_volatile((iret_addr + 32) as *const u64);
+        crate::serial::write_str("[RESTORE] pid=");
+        crate::serial::write_u64(new_pid);
+        crate::serial::write_str(" sp=");
+        crate::serial::write_hex(new_sp);
+        crate::serial::write_str(" IRET: RIP="); crate::serial::write_hex(iret_rip);
+        crate::serial::write_str(" CS="); crate::serial::write_hex(iret_cs);
+        crate::serial::write_str(" RFLAGS="); crate::serial::write_hex(iret_rflags);
+        crate::serial::write_str(" RSP="); crate::serial::write_hex(iret_rsp);
+        crate::serial::write_str(" SS="); crate::serial::write_hex(iret_ss);
+        crate::serial::write_nl();
+    }
+
     let current_pid = sched.current_pid().unwrap_or(99);
 
     if new_sp == 0 {
@@ -433,8 +568,42 @@ pub unsafe extern "C" fn schedule_force(saved_rsp: u64) -> u64 {
 
     let mut sched = SCHEDULER.lock();
 
+    // ── DIAGNOSTIC: dump IRET frame of process BEING SAVED (force-switch) ──
+    #[cfg(DEBUG_KERNEL)]
+    {
+        let iret_addr = saved_rsp + 15 * 8;
+        let iret_rip   = core::ptr::read_volatile(iret_addr as *const u64);
+        let iret_cs    = core::ptr::read_volatile((iret_addr + 8) as *const u64);
+        let iret_rflags = core::ptr::read_volatile((iret_addr + 16) as *const u64);
+        let iret_rsp   = core::ptr::read_volatile((iret_addr + 24) as *const u64);
+        let iret_ss    = core::ptr::read_volatile((iret_addr + 32) as *const u64);
+        crate::serial::write_str("[FORCE-SAVE] pid=");
+        crate::serial::write_u64(sched.current_pid().unwrap_or(99));
+        crate::serial::write_str(" sp=");
+        crate::serial::write_hex(saved_rsp);
+        crate::serial::write_str(" IRET: RIP="); crate::serial::write_hex(iret_rip);
+        crate::serial::write_str(" CS="); crate::serial::write_hex(iret_cs);
+        crate::serial::write_str(" RFLAGS="); crate::serial::write_hex(iret_rflags);
+        crate::serial::write_str(" RSP="); crate::serial::write_hex(iret_rsp);
+        crate::serial::write_str(" SS="); crate::serial::write_hex(iret_ss);
+        crate::serial::write_nl();
+    }
+
     // Save current process's SP (for sys_yield; ignored by sys_exit).
     sched.save_current_sp(saved_rsp);
+
+    // If the current process is a Zombie (from sys_exit), save its resources
+    // so we can free them AFTER switching to the new process's stack.
+    // The stack and page tables must not be freed while we're still executing on them.
+    let (dead_kstack, dead_pml4, dead_is_user) = if let Some(old_proc) = sched.current_process() {
+        if old_proc.state == super::process::ProcessState::Zombie {
+            (old_proc.kernel_stack_base, old_proc.pml4_phys, old_proc.is_user)
+        } else {
+            (0, 0, false)
+        }
+    } else {
+        (0, 0, false)
+    };
 
     let old_pid = sched.current_pid().unwrap_or(99);
 
@@ -498,6 +667,35 @@ pub unsafe extern "C" fn schedule_force(saved_rsp: u64) -> u64 {
     // ── Checkpoint R: about to return ────────────────────────────────
     crate::serial::ddbg(b'R');
 
+    // Now safe to free the dead process's resources — we've switched CR3
+    // and are about to return the new process's stack pointer.
+    //
+    // CRITICAL: free_kernel_stack calls dealloc() which uses PIC function
+    // pointers (linked_list_allocator's HoleList::deallocate). With PIC,
+    // those pointers contain PHYSICAL addresses after bootloader relocation.
+    // Indirect calls through them require the identity map (kernel PML4).
+    // A user PML4 lacks the identity map → page fault at the physical address.
+    // So we must switch to the kernel PML4 before any alloc/dealloc calls.
+    let kernel_pml4 = crate::memory::kernel_pml4_phys();
+    let (saved_cr3, _) = x86_64::registers::control::Cr3::read();
+    if saved_cr3.start_address().as_u64() != kernel_pml4 {
+        vmm::switch_page_table(crate::memory::PhysAddr::new(kernel_pml4));
+    }
+
+    if dead_pml4 != 0 && dead_is_user {
+        vmm::free_user_address_space(crate::memory::PhysAddr::new(dead_pml4));
+    }
+    if dead_kstack != 0 {
+        super::process::free_kernel_stack(dead_kstack);
+    }
+
+    // Restore CR3 to the new process's PML4 (required for iretq to user mode)
+    if saved_cr3.start_address().as_u64() != kernel_pml4 {
+        vmm::switch_page_table(crate::memory::PhysAddr::new(
+            saved_cr3.start_address().as_u64(),
+        ));
+    }
+
     if new_sp == 0 {
         crate::serial::write_str("[SCHED] FATAL: new_sp=0 in force_switch\n");
         sched.dump_table();
@@ -518,6 +716,17 @@ pub unsafe extern "C" fn kill_process() -> u64 {
     use crate::memory::vmm;
 
     let mut sched = SCHEDULER.lock();
+
+    // Save the dying process's resources BEFORE switching away.
+    let (dead_kstack, dead_pml4, dead_is_user) = {
+        let proc = sched.current_process();
+        (
+            proc.map(|p| p.kernel_stack_base).unwrap_or(0),
+            proc.map(|p| p.pml4_phys).unwrap_or(0),
+            proc.map(|p| p.is_user).unwrap_or(false),
+        )
+    };
+
     let new_sp = sched.kill_process();
 
     if let Some(new_proc) = sched.current_process() {
@@ -531,6 +740,32 @@ pub unsafe extern "C" fn kill_process() -> u64 {
         let rsp0 = new_proc.kernel_stack_base + super::process::KERNEL_STACK_SIZE as u64;
         crate::gdt::set_tss_rsp0(rsp0);
         crate::syscall::set_kernel_rsp(rsp0);
+    }
+
+    // Now safe to free the dead process's resources — we've switched CR3.
+    //
+    // CRITICAL: free_kernel_stack calls dealloc() which uses PIC function
+    // pointers (linked_list_allocator internals). With PIC, those pointers
+    // contain physical addresses. Indirect calls through them require the
+    // identity map (kernel PML4). A user PML4 lacks the identity map.
+    let kernel_pml4 = crate::memory::kernel_pml4_phys();
+    let (saved_cr3, _) = x86_64::registers::control::Cr3::read();
+    if saved_cr3.start_address().as_u64() != kernel_pml4 {
+        vmm::switch_page_table(crate::memory::PhysAddr::new(kernel_pml4));
+    }
+
+    if dead_pml4 != 0 && dead_is_user {
+        vmm::free_user_address_space(crate::memory::PhysAddr::new(dead_pml4));
+    }
+    if dead_kstack != 0 {
+        super::process::free_kernel_stack(dead_kstack);
+    }
+
+    // Restore CR3 to the new process's PML4
+    if saved_cr3.start_address().as_u64() != kernel_pml4 {
+        vmm::switch_page_table(crate::memory::PhysAddr::new(
+            saved_cr3.start_address().as_u64(),
+        ));
     }
 
     new_sp

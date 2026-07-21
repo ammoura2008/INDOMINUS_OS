@@ -40,7 +40,7 @@
 //! 5. `iretq` restores the frame and resumes execution
 
 use x86_64::structures::idt::{InterruptDescriptorTable, InterruptStackFrame, PageFaultErrorCode};
-use spin::Once;
+use core::mem::MaybeUninit;
 
 use crate::gdt::DOUBLE_FAULT_IST_INDEX;
 
@@ -48,7 +48,8 @@ use crate::gdt::DOUBLE_FAULT_IST_INDEX;
 // IDT global state
 // ─────────────────────────────────────────────────────────────────────────────
 
-static IDT: Once<InterruptDescriptorTable> = Once::new();
+static mut IDT: MaybeUninit<InterruptDescriptorTable> = MaybeUninit::uninit();
+static mut IDT_INITIALIZED: bool = false;
 
 // ─────────────────────────────────────────────────────────────────────────────
 // Hardware IRQ handlers (vectors 32-47)
@@ -104,6 +105,19 @@ irq_handler!(irq_handler_47, 47);
 /// Similarly, the IDTR base must be a virtual address, because after CR3
 /// switch to a user PML4 (no identity map), the physical address is unmapped.
 pub fn init() {
+    crate::serial::write_str("[MARK] idt::init start\n");
+
+    // PROVE RFLAGS.IF state
+    unsafe {
+        let rflags: u64;
+        core::arch::asm!("pushfq; pop {}", out(reg) rflags);
+        crate::serial::write_str("[IDT] RFLAGS=0x");
+        crate::serial::write_hex(rflags);
+        crate::serial::write_str(" IF=");
+        crate::serial::write_str(if rflags & (1 << 9) != 0 { "1 (ENABLED)" } else { "0 (DISABLED)" });
+        crate::serial::write_nl();
+    }
+
     // Helper: convert a handler fn pointer to a VirtAddr for the IDT
     macro_rules! handler_virt {
         ($handler:expr) => {{
@@ -115,97 +129,104 @@ pub fn init() {
         }};
     }
 
-    let idt = IDT.call_once(|| {
-        let mut idt = InterruptDescriptorTable::new();
+    crate::serial::write_str("[MARK] idt::init creating IDT\n");
+    let mut idt = InterruptDescriptorTable::new();
+    crate::serial::write_str("[MARK] idt::init new() done\n");
 
-        unsafe {
-            // ── CPU Exception Handlers ─────────────────────────────────────────
+    unsafe {
+        crate::serial::write_str("[MARK] idt::init setting handlers\n");
+        // ── CPU Exception Handlers ─────────────────────────────────────────
 
-            // #BP — Breakpoint (INT3)
-            idt.breakpoint.set_handler_addr(handler_virt!(breakpoint_handler));
+        // #BP — Breakpoint (INT3)
+        idt.breakpoint.set_handler_addr(handler_virt!(breakpoint_handler));
 
-            // #DF — Double Fault
-            // Uses IST stack for safety against stack overflow.
-            idt.double_fault
-                .set_handler_addr(handler_virt!(double_fault_handler))
-                .set_stack_index(DOUBLE_FAULT_IST_INDEX);
+        // #DF — Double Fault
+        // Uses IST stack for safety against stack overflow.
+        idt.double_fault
+            .set_handler_addr(handler_virt!(double_fault_handler))
+            .set_stack_index(DOUBLE_FAULT_IST_INDEX);
 
-            // #GP — General Protection Fault
-            idt.general_protection_fault.set_handler_addr(handler_virt!(general_protection_fault_handler));
+        // #GP — General Protection Fault
+        idt.general_protection_fault.set_handler_addr(handler_virt!(general_protection_fault_handler));
 
-            // #PF — Page Fault
-            idt.page_fault.set_handler_addr(handler_virt!(page_fault_handler));
+        // #PF — Page Fault
+        idt.page_fault.set_handler_addr(handler_virt!(page_fault_handler));
 
-            // #SS — Stack Segment Fault (vector 12)
-            idt.stack_segment_fault.set_handler_addr(handler_virt!(stack_segment_fault_handler));
+        // #SS — Stack Segment Fault (vector 12)
+        idt.stack_segment_fault.set_handler_addr(handler_virt!(stack_segment_fault_handler));
 
-            // #TS — Invalid TSS (vector 10)
-            idt.invalid_tss.set_handler_addr(handler_virt!(invalid_tss_handler));
+        // #TS — Invalid TSS (vector 10)
+        idt.invalid_tss.set_handler_addr(handler_virt!(invalid_tss_handler));
 
-            // #DE — Division Error
-            idt.divide_error.set_handler_addr(handler_virt!(divide_error_handler));
+        // #DE — Division Error
+        idt.divide_error.set_handler_addr(handler_virt!(divide_error_handler));
 
-            // #UD — Invalid Opcode
-            idt.invalid_opcode.set_handler_addr(handler_virt!(invalid_opcode_handler));
+        // #UD — Invalid Opcode
+        idt.invalid_opcode.set_handler_addr(handler_virt!(invalid_opcode_handler));
 
-            // ── Hardware IRQ Handlers (vectors 32-47) ─────────────────────────
+        crate::serial::write_str("[MARK] idt::init exception handlers done\n");
 
-            // Vector 32 (PIT timer) uses a special naked handler for context switching.
-            let handler_phys = crate::process::context_switch::timer_interrupt_handler as *const () as u64;
-            let handler_virt_addr = crate::memory::phys_to_kernel_virt(handler_phys);
-            idt[32].set_handler_addr(x86_64::VirtAddr::new(handler_virt_addr));
-            idt[33].set_handler_addr(handler_virt!(irq_handler_33));
-            idt[34].set_handler_addr(handler_virt!(irq_handler_34));
-            idt[35].set_handler_addr(handler_virt!(irq_handler_35));
-            idt[36].set_handler_addr(handler_virt!(irq_handler_36));
-            idt[37].set_handler_addr(handler_virt!(irq_handler_37));
-            idt[38].set_handler_addr(handler_virt!(irq_handler_38));
-            idt[39].set_handler_addr(handler_virt!(irq_handler_39));
-            idt[40].set_handler_addr(handler_virt!(irq_handler_40));
-            idt[41].set_handler_addr(handler_virt!(irq_handler_41));
-            idt[42].set_handler_addr(handler_virt!(irq_handler_42));
-            idt[43].set_handler_addr(handler_virt!(irq_handler_43));
-            idt[44].set_handler_addr(handler_virt!(irq_handler_44));
-            idt[45].set_handler_addr(handler_virt!(irq_handler_45));
-            idt[46].set_handler_addr(handler_virt!(irq_handler_46));
-            idt[47].set_handler_addr(handler_virt!(irq_handler_47));
-        }
+        // ── Hardware IRQ Handlers (vectors 32-47) ─────────────────────────
 
-        idt
-    });
+        // Vector 32 (PIT timer) uses a special naked handler for context switching.
+        let handler_phys = crate::process::context_switch::timer_interrupt_handler as *const () as u64;
+        let handler_virt_addr = crate::memory::phys_to_kernel_virt(handler_phys);
+        idt[32].set_handler_addr(x86_64::VirtAddr::new(handler_virt_addr));
+        idt[33].set_handler_addr(handler_virt!(irq_handler_33));
+        idt[34].set_handler_addr(handler_virt!(irq_handler_34));
+        idt[35].set_handler_addr(handler_virt!(irq_handler_35));
+        idt[36].set_handler_addr(handler_virt!(irq_handler_36));
+        idt[37].set_handler_addr(handler_virt!(irq_handler_37));
+        idt[38].set_handler_addr(handler_virt!(irq_handler_38));
+        idt[39].set_handler_addr(handler_virt!(irq_handler_39));
+        idt[40].set_handler_addr(handler_virt!(irq_handler_40));
+        idt[41].set_handler_addr(handler_virt!(irq_handler_41));
+        idt[42].set_handler_addr(handler_virt!(irq_handler_42));
+        idt[43].set_handler_addr(handler_virt!(irq_handler_43));
+        idt[44].set_handler_addr(handler_virt!(irq_handler_44));
+        idt[45].set_handler_addr(handler_virt!(irq_handler_45));
+        idt[46].set_handler_addr(handler_virt!(irq_handler_46));
+        idt[47].set_handler_addr(handler_virt!(irq_handler_47));
+    }
 
-    // Load the IDT into the CPU via the `lidt` instruction.
-    // CRITICAL: Use the reference returned by call_once to get the actual
-    // InterruptDescriptorTable address, NOT &raw const IDT (which gives the
-    // Once wrapper address, not the IDT data inside it).
-    {
-        let idt_phys = idt as *const InterruptDescriptorTable as u64;
-        let idt_virt = unsafe { crate::memory::phys_to_kernel_virt(idt_phys) };
+    crate::serial::write_str("[MARK] idt::init handlers done\n");
+
+    // Store IDT in static and get a 'static reference for lidt
+    unsafe {
+        IDT.as_mut_ptr().write(idt);
+        IDT_INITIALIZED = true;
+        let idt_ref = IDT.assume_init_ref();
+        let idt_phys = idt_ref as *const InterruptDescriptorTable as u64;
+        let idt_virt = crate::memory::phys_to_kernel_virt(idt_phys);
+        crate::serial::write_str("[MARK] idt::init idt_phys=0x");
+        crate::serial::write_hex(idt_phys);
+        crate::serial::write_str(" idt_virt=0x");
+        crate::serial::write_hex(idt_virt);
+        crate::serial::write_nl();
+
         #[repr(C, packed)]
         struct Idtr { limit: u16, base: u64 }
         let idtr = Idtr {
             limit: (core::mem::size_of::<InterruptDescriptorTable>() - 1) as u16,
             base: idt_virt,
         };
-        unsafe {
-            core::arch::asm!("lidt [{}]", in(reg) &idtr as *const _ as u64, options(readonly, nostack));
-        }
+        core::arch::asm!("lidt [{}]", in(reg) &idtr as *const _ as u64, options(readonly, nostack));
 
         // Verify: read back IDTR
         let readback = Idtr { limit: 0, base: 0 };
-        unsafe {
-            core::arch::asm!("sidt [{}]", in(reg) &readback as *const _ as u64, options(readonly, nostack));
-        }
+        core::arch::asm!("sidt [{}]", in(reg) &readback as *const _ as u64, options(readonly, nostack));
         crate::serial::write_str("[IDTR] limit="); crate::serial::write_hex(readback.limit as u64);
         crate::serial::write_str(" base="); crate::serial::write_hex(readback.base); crate::serial::write_nl();
     }
+    crate::serial::write_str("[MARK] idt::init done\n");
 }
 
 /// Reload the IDT into the CPU.
 ///
 /// Call this after modifying the IDT (e.g., after registering new handlers).
 pub fn reload() {
-    if let Some(idt) = IDT.get() {
+    if unsafe { IDT_INITIALIZED } {
+        let idt = unsafe { IDT.assume_init_ref() };
         let idt_phys = idt as *const InterruptDescriptorTable as u64;
         let idt_virt = unsafe { crate::memory::phys_to_kernel_virt(idt_phys) };
         #[repr(C, packed)]
@@ -226,141 +247,213 @@ pub fn reload() {
 
 /// Handle INT3 breakpoints — log and continue.
 extern "x86-interrupt" fn breakpoint_handler(stack_frame: InterruptStackFrame) {
-    crate::kprintln!(
-        "[EXCEPTION] Breakpoint at {:#x}",
-        stack_frame.instruction_pointer.as_u64()
-    );
+    use crate::serial::{write_str, write_hex, write_nl};
+    write_str("[EXCEPTION] Breakpoint at 0x");
+    write_hex(stack_frame.instruction_pointer.as_u64());
+    write_nl();
 }
 
 /// Handle Division Errors — fatal.
 extern "x86-interrupt" fn divide_error_handler(stack_frame: InterruptStackFrame) {
-    crate::kprintln!(
-        "[EXCEPTION] #DE Division Error at {:#x} — HALTING",
-        stack_frame.instruction_pointer.as_u64()
-    );
+    use crate::serial::{write_str, write_hex, write_nl};
+    write_str("━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━\n");
+    write_str("[EXCEPTION] #DE Division Error at 0x");
+    write_hex(stack_frame.instruction_pointer.as_u64());
+    write_str(" — HALTING\n");
+    write_str("━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━\n");
     crate::halt();
 }
 
 /// Handle Invalid Opcode — fatal.
 extern "x86-interrupt" fn invalid_opcode_handler(stack_frame: InterruptStackFrame) {
-    crate::kprintln!(
-        "[EXCEPTION] #UD Invalid Opcode at {:#x} — HALTING",
-        stack_frame.instruction_pointer.as_u64()
-    );
+    use crate::serial::{write_str, write_hex, write_nl};
+    write_str("━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━\n");
+    write_str("[EXCEPTION] #UD Invalid Opcode at 0x");
+    write_hex(stack_frame.instruction_pointer.as_u64());
+    write_str(" — HALTING\n");
+    write_str("━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━\n");
     crate::halt();
 }
 
 /// Handle Stack Segment Faults — fatal with full diagnostics.
-///
-/// #SS has an error code. For Ring 0→Ring 0 (no CPL change), the CPU pushes:
-/// ```text
-/// [RSP+0]  = error code
-/// [RSP+8]  = RIP
-/// [RSP+16] = CS
-/// [RSP+24] = RFLAGS
-/// ```
-/// Common causes: bad SS selector, stack not present, stack limit violation.
 extern "x86-interrupt" fn stack_segment_fault_handler(
     stack_frame: InterruptStackFrame,
     error_code: u64,
 ) {
-    crate::kprintln!("━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━");
-    crate::kprintln!("[EXCEPTION] #SS Stack Segment Fault");
-    crate::kprintln!("  Error code : {:#x}", error_code);
-    crate::kprintln!("  RIP        : {:#x}", stack_frame.instruction_pointer.as_u64());
-    crate::kprintln!("  CS         : {:#x}", stack_frame.code_segment.0);
-    crate::kprintln!("  RFLAGS     : {:#x}", stack_frame.cpu_flags.bits());
-    crate::kprintln!("  HALTING");
-    crate::kprintln!("━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━");
+    use crate::serial::{write_str, write_hex, write_nl};
+    write_str("━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━\n");
+    write_str("[EXCEPTION] #SS Stack Segment Fault\n");
+    write_str("  Error code : 0x"); write_hex(error_code); write_nl();
+    write_str("  RIP        : 0x"); write_hex(stack_frame.instruction_pointer.as_u64()); write_nl();
+    write_str("  CS         : 0x"); write_hex(stack_frame.code_segment.0 as u64); write_nl();
+    write_str("  RFLAGS     : 0x"); write_hex(stack_frame.cpu_flags.bits()); write_nl();
+    write_str("  HALTING\n");
+    write_str("━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━\n");
     crate::halt();
 }
 
 /// Handle Invalid TSS — fatal with full diagnostics.
-///
-/// #TS has an error code. For Ring 0→Ring 0 (no CPL change), the CPU pushes:
-/// ```text
-/// [RSP+0]  = error code
-/// [RSP+8]  = RIP
-/// [RSP+16] = CS
-/// [RSP+24] = RFLAGS
-/// ```
-/// Common causes: bad TSS selector, TSS not present, bad segment in TSS.
 extern "x86-interrupt" fn invalid_tss_handler(
     stack_frame: InterruptStackFrame,
     error_code: u64,
 ) {
-    crate::kprintln!("━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━");
-    crate::kprintln!("[EXCEPTION] #TS Invalid TSS");
-    crate::kprintln!("  Error code : {:#x}", error_code);
-    crate::kprintln!("  RIP        : {:#x}", stack_frame.instruction_pointer.as_u64());
-    crate::kprintln!("  CS         : {:#x}", stack_frame.code_segment.0);
-    crate::kprintln!("  RFLAGS     : {:#x}", stack_frame.cpu_flags.bits());
-    crate::kprintln!("  HALTING");
-    crate::kprintln!("━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━");
+    use crate::serial::{write_str, write_hex, write_nl};
+    write_str("━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━\n");
+    write_str("[EXCEPTION] #TS Invalid TSS\n");
+    write_str("  Error code : 0x"); write_hex(error_code); write_nl();
+    write_str("  RIP        : 0x"); write_hex(stack_frame.instruction_pointer.as_u64()); write_nl();
+    write_str("  CS         : 0x"); write_hex(stack_frame.code_segment.0 as u64); write_nl();
+    write_str("  RFLAGS     : 0x"); write_hex(stack_frame.cpu_flags.bits()); write_nl();
+    write_str("  HALTING\n");
+    write_str("━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━\n");
     crate::halt();
 }
 
 /// Handle General Protection Faults — fatal with full diagnostics.
 ///
-/// #GP has an error code. For Ring 0→Ring 0 (no CPL change), the CPU pushes:
-/// ```text
-/// [RSP+0]  = error code
-/// [RSP+8]  = RIP
-/// [RSP+16] = CS
-/// [RSP+24] = RFLAGS
-/// ```
-/// The `stack_frame` reference points at [RSP+0] (the error code slot).
-/// `stack_frame.instruction_pointer` reads [RSP+8] (correct).
-/// `stack_frame.code_segment` reads [RSP+16] (correct).
-/// `stack_frame.cpu_flags` reads [RSP+24] (correct).
-/// `stack_frame.stack_pointer` and `stack_frame.stack_segment` are
-/// invalid (garbage) when there is no CPL change.
-extern "x86-interrupt" fn general_protection_fault_handler(
-    stack_frame: InterruptStackFrame,
-    error_code: u64,
-) {
-    let captured_rsp = unsafe { crate::CAPTURED_RSP };
+/// # IMPORTANT: NO format_args! after CR3 switch
+///
+/// With PIC (position-independent code), `format_args!` creates function
+/// pointers containing **physical** addresses. After CR3 switch to a user
+/// PML4 (no identity map), calling through those pointers causes a page
+/// fault at the physical address (unmapped). We use write_str/write_hex
+/// exclusively — they are direct function calls that work at virtual
+/// addresses regardless of PIC.
+/// Handle General Protection Faults — kill user processes, halt on kernel faults.
+///
+/// This is a naked handler (like page_fault_handler) so we can:
+/// 1. Read CS.RPL from the interrupt frame to classify user vs kernel fault
+/// 2. For user faults: call kill_process(), then context-switch via
+///    gp_return_to_user (EOI + stack switch + iretq)
+/// 3. For kernel faults: halt with diagnostics
+#[unsafe(naked)]
+#[unsafe(link_section = ".text")]
+pub unsafe extern "C" fn general_protection_fault_handler() {
+    core::arch::naked_asm!(
+        // ═══ Save GP registers (same order as timer/page fault handler) ═══
+        "push r15",
+        "push r14",
+        "push r13",
+        "push r12",
+        "push r11",
+        "push r10",
+        "push r9",
+        "push r8",
+        "push rbp",
+        "push rdi",
+        "push rsi",
+        "push rdx",
+        "push rcx",
+        "push rbx",
+        "push rax",
+
+        // ═══ Read CS from the interrupt frame for classification ═══
+        // Stack: [0..14]=GP regs (15 qwords), [15]=error_code, [16]=RIP, [17]=CS
+        "mov rdi, rsp",          // rdi = frame pointer
+        "mov rsi, [rsp + 120]",  // rsi = error_code (offset 15*8)
+        "mov rdx, [rsp + 136]",  // rdx = CS (offset 17*8)
+        "call {gp_classify}",
+        // rax = 0 for kernel fault (halt), 1 for user fault (kill + context switch)
+
+        "cmp rax, 0",
+        "je .gp_kernel_fault",
+
+        // ═══ User fault: kill process and context switch ═══
+        "call {kill_process}",
+        // rax = new process's stack pointer
+        "mov rdi, rax",
+        "call {gp_return_to_user}",
+        // Never returns here
+
+        // ═══ Kernel fault: print diagnostics and halt ═══
+        ".gp_kernel_fault:",
+        "call {gp_print_diag}",
+        "call {halt}",
+
+        gp_classify = sym gp_classify,
+        kill_process = sym crate::process::context_switch::kill_process,
+        gp_return_to_user = sym gp_return_to_user,
+        gp_print_diag = sym gp_print_diag,
+        halt = sym crate::halt,
+    );
+}
+
+/// Classify a GP fault as user-mode (kill process) or kernel-mode (halt).
+///
+/// Returns rax = 1 for user fault, rax = 0 for kernel fault.
+#[no_mangle]
+unsafe extern "C" fn gp_classify(frame: u64, error_code: u64, cs: u64) -> u64 {
+    use crate::serial::{write_str, write_hex, write_nl, write_u64};
+
+    let rpl = cs & 3;
+    // Frame: [0..14]=GP regs, [15]=error_code, [16]=RIP, [17]=CS
+    let rip = core::ptr::read_volatile((frame + 16 * 8) as *const u64);
+
+    write_str("━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━\n");
+    write_str("[EXCEPTION] #GP General Protection Fault\n");
+    write_str("  Error code : 0x"); write_hex(error_code); write_nl();
+    write_str("  RIP        : 0x"); write_hex(rip); write_nl();
+    write_str("  CS         : 0x"); write_hex(cs);
+    write_str(" (RPL="); write_u64(rpl); write_str(")\n");
+
+    if rpl == 3 {
+        write_str("  USER FAULT: killing process\n");
+        1
+    } else {
+        write_str("  KERNEL FAULT: halting\n");
+        0
+    }
+}
+
+/// Print additional diagnostics for kernel GP faults (before halting).
+#[no_mangle]
+unsafe extern "C" fn gp_print_diag() {
+    use crate::serial::{write_str, write_hex, write_nl};
+
     let cr3_val: u64;
-    let cs_val: u16;
-    let ss_val: u16;
-    unsafe {
-        core::arch::asm!("mov {}, cr3", out(reg) cr3_val);
-        core::arch::asm!("mov {}, cs", out(reg) cs_val);
-        core::arch::asm!("mov {}, ss", out(reg) ss_val);
-    }
+    let rsp_val: u64;
+    core::arch::asm!("mov {}, cr3", out(reg) cr3_val);
+    core::arch::asm!("mov {}, rsp", out(reg) rsp_val);
 
-    crate::kprintln!("━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━");
-    crate::kprintln!("[EXCEPTION] #GP General Protection Fault");
-    crate::kprintln!("  Error code : {:#x}", error_code);
-    crate::kprintln!("  RIP (from CPU frame) : {:#x}", stack_frame.instruction_pointer.as_u64());
-    crate::kprintln!("  CS  (from CPU frame) : {:#x}", stack_frame.code_segment.0);
-    crate::kprintln!("  RFLAGS (CPU frame)   : {:#x}", stack_frame.cpu_flags.bits());
-    crate::kprintln!("  CR3 (actual)          : {:#x}", cr3_val);
-    crate::kprintln!("  CS  (actual selector) : {:#x}  (RPL={})", cs_val, cs_val & 3);
-    crate::kprintln!("  SS  (actual selector) : {:#x}  (RPL={})", ss_val, ss_val & 3);
-    crate::kprintln!("  CAPTURED_RSP (before iretq): {:#x}", captured_rsp);
+    write_str("  CR3       : 0x"); write_hex(cr3_val); write_nl();
+    write_str("  RSP       : 0x"); write_hex(rsp_val); write_nl();
+    write_str("  HALTING\n");
+    write_str("━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━\n");
+}
 
-    if captured_rsp != 0 {
-        crate::kprintln!("  ── IRET frame at CAPTURED_RSP ──");
-        for i in 0..3u64 {
-            let addr = captured_rsp + i * 8;
-            let val = unsafe { core::ptr::read_volatile(addr as *const u64) };
-            let label = match i {
-                0 => "  ← IRET RIP",
-                1 => "  ← IRET CS",
-                2 => "  ← IRET RFLAGS",
-                _ => "",
-            };
-            crate::kprintln!("    [{:#x}] = {:#018x}{}", addr, val, label);
-        }
-        let cur_rsp: u64;
-        unsafe { core::arch::asm!("mov {}, rsp", out(reg) cur_rsp); }
-        crate::kprintln!("  Current RSP in GP handler: {:#x}", cur_rsp);
-    }
+/// Return to user mode after killing a GP-faulting process.
+///
+/// Called from the naked GP handler with rdi = new process's stack pointer.
+/// Does EOI + stack switch + iretq.
+#[no_mangle]
+unsafe extern "C" fn gp_return_to_user(new_rsp: u64) -> ! {
+    // Send EOI to LAPIC (using upper-half mapping)
+    core::ptr::write_volatile(0xFFFFFFFF_FEE0_00B0 as *mut u32, 0);
 
-    crate::kprintln!("  HALTING");
-    crate::kprintln!("━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━");
-    crate::halt();
+    // Switch to new process's stack and restore its context
+    core::arch::asm!(
+        "mov rsp, {new_rsp}",
+        // Restore 15 GP registers
+        "pop rax",
+        "pop rbx",
+        "pop rcx",
+        "pop rdx",
+        "pop rsi",
+        "pop rdi",
+        "pop rbp",
+        "pop r8",
+        "pop r9",
+        "pop r10",
+        "pop r11",
+        "pop r12",
+        "pop r13",
+        "pop r14",
+        "pop r15",
+        // Return from interrupt (reads IRET frame from stack)
+        "iretq",
+        new_rsp = in(reg) new_rsp,
+        options(noreturn),
+    );
 }
 
 /// Handle Page Faults — classify and kill user processes, halt on kernel faults.
@@ -454,12 +547,20 @@ unsafe extern "C" fn page_fault_classify(frame: u64, faulting_addr: u64, cs: u64
     let rpl = cs & 3;
     // Frame layout: [0..14]=GP regs (15 qwords), [15]=error_code, [16]=RIP, [17]=CS
     let rip = core::ptr::read_volatile((frame + 16 * 8) as *const u64); // RIP slot
+    let error_code = core::ptr::read_volatile((frame + 15 * 8) as *const u64); // error code
 
     crate::serial::write_str_nl("!! PAGE FAULT !!");
     crate::serial::write_str("  CR2="); crate::serial::write_hex(faulting_addr); crate::serial::write_nl();
     crate::serial::write_str("  RIP="); crate::serial::write_hex(rip); crate::serial::write_nl();
     crate::serial::write_str("  CS=");  crate::serial::write_hex(cs);
     crate::serial::write_str(" RPL="); crate::serial::write_hex(rpl); crate::serial::write_nl();
+    crate::serial::write_str("  err="); crate::serial::write_hex(error_code);
+    if error_code & 1 != 0 { crate::serial::write_str(" prot_viol"); }
+    if error_code & 2 != 0 { crate::serial::write_str(" write"); } else { crate::serial::write_str(" read"); }
+    if error_code & 4 != 0 { crate::serial::write_str(" user"); }
+    if error_code & 8 != 0 { crate::serial::write_str(" NX"); }
+    if error_code & 0x10 != 0 { crate::serial::write_str(" reserved"); }
+    crate::serial::write_nl();
 
     if rpl == 3 {
         // User-mode fault: kill the process, continue with next
@@ -474,36 +575,19 @@ unsafe extern "C" fn page_fault_classify(frame: u64, faulting_addr: u64, cs: u64
 
 /// Handle Double Faults — fatal, always.
 ///
-/// ## What the CPU provides
+/// # IMPORTANT: NO format_args! after CR3 switch
 ///
-/// The `stack_frame` parameter is the x86_64 crate's `InterruptStackFrame`,
-/// a reference to the frame the CPU pushed on the IST stack. We read it
-/// DIRECTLY rather than computing IST offsets.
-///
-/// For Ring 0 → Ring 0 (no CPL change), the CPU pushes 4 qwords:
-/// ```text
-/// [RSP+0]  = error code (0 for DF)
-/// [RSP+8]  = RIP
-/// [RSP+16] = CS
-/// [RSP+24] = RFLAGS
-/// ```
-/// RSP and SS are NOT pushed (no CPL change).
-///
-/// For Ring 3 → Ring 0, RSP and SS ARE pushed (6 qwords total).
-///
-/// ## What if First RIP = 0?
-///
-/// Intel SDM Vol.3 §6.12.1.2: "If the double-fault detection mechanism is
-/// activated because of a failure to deliver the exception, the processor
-/// pushes a saved instruction pointer of 0."
-///
-/// This means the FIRST exception could not be delivered to its handler.
-/// The CPU could not push the first exception's frame (e.g., the stack
-/// was invalid, or the IDT entry was bad).
+/// With PIC, `format_args!` creates function pointers containing physical
+/// addresses. After CR3 switch to a user PML4 (no identity map), calling
+/// through those pointers causes a page fault. We use write_str/write_hex
+/// exclusively — they are direct function calls that work at virtual
+/// addresses regardless of PIC.
 extern "x86-interrupt" fn double_fault_handler(
     stack_frame: InterruptStackFrame,
     error_code: u64,
 ) -> ! {
+    use crate::serial::{write_str, write_hex, write_nl, write_u64};
+
     let cr2 = x86_64::registers::control::Cr2::read()
         .map(|v| v.as_u64())
         .unwrap_or(0);
@@ -517,46 +601,46 @@ extern "x86-interrupt" fn double_fault_handler(
         core::arch::asm!("mov {}, ss", out(reg) ss_val);
     }
 
-    crate::kprintln!("━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━");
-    crate::kprintln!("[EXCEPTION] *** DOUBLE FAULT ***");
-    crate::kprintln!("  DF error code : {:#x}", error_code);
+    write_str("━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━\n");
+    write_str("[EXCEPTION] *** DOUBLE FAULT ***\n");
+    write_str("  DF error code : 0x"); write_hex(error_code); write_nl();
 
-    // ── DF frame from CPU (on IST) ─────────────────────────────────────
     let frame_rip  = stack_frame.instruction_pointer.as_u64();
     let frame_cs   = stack_frame.code_segment.0;
     let frame_rflags = stack_frame.cpu_flags.bits();
     let frame_rsp  = stack_frame.stack_pointer.as_u64();
     let frame_ss   = stack_frame.stack_segment.0;
 
-    crate::kprintln!("  ── DF frame (CPU-pushed on IST) ──");
-    crate::kprintln!("  RIP     : {:#x}", frame_rip);
-    crate::kprintln!("  CS      : {:#x}  (RPL={})", frame_cs, frame_cs & 3);
-    crate::kprintln!("  RFLAGS  : {:#x}", frame_rflags);
-    crate::kprintln!("  RSP     : {:#x}", frame_rsp);
-    crate::kprintln!("  SS      : {:#x}", frame_ss);
-    crate::kprintln!("  CR2     : {:#x}", cr2);
-    crate::kprintln!("  CR3     : {:#x}", cr3_val);
-    crate::kprintln!("  CS (actual) : {:#x}  (RPL={})", cs_val, cs_val & 3);
-    crate::kprintln!("  SS (actual) : {:#x}  (RPL={})", ss_val, ss_val & 3);
+    write_str("  ── DF frame (CPU-pushed on IST) ──\n");
+    write_str("  RIP     : 0x"); write_hex(frame_rip); write_nl();
+    write_str("  CS      : 0x"); write_hex(frame_cs as u64);
+    write_str("  (RPL="); write_u64((frame_cs & 3) as u64); write_str(")\n");
+    write_str("  RFLAGS  : 0x"); write_hex(frame_rflags); write_nl();
+    write_str("  RSP     : 0x"); write_hex(frame_rsp); write_nl();
+    write_str("  SS      : 0x"); write_hex(frame_ss as u64); write_nl();
+    write_str("  CR2     : 0x"); write_hex(cr2); write_nl();
+    write_str("  CR3     : 0x"); write_hex(cr3_val); write_nl();
+    write_str("  CS (actual) : 0x"); write_hex(cs_val as u64);
+    write_str("  (RPL="); write_u64((cs_val & 3) as u64); write_str(")\n");
+    write_str("  SS (actual) : 0x"); write_hex(ss_val as u64);
+    write_str("  (RPL="); write_u64((ss_val & 3) as u64); write_str(")\n");
 
     if frame_cs & 3 == 3 {
-        crate::kprintln!("  DF CPL=3: RSP/SS in DF frame are from Ring 3 transition");
+        write_str("  DF CPL=3: RSP/SS in DF frame are from Ring 3 transition\n");
     } else {
-        crate::kprintln!("  DF CPL=0: RSP/SS in DF frame may be garbage (no CPL change to DF)");
+        write_str("  DF CPL=0: RSP/SS in DF frame may be garbage (no CPL change to DF)\n");
     }
 
-    // ── CR2 analysis ───────────────────────────────────────────────────
     if cr2 == 0xFFFFFFFFFFFFFFF8 {
-        crate::kprintln!("  CR2 = 0x...F8 = 0x0 - 8: push at RSP=0x0");
+        write_str("  CR2 = 0x...F8 = 0x0 - 8: push at RSP=0x0\n");
     } else if cr2 == 0 {
-        crate::kprintln!("  CR2 = 0x0: null deref or RSP was 0");
+        write_str("  CR2 = 0x0: null deref or RSP was 0\n");
     }
 
     #[cfg(DEBUG_KERNEL)]
     {
-        // ════════════════════════════════════════════════════════════════════
-        // Diagnostics captured by dump_frame_before_pop (before pops).
-        // ════════════════════════════════════════════════════════════════════
+        use crate::serial::{write_str, write_hex, write_nl, write_u64};
+
         let saved_rsp       = unsafe { super::process::context_switch::SAVED_RSP };
         let rsp_after_load  = unsafe { super::process::context_switch::RSP_AFTER_LOAD };
         let rsp_before      = unsafe { super::process::context_switch::RSP_BEFORE_IRETQ };
@@ -564,83 +648,82 @@ extern "x86-interrupt" fn double_fault_handler(
         let cs_in_frame     = unsafe { super::process::context_switch::CS_IN_FRAME };
         let rip_in_frame    = unsafe { super::process::context_switch::RIP_IN_FRAME };
 
-        crate::kprintln!("  ── Captured diagnostics ──");
-        crate::kprintln!("  SAVED_RSP (into schedule)  : {:#x}", saved_rsp);
-        crate::kprintln!("  RSP_AFTER_LOAD (mov rsp,r12): {:#x}", rsp_after_load);
-        crate::kprintln!("  RIP_IN_FRAME (before pops) : {:#x}", rip_in_frame);
-        crate::kprintln!("  CS_IN_FRAME  (before pops) : {:#x}  (RPL={})", cs_in_frame, cs_in_frame & 3);
-        crate::kprintln!("  RSP_BEFORE_IRETQ           : {:#x}", rsp_before);
-        crate::kprintln!("  EXPECTED_RSP (after iretq) : {:#x}", expected);
+        write_str("  ── Captured diagnostics ──\n");
+        write_str("  SAVED_RSP (into schedule)  : 0x"); write_hex(saved_rsp); write_nl();
+        write_str("  RSP_AFTER_LOAD (mov rsp,r12): 0x"); write_hex(rsp_after_load); write_nl();
+        write_str("  RIP_IN_FRAME (before pops) : 0x"); write_hex(rip_in_frame); write_nl();
+        write_str("  CS_IN_FRAME  (before pops) : 0x"); write_hex(cs_in_frame);
+        write_str("  (RPL="); write_u64(cs_in_frame & 3); write_str(")\n");
+        write_str("  RSP_BEFORE_IRETQ           : 0x"); write_hex(rsp_before); write_nl();
+        write_str("  EXPECTED_RSP (after iretq) : 0x"); write_hex(expected); write_nl();
 
-        // ════════════════════════════════════════════════════════════════════
-        // Dump 20 qwords at the RSP the naked handler saved right before
-        // iretq.  This is the ACTUAL memory the CPU consumed.
-        // ════════════════════════════════════════════════════════════════════
         if rsp_before != 0 {
-            crate::kprintln!("  ── 20 qwords at RSP_BEFORE_IRETQ={:#x} ──", rsp_before);
+            write_str("  ── 20 qwords at RSP_BEFORE_IRETQ=0x"); write_hex(rsp_before); write_str(" ──\n");
             for i in 0..20u64 {
                 let addr = rsp_before + i * 8;
                 let val = unsafe { core::ptr::read_volatile(addr as *const u64) };
-                crate::kprintln!("    [{:#x}] = {:#x}{}", addr, val,
-                    match i {
-                        0  => "  ← IRET RIP",
-                        1  => if val & 3 == 0 { "  ← IRET CS RPL=0" }
-                              else if val & 3 == 3 { "  ← IRET CS RPL=3 !!!" }
-                              else { "  ← IRET CS" },
-                        2  => "  ← IRET RFLAGS",
-                        3  => "  ← [rsp+24] = new RSP if CPL change",
-                        4  => "  ← [rsp+32] = new SS if CPL change",
-                        _  => "",
+                write_str("    [0x"); write_hex(addr); write_str("] = 0x"); write_hex(val);
+                match i {
+                    0  => write_str("  ← IRET RIP\n"),
+                    1  => {
+                        write_str("  ← IRET CS (RPL="); write_u64(val & 3);
+                        if val & 3 == 0 { write_str(") RPL=0!\n"); }
+                        else if val & 3 == 3 { write_str(") RPL=3\n"); }
+                        else { write_str(")\n"); }
                     }
-                );
+                    2  => write_str("  ← IRET RFLAGS\n"),
+                    3  => write_str("  ← [rsp+24] = new RSP if CPL change\n"),
+                    4  => write_str("  ← [rsp+32] = new SS if CPL change\n"),
+                    _  => write_str("\n"),
+                }
             }
 
-            // Cross-check: CS from frame dump vs CS from memory
             let cs_from_mem = unsafe { core::ptr::read_volatile((rsp_before + 8) as *const u64) };
-            crate::kprintln!("  ── CS cross-check ──");
-            crate::kprintln!("  CS_IN_FRAME (dumped before pops) : {:#x}", cs_in_frame);
-            crate::kprintln!("  CS at RSP_BEFORE_IRETQ+8 (memory): {:#x}", cs_from_mem);
+            write_str("  ── CS cross-check ──\n");
+            write_str("  CS_IN_FRAME (dumped before pops) : 0x"); write_hex(cs_in_frame); write_nl();
+            write_str("  CS at RSP_BEFORE_IRETQ+8 (memory): 0x"); write_hex(cs_from_mem); write_nl();
             if cs_in_frame == cs_from_mem {
-                crate::kprintln!("  MATCH — frame was not corrupted between dump and iretq");
+                write_str("  MATCH — frame was not corrupted between dump and iretq\n");
             } else {
-                crate::kprintln!("  MISMATCH — frame WAS corrupted between dump and iretq!");
+                write_str("  MISMATCH — frame WAS corrupted between dump and iretq!\n");
             }
 
             if cs_in_frame & 3 == 0 {
-                crate::kprintln!("  CS RPL=0 → same-privilege iretq: pops RIP/CS/RFLAGS only (3×8=24)");
-                crate::kprintln!("  New RSP = RSP_BEFORE_IRETQ + 24 = {:#x}", rsp_before + 24);
+                write_str("  CS RPL=0 → same-privilege iretq: pops RIP/CS/RFLAGS only (3*8=24)\n");
+                write_str("  New RSP = RSP_BEFORE_IRETQ + 24 = 0x"); write_hex(rsp_before + 24); write_nl();
             } else if cs_in_frame & 3 == 3 {
-                crate::kprintln!("  CS RPL=3 → outer-privilege iretq: pops RIP/CS/RFLAGS/RSP/SS (5×8=40)");
-                crate::kprintln!("  New RSP from [rsp+24] = {:#x}",
-                    unsafe { core::ptr::read_volatile((rsp_before + 24) as *const u64) });
+                write_str("  CS RPL=3 → outer-privilege iretq: pops RIP/CS/RFLAGS/RSP/SS (5*8=40)\n");
+                write_str("  New RSP from [rsp+24] = 0x");
+                write_hex(unsafe { core::ptr::read_volatile((rsp_before + 24) as *const u64) });
+                write_nl();
             } else {
-                crate::kprintln!("  CS RPL={} → unexpected", cs_in_frame & 3);
+                write_str("  CS RPL="); write_u64(cs_in_frame & 3); write_str(" → unexpected\n");
             }
         } else {
-            crate::kprintln!("  RSP_BEFORE_IRETQ = 0 → naked handler never saved it");
+            write_str("  RSP_BEFORE_IRETQ = 0 → naked handler never saved it\n");
         }
 
-        // ════════════════════════════════════════════════════════════════════
-        // GDT selector values
-        // ════════════════════════════════════════════════════════════════════
-        crate::kprintln!("  ── GDT selectors ──");
+        write_str("  ── GDT selectors ──\n");
         let kernel_cs = crate::gdt::kernel_code_selector();
         let user_cs   = crate::gdt::user_code_selector();
         let user_ss   = crate::gdt::user_data_selector();
-        crate::kprintln!("  kernel_code : {:#06x} (idx={}, RPL={})", kernel_cs.0, kernel_cs.index(), kernel_cs.0 & 3);
-        crate::kprintln!("  user_code   : {:#06x} (idx={}, RPL={})", user_cs.0, user_cs.index(), user_cs.0 & 3);
-        crate::kprintln!("  user_data   : {:#06x} (idx={}, RPL={})", user_ss.0, user_ss.index(), user_ss.0 & 3);
+        write_str("  kernel_code : 0x"); write_hex(kernel_cs.0 as u64);
+        write_str(" (idx="); write_u64(kernel_cs.index() as u64);
+        write_str(" RPL="); write_u64((kernel_cs.0 & 3) as u64); write_str(")\n");
+        write_str("  user_code   : 0x"); write_hex(user_cs.0 as u64);
+        write_str(" (idx="); write_u64(user_cs.index() as u64);
+        write_str(" RPL="); write_u64((user_cs.0 & 3) as u64); write_str(")\n");
+        write_str("  user_data   : 0x"); write_hex(user_ss.0 as u64);
+        write_str(" (idx="); write_u64(user_ss.index() as u64);
+        write_str(" RPL="); write_u64((user_ss.0 & 3) as u64); write_str(")\n");
 
-        // ════════════════════════════════════════════════════════════════════
-        // Frame origin
-        // ════════════════════════════════════════════════════════════════════
-        crate::kprintln!("  ── Frame origin ──");
-        crate::kprintln!("  Timer handler: NO IST (vector 32 has no IST index set)");
-        crate::kprintln!("  IRET frame: manually constructed by setup_initial_stack_frame_kernel");
-        crate::kprintln!("  NOT a CPU-pushed interrupt frame — CS/RIP/RFLAGS written by Rust code");
+        write_str("  ── Frame origin ──\n");
+        write_str("  Timer handler: NO IST (vector 32 has no IST index set)\n");
+        write_str("  IRET frame: manually constructed by setup_initial_stack_frame_kernel\n");
+        write_str("  NOT a CPU-pushed interrupt frame — CS/RIP/RFLAGS written by Rust code\n");
     }
 
-    crate::kprintln!("━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━");
-    crate::kprintln!("  SYSTEM HALTED — cannot recover from double fault");
+    write_str("━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━\n");
+    write_str("  SYSTEM HALTED — cannot recover from double fault\n");
     crate::halt()
 }

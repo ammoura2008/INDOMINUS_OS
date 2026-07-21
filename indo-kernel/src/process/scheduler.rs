@@ -89,14 +89,14 @@ impl Scheduler {
         pid
     }
 
-    pub fn spawn_user(&mut self, user_rip: u64, user_rsp: u64, pml4: u64) -> Option<Pid> {
+    pub fn spawn_user(&mut self, user_rip: u64, user_rsp: u64, pml4: u64, parent: Option<Pid>) -> Option<Pid> {
         let pid = self.next_pid;
         if pid >= MAX_PROCESSES as u64 {
             return None;
         }
         self.next_pid += 1;
 
-        let process = Process::new_user(pid, user_rip, user_rsp, pml4);
+        let process = Process::new_user(pid, user_rip, user_rsp, pml4, parent);
         self.processes[pid as usize] = Some(process);
 
         crate::serial::write_str("[SCHED] Spawned user process ");
@@ -359,5 +359,63 @@ impl Scheduler {
 
     pub fn processes_mut(&mut self) -> &mut [Option<Process>; MAX_PROCESSES] {
         &mut self.processes
+    }
+
+    /// Check if `child_pid` is a child of `parent_pid`.
+    pub fn is_child_of(&self, child_pid: Pid, parent_pid: Pid) -> bool {
+        if let Some(Some(proc)) = self.processes.get(child_pid as usize) {
+            proc.parent_pid == Some(parent_pid)
+        } else {
+            false
+        }
+    }
+
+    /// Find the next Zombie child of the given parent.
+    /// Returns (child_pid, exit_code) if found.
+    pub fn find_zombie_child(&self, parent_pid: Pid) -> Option<(Pid, u64)> {
+        for i in 0..MAX_PROCESSES as u64 {
+            if let Some(Some(proc)) = self.processes.get(i as usize) {
+                if proc.parent_pid == Some(parent_pid) && proc.state == ProcessState::Zombie {
+                    return Some((proc.pid, proc.exit_code));
+                }
+            }
+        }
+        None
+    }
+
+    /// Find any Zombie child (for waitpid(-1)).
+    /// Returns (child_pid, exit_code) if found.
+    pub fn find_any_zombie_child(&self) -> Option<(Pid, Pid, u64)> {
+        let parent = self.current_pid?;
+        for i in 0..MAX_PROCESSES as u64 {
+            if let Some(Some(proc)) = self.processes.get(i as usize) {
+                if proc.parent_pid == Some(parent) && proc.state == ProcessState::Zombie {
+                    return Some((proc.pid, parent, proc.exit_code));
+                }
+            }
+        }
+        None
+    }
+
+    /// Remove a process slot (set to None).
+    /// Used after waitpid collects a zombie's exit code.
+    pub fn reap_zombie(&mut self, pid: Pid) {
+        crate::serial::write_str("[SCHED] Reaped PID=");
+        crate::serial::write_u64(pid);
+        crate::serial::write_nl();
+        self.processes[pid as usize] = None;
+    }
+
+    /// Count the number of live (non-Zombie, non-None) children of a parent.
+    pub fn live_child_count(&self, parent_pid: Pid) -> usize {
+        let mut count = 0;
+        for i in 0..MAX_PROCESSES as u64 {
+            if let Some(Some(proc)) = self.processes.get(i as usize) {
+                if proc.parent_pid == Some(parent_pid) && proc.state != ProcessState::Zombie {
+                    count += 1;
+                }
+            }
+        }
+        count
     }
 }

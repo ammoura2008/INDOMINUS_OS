@@ -54,7 +54,13 @@ pub struct PmmFrameAllocator;
 unsafe impl FrameAllocator<Size4KiB> for PmmFrameAllocator {
     fn allocate_frame(&mut self) -> Option<PhysFrame<Size4KiB>> {
         pmm::alloc_frame().map(|addr| {
-            unsafe { PhysFrame::containing_address(X64PhysAddr::new(addr.as_u64())) }
+            // Zero the frame to prevent stale page table entries (e.g., NX bits
+            // from previous use) from causing faults when EFER.NXE is enabled.
+            unsafe {
+                let ptr = addr.as_u64() as *mut u8;
+                core::ptr::write_bytes(ptr, 0, super::PAGE_SIZE as usize);
+            }
+            PhysFrame::containing_address(X64PhysAddr::new(addr.as_u64()))
         })
     }
 }
@@ -333,4 +339,195 @@ pub fn remove_identity_map(pml4_phys: super::PhysAddr) {
     }
 
     flush_tlb_full();
+}
+
+/// Set NX (No Execute) on all identity-mapped page table entries.
+///
+/// Walks the first 4 GiB of the identity map and sets the NO_EXECUTE bit
+/// on every present page table entry (PDPT, PD, PT). This prevents code
+/// execution via the identity map while keeping it functional for data access
+/// (e.g., walking user page tables from kernel PML4 context).
+///
+/// Called after boot once all kernel code runs from the upper-half mapping.
+///
+/// # Safety
+/// - The kernel must be executing at its higher-half address
+/// - The identity map must exist in the given PML4
+/// - EFER.NXE must be enabled (it is — set during syscall init)
+pub fn harden_identity_map(pml4_phys: super::PhysAddr) {
+    use x86_64::structures::paging::PageTable;
+
+    // In PIC mode, kernel code runs from the identity map (physical addresses).
+    // We can only set NX on identity-mapped pages that do NOT contain kernel code.
+    // Pages in [kernel_phys_start, kernel_phys_end) must remain executable.
+    let kps = super::kernel_phys_start();
+    let kernel_end = unsafe { super::KERNEL_PHYS_START } + 0x100000; // ~1 MiB kernel
+    // Align to page boundaries
+    let kern_page_start = kps & 0xFFFF_FFFF_FFFF_F000;
+    let kern_page_end = (kernel_end + 0xFFF) & 0xFFFF_FFFF_FFFF_F000;
+
+    unsafe {
+        let pml4_virt = phys_to_virt(pml4_phys.as_u64());
+        let pml4 = &mut *(pml4_virt.as_mut_ptr() as *mut PageTable);
+
+        let pml4_entry = &mut pml4[x86_64::structures::paging::PageTableIndex::new(0)];
+        if !pml4_entry.flags().contains(PageTableFlags::PRESENT) {
+            return;
+        }
+
+        let pdpt_virt = phys_to_virt(pml4_entry.addr().as_u64());
+        let pdpt = &mut *(pdpt_virt.as_mut_ptr() as *mut PageTable);
+
+        for pdpt_idx in 0..512u16 {
+            let pdpt_entry = &mut pdpt[x86_64::structures::paging::PageTableIndex::new(pdpt_idx)];
+            if !pdpt_entry.flags().contains(PageTableFlags::PRESENT) {
+                continue;
+            }
+
+            if pdpt_entry.flags().contains(PageTableFlags::HUGE_PAGE) {
+                continue;
+            }
+
+            let pd_virt = phys_to_virt(pdpt_entry.addr().as_u64());
+            let pd = &mut *(pd_virt.as_mut_ptr() as *mut PageTable);
+
+            for pd_idx in 0..512u16 {
+                let pd_entry = &mut pd[x86_64::structures::paging::PageTableIndex::new(pd_idx)];
+                if !pd_entry.flags().contains(PageTableFlags::PRESENT) {
+                    continue;
+                }
+
+                if pd_entry.flags().contains(PageTableFlags::HUGE_PAGE) {
+                    continue;
+                }
+
+                let pt_virt = phys_to_virt(pd_entry.addr().as_u64());
+                let pt = &mut *(pt_virt.as_mut_ptr() as *mut PageTable);
+
+                for pt_idx in 0..512u16 {
+                    let pt_entry = &mut pt[x86_64::structures::paging::PageTableIndex::new(pt_idx)];
+                    if !pt_entry.flags().contains(PageTableFlags::PRESENT) {
+                        continue;
+                    }
+                    // Skip pages that contain kernel code
+                    let entry_phys = pt_entry.addr().as_u64();
+                    if entry_phys >= kern_page_start && entry_phys < kern_page_end {
+                        continue;
+                    }
+                    pt_entry.set_flags(pt_entry.flags() | PageTableFlags::NO_EXECUTE);
+                }
+            }
+        }
+    }
+
+    flush_tlb_full();
+}
+
+// ─────────────────────────────────────────────────────────────────────────────
+// Page table deallocation
+// ─────────────────────────────────────────────────────────────────────────────
+
+/// Free all user-mode page tables and physical frames owned by a process.
+///
+/// Walks the lower half of the PML4 (entries 0–255) and frees:
+/// - All physical frames mapped by leaf (PT) entries
+/// - All intermediate page table frames (PT, PD, PDPT)
+/// - The PML4 frame itself
+///
+/// Upper half entries (256–511) are shared with the kernel and are NOT freed.
+///
+/// # Safety
+/// - `pml4_phys` must point to a valid user PML4
+/// - The PML4 must NOT be the current CR3 (caller must switch CR3 first)
+/// - Interrupts should be disabled
+pub unsafe fn free_user_address_space(pml4_phys: super::PhysAddr) {
+    use super::pmm;
+    use x86_64::structures::paging::PageTable;
+
+    // User PML4s lack the identity map (PML4[0] is not copied).
+    // phys_to_kernel_virt only works for kernel-owned physical memory, NOT for
+    // PMM-allocated page table frames (which are at low physical addresses).
+    // So we switch to the kernel PML4 (which has the identity map), walk the
+    // user PML4's page tables via phys_to_virt, then switch back.
+    let kernel_pml4 = super::kernel_pml4_phys();
+    let old_cr3: u64;
+    core::arch::asm!("mov {0}, cr3", out(reg) old_cr3);
+    core::arch::asm!("mov cr3, {0}", in(reg) kernel_pml4);
+
+    {
+        let pml4_virt = phys_to_virt(pml4_phys.as_u64());
+        let pml4 = &*(pml4_virt.as_ptr() as *const PageTable);
+
+        // Walk lower half (entries 0–255). Entry 0 is the identity map
+        // which we also free (user processes don't need it after boot).
+        for pml4_idx in 0..256u16 {
+            let pml4_entry = &pml4[x86_64::structures::paging::PageTableIndex::new(pml4_idx)];
+            if !pml4_entry.flags().contains(PageTableFlags::PRESENT) {
+                continue;
+            }
+
+            let pdpt_phys_addr = pml4_entry.addr().as_u64();
+            let pdpt_virt = phys_to_virt(pdpt_phys_addr);
+            let pdpt = &*(pdpt_virt.as_ptr() as *const PageTable);
+
+            for pdpt_idx in 0..512u16 {
+                let pdpt_entry = &pdpt[x86_64::structures::paging::PageTableIndex::new(pdpt_idx)];
+                if !pdpt_entry.flags().contains(PageTableFlags::PRESENT) {
+                    continue;
+                }
+
+                // Check for 1 GiB huge page (PS bit in PDPT entry)
+                if pdpt_entry.flags().contains(PageTableFlags::HUGE_PAGE) {
+                    continue;
+                }
+
+                let pd_phys_addr = pdpt_entry.addr().as_u64();
+                let pd_virt = phys_to_virt(pd_phys_addr);
+                let pd = &*(pd_virt.as_ptr() as *const PageTable);
+
+                for pd_idx in 0..512u16 {
+                    let pd_entry = &pd[x86_64::structures::paging::PageTableIndex::new(pd_idx)];
+                    if !pd_entry.flags().contains(PageTableFlags::PRESENT) {
+                        continue;
+                    }
+
+                    // Check for 2 MiB huge page (PS bit in PD entry)
+                    if pd_entry.flags().contains(PageTableFlags::HUGE_PAGE) {
+                        continue;
+                    }
+
+                    let pt_phys_addr = pd_entry.addr().as_u64();
+                    let pt_virt = phys_to_virt(pt_phys_addr);
+                    let pt = &*(pt_virt.as_ptr() as *const PageTable);
+
+                    for pt_idx in 0..512u16 {
+                        let pt_entry = &pt[x86_64::structures::paging::PageTableIndex::new(pt_idx)];
+                        if !pt_entry.flags().contains(PageTableFlags::PRESENT) {
+                            continue;
+                        }
+
+                        // Free the mapped physical frame
+                        let frame_phys = pt_entry.addr().as_u64();
+                        pmm::free_frame(super::PhysAddr::new(frame_phys));
+                    }
+
+                    // Free the PT frame itself
+                    pmm::free_frame(super::PhysAddr::new(pt_phys_addr));
+                }
+
+                // Free the PD frame itself
+                pmm::free_frame(super::PhysAddr::new(pd_phys_addr));
+            }
+
+            // Free the PDPT frame itself
+            pmm::free_frame(super::PhysAddr::new(pdpt_phys_addr));
+        }
+    }
+
+    // Restore original CR3
+    core::arch::asm!("mov cr3, {0}", in(reg) old_cr3);
+
+    // Free the PML4 frame itself (last!) — after restoring CR3, since we're
+    // no longer using it.
+    pmm::free_frame(pml4_phys);
 }

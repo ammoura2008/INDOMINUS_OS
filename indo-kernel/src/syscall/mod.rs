@@ -53,6 +53,106 @@ fn is_valid_user_range(addr: u64, len: u64) -> bool {
     end > addr && end <= USER_ADDR_MAX
 }
 
+/// Check if every page in a user-space buffer range is present and user-accessible.
+///
+/// Walks the process page tables (PML4 → PDPT → PD → PT) for each 4 KiB page
+/// in [addr, addr+len). Returns `true` only if ALL pages are present and have
+/// the USER_ACCESSIBLE bit set.
+///
+/// Temporarily switches CR3 to the kernel PML4 (which has the identity map) so
+/// we can access arbitrary physical page table frames via `phys_to_virt`.
+/// User PML4s don't have the identity map, and `phys_to_kernel_virt` only works
+/// for the kernel's own physical memory — not for PMM-allocated page tables.
+fn is_user_buffer_mapped(pml4_phys: u64, addr: u64, len: u64) -> bool {
+    use x86_64::structures::paging::{PageTable, PageTableIndex, PageTableFlags};
+
+    if len == 0 || addr == 0 {
+        return false;
+    }
+
+    let page_size = 4096u64;
+    let start_page = addr / page_size;
+    let end_page = (addr + len - 1) / page_size;
+
+    // Switch to kernel PML4 which has the identity map (PML4[0]).
+    // Interrupts are disabled (SFMASK clears IF on syscall entry), so this is safe.
+    let kernel_pml4 = crate::memory::kernel_pml4_phys();
+    let old_cr3: u64;
+    unsafe {
+        core::arch::asm!("mov {0}, cr3", out(reg) old_cr3);
+        core::arch::asm!("mov cr3, {0}", in(reg) kernel_pml4);
+    }
+
+    // Now we're running with the kernel PML4. The identity map is active,
+    // so phys_to_virt (which is identity: virt == phys) works for any physical address.
+    let result = unsafe {
+        let pml4_virt = crate::memory::vmm::phys_to_virt(pml4_phys);
+        let pml4 = &*(pml4_virt.as_ptr() as *const PageTable);
+
+        let mut ok = true;
+        'outer: for page_num in start_page..=end_page {
+            let virt = page_num * page_size;
+
+            let pml4_idx = ((virt >> 39) & 0x1FF) as usize;
+            let pml4_entry = &pml4[PageTableIndex::new(pml4_idx as u16)];
+            if !pml4_entry.flags().contains(PageTableFlags::PRESENT) {
+                ok = false;
+                break;
+            }
+
+            let pdpt_virt = crate::memory::vmm::phys_to_virt(pml4_entry.addr().as_u64());
+            let pdpt = &*(pdpt_virt.as_ptr() as *const PageTable);
+
+            let pdpt_idx = ((virt >> 30) & 0x1FF) as usize;
+            let pdpt_entry = &pdpt[PageTableIndex::new(pdpt_idx as u16)];
+            if !pdpt_entry.flags().contains(PageTableFlags::PRESENT) {
+                ok = false;
+                break;
+            }
+            if pdpt_entry.flags().contains(PageTableFlags::HUGE_PAGE) {
+                ok = pdpt_entry.flags().contains(PageTableFlags::USER_ACCESSIBLE);
+                break;
+            }
+
+            let pd_virt = crate::memory::vmm::phys_to_virt(pdpt_entry.addr().as_u64());
+            let pd = &*(pd_virt.as_ptr() as *const PageTable);
+
+            let pd_idx = ((virt >> 21) & 0x1FF) as usize;
+            let pd_entry = &pd[PageTableIndex::new(pd_idx as u16)];
+            if !pd_entry.flags().contains(PageTableFlags::PRESENT) {
+                ok = false;
+                break;
+            }
+            if pd_entry.flags().contains(PageTableFlags::HUGE_PAGE) {
+                ok = pd_entry.flags().contains(PageTableFlags::USER_ACCESSIBLE);
+                break;
+            }
+
+            let pt_virt = crate::memory::vmm::phys_to_virt(pd_entry.addr().as_u64());
+            let pt = &*(pt_virt.as_ptr() as *const PageTable);
+
+            let pt_idx = ((virt >> 12) & 0x1FF) as usize;
+            let pt_entry = &pt[PageTableIndex::new(pt_idx as u16)];
+            if !pt_entry.flags().contains(PageTableFlags::PRESENT) {
+                ok = false;
+                break;
+            }
+            if !pt_entry.flags().contains(PageTableFlags::USER_ACCESSIBLE) {
+                ok = false;
+                break;
+            }
+        }
+        ok
+    };
+
+    // Restore original CR3 (user PML4)
+    unsafe {
+        core::arch::asm!("mov cr3, {0}", in(reg) old_cr3);
+    }
+
+    result
+}
+
 /// Per-CPU data structure pointed to by GSBase.
 ///
 /// Layout matches the naked handler's `gs:[offset]` accesses:
@@ -172,12 +272,14 @@ pub fn init() {
         SFMask::write(x86_64::registers::rflags::RFlags::INTERRUPT_FLAG);
     }
 
-    // ── Enable SCE in EFER ───────────────────────────────────────────────
-    // The SCE (System Call Extensions) bit enables the `syscall`/`sysret`
-    // instructions.
+    // ── Enable SCE + NX in EFER ─────────────────────────────────────────
+    // SCE: enables `syscall`/`sysret` instructions.
+    // NXE: enables No-Execute bit in page tables (NX protection).
+    //      Must be set BEFORE mapping any pages with NO_EXECUTE flag.
     unsafe {
         let mut efer = Efer::read();
         efer |= EferFlags::SYSTEM_CALL_EXTENSIONS;
+        efer |= EferFlags::NO_EXECUTE_ENABLE;
         Efer::write(efer);
     }
 
@@ -322,19 +424,37 @@ pub unsafe extern "C" fn syscall_entry() {
         "mov rbx, [rsp + 80]",                  // R11 = user RFLAGS
         "mov rcx, gs:[0]",                      // user RSP (saved at syscall entry)
 
-        // Construct 5-qword IRET frame above the GP regs
-        // iretq pops: RIP, CS, RFLAGS, and if CS.RPL > CPL: RSP, SS
-        // Push in reverse order: SS, RSP, RFLAGS, CS, RIP
+        // Construct IRET frame FIRST (below GP regs in memory),
+        // THEN push GP regs on top. This produces the same layout the timer
+        // handler expects: GP regs at [RSP+0..112], IRET at [RSP+120..160].
+        //
+        // Push IRET frame (5 qwords) — these end up at HIGHER addresses
+        // because the subsequent GP pushes go to LOWER addresses.
         "push 0x23",                            // SS  = user data selector (Ring 3)
         "push rcx",                             // RSP = user RSP
         "push rbx",                             // RFLAGS = user RFLAGS
         "push 0x1B",                            // CS  = user code selector (Ring 3)
         "push rax",                             // RIP = user RIP
 
-        // Adjust RSP back to point at the GP regs (skip over 5 IRET qwords)
-        // schedule() needs RSP → GP regs so the timer handler can later
-        // pop the GP regs and iretq will find the IRET frame immediately after.
-        "sub rsp, 40",                          // 5 * 8 = 40 bytes
+        // Push 15 GP regs (R15 first → RAX last). These go to LOWER addresses,
+        // placing them BELOW the IRET frame — matching the timer handler layout.
+        "push r15",
+        "push r14",
+        "push r13",
+        "push r12",
+        "push r11",
+        "push r10",
+        "push r9",
+        "push r8",
+        "push rbp",
+        "push rdi",
+        "push rsi",
+        "push rdx",
+        "push rcx",
+        "push rbx",
+        "push rax",
+        // RSP now points at the GP frame base, with IRET frame immediately
+        // above it — identical to the timer interrupt layout.
 
         // Call schedule_force(GP_regs_ptr) → always switches, returns new SP in RAX
         "mov rdi, rsp",
@@ -390,11 +510,11 @@ pub unsafe extern "C" fn syscall_entry() {
         // Return from interrupt (pops IRET frame: RIP, CS, RFLAGS, [RSP, SS])
         "iretq",
 
-        // ── Normal return path: sysretq ───────────────────────────────────
+        // ── Normal return path: iretq (replaces sysretq for CVE-2012-0217) ──
         ".normal_return:",
         "pop rax",
         "pop rbx",
-        "pop rcx",
+        "pop rcx",                              // RCX = user RIP (saved by CPU on syscall)
         "pop rdx",
         "pop rsi",
         "pop rdi",
@@ -402,14 +522,25 @@ pub unsafe extern "C" fn syscall_entry() {
         "pop r8",
         "pop r9",
         "pop r10",
-        "pop r11",
+        "pop r11",                              // R11 = user RFLAGS (saved by CPU on syscall)
         "pop r12",
         "pop r13",
         "pop r14",
         "pop r15",
 
-        "swapgs",                                // Switch back to user GSBase
-        "sysretq",                               // Return to Ring 3
+        // Read user RSP from per-CPU data BEFORE swapgs (while GS still points to kernel per-CPU)
+        "mov r12, gs:[0]",                      // r12 = user RSP
+
+        "swapgs",                               // Restore user GSBase
+
+        // Construct IRET frame and return via iretq (safe on all Intel CPUs).
+        // sysretq is vulnerable to CVE-2012-0217 on some Intel CPUs.
+        "push 0x23",                            // SS  = user data selector (Ring 3)
+        "push r12",                             // RSP = user stack
+        "push r11",                             // RFLAGS = user RFLAGS
+        "push 0x1B",                            // CS  = user code selector (Ring 3)
+        "push rcx",                             // RIP = user instruction pointer
+        "iretq",
 
         dispatch = sym syscall_dispatch,
         schedule_force = sym crate::process::context_switch::schedule_force,
@@ -459,6 +590,7 @@ pub unsafe extern "C" fn syscall_dispatch(regs: *mut u64) -> u64 {
         1 => sys_exit(arg0),
         2 => sys_yield(),
         3 => sys_getpid(),
+        4 => sys_waitpid(arg0),
         _ => {
             crate::serial::write_str("[SYSCALL] Unknown syscall: ");
             crate::serial::write_u64(syscall_num);
@@ -480,6 +612,8 @@ pub unsafe extern "C" fn syscall_dispatch(regs: *mut u64) -> u64 {
 /// SYS_WRITE (0) — Write data to a file descriptor.
 ///
 /// For now, only fd=1 (serial/stdout) is supported.
+/// Validates that every page in the user buffer is mapped and user-accessible
+/// before reading any data, preventing kernel page faults from bad user pointers.
 ///
 /// Arguments: fd, buf_ptr, count
 /// Returns: number of bytes written, or u64::MAX on error (-EINVAL)
@@ -488,7 +622,7 @@ fn sys_write(fd: u64, buf_ptr: u64, count: u64) -> u64 {
         return u64::MAX; // Only stdout supported
     }
 
-    // Validate the user buffer address range
+    // Validate the user buffer address range (bounds check)
     if !is_valid_user_range(buf_ptr, count) {
         crate::serial::write_str("[SYSCALL] sys_write: invalid user buffer addr=");
         crate::serial::write_hex(buf_ptr);
@@ -496,6 +630,21 @@ fn sys_write(fd: u64, buf_ptr: u64, count: u64) -> u64 {
         crate::serial::write_hex(count);
         crate::serial::write_nl();
         return u64::MAX; // -EINVAL
+    }
+
+    // Validate that every page in the buffer is actually mapped and user-accessible.
+    // This prevents a kernel page fault from an unmapped or kernel-only pointer.
+    let pml4_phys = {
+        let (frame, _) = x86_64::registers::control::Cr3::read();
+        frame.start_address().as_u64()
+    };
+    if !is_user_buffer_mapped(pml4_phys, buf_ptr, count) {
+        crate::serial::write_str("[SYSCALL] sys_write: unmapped user buffer addr=");
+        crate::serial::write_hex(buf_ptr);
+        crate::serial::write_str(" len=");
+        crate::serial::write_hex(count);
+        crate::serial::write_nl();
+        return u64::MAX; // -EFAULT
     }
 
     let slice = unsafe { core::slice::from_raw_parts(buf_ptr as *const u8, count as usize) };
@@ -555,4 +704,57 @@ fn sys_yield() -> u64 {
 fn sys_getpid() -> u64 {
     let sched = crate::process::scheduler::SCHEDULER.lock();
     sched.current_pid().unwrap_or(0)
+}
+
+/// SYS_WAITPID (4) — Wait for a child process to exit.
+///
+/// Non-blocking implementation (WNOHANG):
+/// - If `child_pid == 0`: wait for any child
+/// - If `child_pid > 0`: wait for that specific child
+/// - If child is Zombie: reap it (free slot) and return its exit_code
+/// - If child is still running: return 0 (WNOHANG)
+/// - If no matching child found: return -1 (u64::MAX)
+///
+/// Arguments: child_pid
+/// Returns: exit_code of reaped child, 0 if still running, -1 on error
+fn sys_waitpid(child_pid: u64) -> u64 {
+    use crate::process::ProcessState;
+
+    let mut sched = crate::process::scheduler::SCHEDULER.lock();
+    let parent_pid = match sched.current_pid() {
+        Some(pid) => pid,
+        None => return u64::MAX,
+    };
+
+    // Step 1: Find the target child and its state
+    let (found_pid, is_zombie, exit_code) = if child_pid == 0 {
+        // Wait for any child
+        match sched.find_any_zombie_child() {
+            Some((c_pid, _, exit)) => (c_pid, true, exit),
+            None => return u64::MAX, // No children at all
+        }
+    } else {
+        // Wait for specific child
+        if !sched.is_child_of(child_pid, parent_pid) {
+            return u64::MAX; // Not our child
+        }
+        match sched.processes().get(child_pid as usize) {
+            Some(Some(proc)) => {
+                let is_z = proc.state == ProcessState::Zombie;
+                let exit = if is_z { proc.exit_code } else { 0 };
+                (child_pid, is_z, exit)
+            }
+            _ => return u64::MAX, // Child slot empty
+        }
+    };
+
+    // Step 2: Act on the child's state
+    if is_zombie {
+        // Found a zombie — reap it (free slot)
+        sched.reap_zombie(found_pid);
+        exit_code
+    } else {
+        // Child still running (WNOHANG)
+        0
+    }
 }

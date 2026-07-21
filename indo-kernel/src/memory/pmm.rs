@@ -166,43 +166,7 @@ pub fn init(memory_map: & indo_core::MemoryMap) {
             }
         }
 
-        // Step 4: Mark the bitmap's own physical memory as used
-        // The bitmap is a static array in BSS. We need to figure out its
-        // physical address. During early boot (identity mapping), the
-        // virtual address IS the physical address.
-        let bitmap_start = BITMAP.as_ptr() as u64;
-        let bitmap_size = BITMAP_SIZE as u64;
-        let bitmap_start_frame = (bitmap_start / PAGE_SIZE) as usize;
-        let bitmap_end_frame = ((bitmap_start + bitmap_size + PAGE_SIZE - 1) / PAGE_SIZE) as usize;
-
-        for frame in bitmap_start_frame..bitmap_end_frame {
-            if frame < TOTAL_FRAMES && !bitmap_test(frame) {
-                bitmap_set(frame);
-                FREE_FRAMES -= 1;
-            }
-        }
-
-        // Step 5: Mark the kernel's physical memory as used
-        // The kernel is loaded between __kernel_start and __kernel_end
-        // (these are linker symbols with virtual addresses, but during
-        // early boot with identity mapping, they equal physical addresses).
-        extern "C" {
-            static __kernel_start: u8;
-            static __kernel_end: u8;
-        }
-        let kernel_start = &__kernel_start as *const u8 as u64;
-        let kernel_end = &__kernel_end as *const u8 as u64;
-        let kernel_start_frame = (kernel_start / PAGE_SIZE) as usize;
-        let kernel_end_frame = ((kernel_end + PAGE_SIZE - 1) / PAGE_SIZE) as usize;
-
-        for frame in kernel_start_frame..kernel_end_frame {
-            if frame < TOTAL_FRAMES && !bitmap_test(frame) {
-                bitmap_set(frame);
-                FREE_FRAMES -= 1;
-            }
-        }
-
-        // Step 6: Reserve frame 0 (BIOS/IVT/interrupt vector table)
+        // Step 4: Reserve frame 0 (BIOS/IVT/interrupt vector table)
         // Must be after marking usable regions to ensure it stays allocated.
         if !bitmap_test(0) {
             bitmap_set(0);
@@ -320,4 +284,42 @@ pub fn is_allocated(frame: PhysAddr) -> bool {
     let index = (frame.as_u64() / PAGE_SIZE) as usize;
     assert!(index < unsafe { TOTAL_FRAMES }, "frame address out of range");
     unsafe { bitmap_test(index) }
+}
+
+/// Mark a physical address range as used (reserved) in the PMM bitmap.
+///
+/// Called after `init()` to reserve regions that must not be allocated,
+/// such as the kernel's physical memory and the PMM bitmap itself.
+///
+/// # Safety
+/// - `phys_start` must be page-aligned (or rounded down internally)
+/// - `phys_end` must be page-aligned (or rounded up internally)
+/// - Must be called after `init()` and before any `alloc_frame()` that
+///   could allocate these frames
+pub fn mark_region_used(phys_start: u64, phys_end: u64) {
+    let start_frame = (phys_start / PAGE_SIZE) as usize;
+    let end_frame = ((phys_end + PAGE_SIZE - 1) / PAGE_SIZE) as usize;
+
+    unsafe {
+        #[cfg(DEBUG_KERNEL)]
+        let before = FREE_FRAMES;
+        for frame in start_frame..end_frame {
+            if frame < TOTAL_FRAMES && !bitmap_test(frame) {
+                bitmap_set(frame);
+                FREE_FRAMES -= 1;
+            }
+        }
+        #[cfg(DEBUG_KERNEL)]
+        {
+            crate::serial::write_str("[PMM] mark_region_used: 0x");
+            crate::serial::write_hex(start_frame as u64);
+            crate::serial::write_str("..0x");
+            crate::serial::write_hex(end_frame as u64);
+            crate::serial::write_str(" freed_before=");
+            crate::serial::write_hex(before as u64);
+            crate::serial::write_str(" freed_after=");
+            crate::serial::write_hex(FREE_FRAMES as u64);
+            crate::serial::write_nl();
+        }
+    }
 }
