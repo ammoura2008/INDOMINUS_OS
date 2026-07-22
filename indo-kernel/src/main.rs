@@ -110,8 +110,6 @@ pub extern "sysv64" fn kernel_main(boot_info: *const BootInfo) -> ! {
 
     write_str_nl("[KERNEL] All init done.");
 
-    crate::process::init();
-
     // Phase 7: spawn all 7 comprehensive test binaries.
     // PID 0 = idle, PIDs 1..7 = test processes (MAX_PROCESSES = 8).
     let tests: &[&[u8]] = &[

@@ -36,7 +36,6 @@ pub struct Scheduler {
     tick_counter: u64,
     quantum: u64,
     idle_pid: Pid,
-    next_pid: Pid,
 }
 
 impl Scheduler {
@@ -48,7 +47,6 @@ impl Scheduler {
             tick_counter: 0,
             quantum: DEFAULT_QUANTUM,
             idle_pid: 0,
-            next_pid: 1,
         }
     }
 
@@ -58,15 +56,11 @@ impl Scheduler {
         }
         self.current_pid = None;
         self.tick_counter = 0;
-        self.next_pid = 1;
     }
 
     pub fn spawn(&mut self, entry_phys: u64) -> Option<Pid> {
-        let pid = self.next_pid;
-        if pid >= MAX_PROCESSES as u64 {
-            return None;
-        }
-        self.next_pid += 1;
+        // Find a free slot (PID 0 is reserved for idle)
+        let pid = (1..MAX_PROCESSES as u64).find(|&i| self.processes[i as usize].is_none())?;
 
         let process = Process::new_kernel(pid, entry_phys);
         self.processes[pid as usize] = Some(process);
@@ -90,11 +84,8 @@ impl Scheduler {
     }
 
     pub fn spawn_user(&mut self, user_rip: u64, user_rsp: u64, pml4: u64, parent: Option<Pid>) -> Option<Pid> {
-        let pid = self.next_pid;
-        if pid >= MAX_PROCESSES as u64 {
-            return None;
-        }
-        self.next_pid += 1;
+        // Find a free slot (PID 0 is reserved for idle)
+        let pid = (1..MAX_PROCESSES as u64).find(|&i| self.processes[i as usize].is_none())?;
 
         let process = Process::new_user(pid, user_rip, user_rsp, pml4, parent);
         self.processes[pid as usize] = Some(process);
