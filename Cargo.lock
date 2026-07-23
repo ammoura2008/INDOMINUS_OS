@@ -47,8 +47,26 @@ dependencies = [
 ]
 
 [[package]]
+name = "indo-syscall"
+version = "0.1.0"
+
+[[package]]
 name = "indominus-workspace"
 version = "0.0.1-alpha"
+
+[[package]]
+name = "indosh"
+version = "0.1.0"
+dependencies = [
+ "indo-syscall",
+]
+
+[[package]]
+name = "init"
+version = "0.1.0"
+dependencies = [
+ "indo-syscall",
+]
 
 [[package]]
 name = "linked_list_allocator"

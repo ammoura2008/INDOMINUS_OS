@@ -71,8 +71,3 @@ pub unsafe fn dispatch(vector: u8) {
     crate::interrupts::lapic::send_eoi();
 }
 
-/// Check if a vector is a hardware IRQ vector (32-47).
-#[inline]
-pub fn is_hardware_irq(vector: u8) -> bool {
-    vector >= IRQ_VECTOR_OFFSET && vector < IRQ_VECTOR_OFFSET + MAX_IRQ_HANDLERS as u8
-}

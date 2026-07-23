@@ -39,17 +39,18 @@
 //!      the registered handler and sends EOI to LAPIC
 //! 5. `iretq` restores the frame and resumes execution
 
-use x86_64::structures::idt::{InterruptDescriptorTable, InterruptStackFrame, PageFaultErrorCode};
+use x86_64::structures::idt::{InterruptDescriptorTable, InterruptStackFrame};
 use core::mem::MaybeUninit;
 
 use crate::gdt::DOUBLE_FAULT_IST_INDEX;
+use crate::sync_cell::SyncUnsafeCell;
 
 // ─────────────────────────────────────────────────────────────────────────────
 // IDT global state
 // ─────────────────────────────────────────────────────────────────────────────
 
-static mut IDT: MaybeUninit<InterruptDescriptorTable> = MaybeUninit::uninit();
-static mut IDT_INITIALIZED: bool = false;
+static IDT: SyncUnsafeCell<MaybeUninit<InterruptDescriptorTable>> = SyncUnsafeCell::new(MaybeUninit::uninit());
+static IDT_INITIALIZED: SyncUnsafeCell<bool> = SyncUnsafeCell::new(false);
 
 // ─────────────────────────────────────────────────────────────────────────────
 // Hardware IRQ handlers (vectors 32-47)
@@ -104,6 +105,7 @@ irq_handler!(irq_handler_47, 47);
 ///
 /// Similarly, the IDTR base must be a virtual address, because after CR3
 /// switch to a user PML4 (no identity map), the physical address is unmapped.
+#[allow(unused_unsafe)]
 pub fn init() {
     crate::serial::write_str("[MARK] idt::init start\n");
 
@@ -193,9 +195,9 @@ pub fn init() {
 
     // Store IDT in static and get a 'static reference for lidt
     unsafe {
-        IDT.as_mut_ptr().write(idt);
-        IDT_INITIALIZED = true;
-        let idt_ref = IDT.assume_init_ref();
+        (*IDT.get()).as_mut_ptr().write(idt);
+        *IDT_INITIALIZED.get() = true;
+        let idt_ref = (*IDT.get()).assume_init_ref();
         let idt_phys = idt_ref as *const InterruptDescriptorTable as u64;
         let idt_virt = crate::memory::phys_to_kernel_virt(idt_phys);
         crate::serial::write_str("[MARK] idt::init idt_phys=0x");
@@ -225,8 +227,8 @@ pub fn init() {
 ///
 /// Call this after modifying the IDT (e.g., after registering new handlers).
 pub fn reload() {
-    if unsafe { IDT_INITIALIZED } {
-        let idt = unsafe { IDT.assume_init_ref() };
+    if unsafe { *IDT_INITIALIZED.get() } {
+        let idt = unsafe { (*IDT.get()).assume_init_ref() };
         let idt_phys = idt as *const InterruptDescriptorTable as u64;
         let idt_virt = unsafe { crate::memory::phys_to_kernel_virt(idt_phys) };
         #[repr(C, packed)]
@@ -255,7 +257,7 @@ extern "x86-interrupt" fn breakpoint_handler(stack_frame: InterruptStackFrame) {
 
 /// Handle Division Errors — fatal.
 extern "x86-interrupt" fn divide_error_handler(stack_frame: InterruptStackFrame) {
-    use crate::serial::{write_str, write_hex, write_nl};
+    use crate::serial::{write_str, write_hex};
     write_str("━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━\n");
     write_str("[EXCEPTION] #DE Division Error at 0x");
     write_hex(stack_frame.instruction_pointer.as_u64());
@@ -266,7 +268,7 @@ extern "x86-interrupt" fn divide_error_handler(stack_frame: InterruptStackFrame)
 
 /// Handle Invalid Opcode — fatal.
 extern "x86-interrupt" fn invalid_opcode_handler(stack_frame: InterruptStackFrame) {
-    use crate::serial::{write_str, write_hex, write_nl};
+    use crate::serial::{write_str, write_hex};
     write_str("━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━\n");
     write_str("[EXCEPTION] #UD Invalid Opcode at 0x");
     write_hex(stack_frame.instruction_pointer.as_u64());
@@ -482,7 +484,6 @@ unsafe extern "C" fn gp_return_to_user(new_rsp: u64) -> ! {
 pub unsafe extern "C" fn page_fault_handler() {
     core::arch::naked_asm!(
         // ═══ Save GP registers (same order as timer handler) ═══
-        // Push R15 first (highest addr) → RAX last (lowest = RSP)
         "push r15",
         "push r14",
         "push r13",
@@ -500,24 +501,31 @@ pub unsafe extern "C" fn page_fault_handler() {
         "push rax",
 
         // ═══ Read CR2 and CS for classification ═══
-        "mov rdi, rsp",          // rdi = frame pointer (GP regs base)
-        "mov rsi, cr2",          // rsi = faulting address
-        // Read CS from the interrupt frame pushed by CPU
-        // Stack: [0]=rax ... [14]=r15, [15]=error_code, [16]=RIP, [17]=CS, [18]=RFLAGS, ...
-        "mov rdx, [rsp + 136]",  // rdx = CS (offset 17*8 = 136 bytes from GP frame base)
+        "mov rdi, rsp",
+        "mov rsi, cr2",
+        "mov rdx, [rsp + 136]",
         "call {page_fault_classify}",
-        // rax = 0 for kernel fault (halt), 1 for user fault (kill + context switch)
+        // rax = 0 for kernel fault, 1 for user fault (kill), 2 for CoW (retry)
 
         // ═══ Check classification result ═══
         "cmp rax, 0",
         "je .kernel_fault",
+        "cmp rax, 2",
+        "je .cow_handled",
 
-        // ═══ User fault: kill process and context switch ═══
+        // ═══ User fault (rax=1): kill process and context switch ═══
         "call {kill_process}",
-        // rax = new process's stack pointer
         "mov rdi, rax",
         "call {page_fault_return_to_user}",
-        // page_fault_return_to_user does EOI + stack switch + iretq (never returns here)
+
+        // ═══ CoW handled (rax=2): pop GP regs and iretq ═══
+        ".cow_handled:",
+        "pop rax", "pop rbx", "pop rcx", "pop rdx", "pop rsi", "pop rdi",
+        "pop rbp", "pop r8", "pop r9", "pop r10", "pop r11",
+        "pop r12", "pop r13", "pop r14", "pop r15",
+        // Skip error code (pushed by CPU before our handler)
+        "add rsp, 8",
+        "iretq",
 
         // ═══ Kernel fault: halt ═══
         ".kernel_fault:",
@@ -538,16 +546,16 @@ pub unsafe extern "C" fn page_fault_handler() {
 /// - rdx = CS selector
 ///
 /// Returns:
-/// - rax = 1 → user fault (caller should kill process + context switch)
 /// - rax = 0 → kernel fault (caller should halt)
+/// - rax = 1 → user fault, kill process
+/// - rax = 2 → user fault, CoW handled (retry instruction)
 ///
 /// Also prints diagnostic information.
 #[no_mangle]
 unsafe extern "C" fn page_fault_classify(frame: u64, faulting_addr: u64, cs: u64) -> u64 {
     let rpl = cs & 3;
-    // Frame layout: [0..14]=GP regs (15 qwords), [15]=error_code, [16]=RIP, [17]=CS
-    let rip = core::ptr::read_volatile((frame + 16 * 8) as *const u64); // RIP slot
-    let error_code = core::ptr::read_volatile((frame + 15 * 8) as *const u64); // error code
+    let rip = core::ptr::read_volatile((frame + 16 * 8) as *const u64);
+    let error_code = core::ptr::read_volatile((frame + 15 * 8) as *const u64);
 
     crate::serial::write_str_nl("!! PAGE FAULT !!");
     crate::serial::write_str("  CR2="); crate::serial::write_hex(faulting_addr); crate::serial::write_nl();
@@ -563,13 +571,22 @@ unsafe extern "C" fn page_fault_classify(frame: u64, faulting_addr: u64, cs: u64
     crate::serial::write_nl();
 
     if rpl == 3 {
-        // User-mode fault: kill the process, continue with next
+        // User-mode fault: check if it's a CoW write fault
+        let is_write = (error_code & 2) != 0;
+        if is_write {
+            // Try to handle as CoW
+            let cow_result = crate::memory::vmm::handle_cow_fault(faulting_addr);
+            if cow_result.is_ok() {
+                crate::serial::write_str_nl("  CoW: allocated private copy");
+                return 2; // CoW handled, retry instruction
+            }
+        }
+        // Not CoW or CoW failed: kill the process
         crate::serial::write_str_nl("  USER FAULT: killing process");
-        1 // return value → caller will kill + context switch
+        1
     } else {
-        // Kernel-mode fault: unrecoverable
         crate::serial::write_str_nl("  KERNEL FAULT: halting");
-        0 // return value → caller will halt
+        0
     }
 }
 
@@ -593,12 +610,12 @@ extern "x86-interrupt" fn double_fault_handler(
         .unwrap_or(0);
 
     let cr3_val: u64;
-    let cs_val: u16;
-    let ss_val: u16;
+    let cs_val: u64;
+    let ss_val: u64;
     unsafe {
         core::arch::asm!("mov {}, cr3", out(reg) cr3_val);
-        core::arch::asm!("mov {}, cs", out(reg) cs_val);
-        core::arch::asm!("mov {}, ss", out(reg) ss_val);
+        core::arch::asm!("mov {0:x}, cs", out(reg) cs_val);
+        core::arch::asm!("mov {0:x}, ss", out(reg) ss_val);
     }
 
     write_str("━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━\n");
@@ -620,10 +637,10 @@ extern "x86-interrupt" fn double_fault_handler(
     write_str("  SS      : 0x"); write_hex(frame_ss as u64); write_nl();
     write_str("  CR2     : 0x"); write_hex(cr2); write_nl();
     write_str("  CR3     : 0x"); write_hex(cr3_val); write_nl();
-    write_str("  CS (actual) : 0x"); write_hex(cs_val as u64);
-    write_str("  (RPL="); write_u64((cs_val & 3) as u64); write_str(")\n");
-    write_str("  SS (actual) : 0x"); write_hex(ss_val as u64);
-    write_str("  (RPL="); write_u64((ss_val & 3) as u64); write_str(")\n");
+    write_str("  CS (actual) : 0x"); write_hex(cs_val);
+    write_str("  (RPL="); write_u64(cs_val & 3); write_str(")\n");
+    write_str("  SS (actual) : 0x"); write_hex(ss_val);
+    write_str("  (RPL="); write_u64(ss_val & 3); write_str(")\n");
 
     if frame_cs & 3 == 3 {
         write_str("  DF CPL=3: RSP/SS in DF frame are from Ring 3 transition\n");

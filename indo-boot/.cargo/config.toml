@@ -1,0 +1,12 @@
+# indo-boot target override.
+#
+# The bootloader is a UEFI application (PE32+ executable).
+# The workspace root defaults to x86_64-unknown-none (kernel target).
+# This file overrides that default so `cargo build -p indo-boot` ALWAYS
+# produces a valid UEFI binary, regardless of which directory it is invoked from.
+#
+# If you see a bootloader binary without the MZ header, this file is missing
+# or someone passed --target explicitly that conflicts with this setting.
+
+[build]
+target = "x86_64-unknown-uefi"

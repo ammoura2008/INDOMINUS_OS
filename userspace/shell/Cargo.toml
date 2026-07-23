@@ -1,0 +1,11 @@
+[package]
+name = "indosh"
+version = "0.1.0"
+edition = "2021"
+
+[dependencies]
+indo-syscall = { path = "../syscall" }
+
+[lib]
+name = "indosh_lib"
+path = "src/lib.rs"

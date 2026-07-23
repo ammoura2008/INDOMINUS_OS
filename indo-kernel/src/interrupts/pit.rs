@@ -94,16 +94,3 @@ pub fn tick_count() -> u64 {
     unsafe { TICK_COUNT }
 }
 
-/// Spin-wait for approximately `ms` milliseconds.
-///
-/// This is a blocking busy-wait — not power-efficient, but useful for
-/// early boot delays before the scheduler is running.
-///
-/// # Arguments
-/// * `ms` - Approximate milliseconds to wait
-pub fn sleep_ms(ms: u64) {
-    let target = tick_count() + (ms * PIT_TICK_HZ as u64 / 1000);
-    while tick_count() < target {
-        core::hint::spin_loop();
-    }
-}

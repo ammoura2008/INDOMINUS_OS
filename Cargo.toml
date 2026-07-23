@@ -16,6 +16,9 @@ members = [
     "indo-kernel",
     "indo-boot",
     "libs/indo-core",
+    "userspace/syscall",
+    "userspace/init",
+    "userspace/shell",
 ]
 resolver = "2"
 

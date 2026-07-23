@@ -25,8 +25,12 @@
 //! SFMASK = 0x200 (clear IF bit to disable interrupts during syscall)
 //! ```
 
+pub mod errno;
+
+use alloc::vec::Vec;
 use x86_64::registers::model_specific::{Efer, EferFlags, LStar, SFMask, Msr};
 use x86_64::VirtAddr;
+use x86_64::structures::paging::FrameAllocator;
 
 // ─────────────────────────────────────────────────────────────────────────────
 // User address validation
@@ -90,7 +94,7 @@ fn is_user_buffer_mapped(pml4_phys: u64, addr: u64, len: u64) -> bool {
         let pml4 = &*(pml4_virt.as_ptr() as *const PageTable);
 
         let mut ok = true;
-        'outer: for page_num in start_page..=end_page {
+        for page_num in start_page..=end_page {
             let virt = page_num * page_size;
 
             let pml4_idx = ((virt >> 39) & 0x1FF) as usize;
@@ -192,14 +196,6 @@ pub unsafe fn set_kernel_rsp(rsp: u64) {
     PER_CPU.kernel_rsp = rsp;
 }
 
-/// Get the current kernel stack pointer from per-CPU data.
-///
-/// # Safety
-/// Must be called from the syscall entry handler with interrupts disabled.
-pub unsafe fn get_kernel_rsp() -> u64 {
-    PER_CPU.kernel_rsp
-}
-
 /// Set the force_switch flag in per-CPU data.
 ///
 /// Called by sys_exit and sys_yield to request a context switch after the
@@ -210,14 +206,6 @@ pub unsafe fn get_kernel_rsp() -> u64 {
 /// Must be called with interrupts disabled (during syscall dispatch).
 pub unsafe fn set_force_switch() {
     PER_CPU.force_switch = 1;
-}
-
-/// Clear the force_switch flag in per-CPU data.
-///
-/// # Safety
-/// Must be called with interrupts disabled (from the naked handler).
-pub unsafe fn clear_force_switch() {
-    PER_CPU.force_switch = 0;
 }
 
 // ─────────────────────────────────────────────────────────────────────────────
@@ -268,9 +256,7 @@ pub fn init() {
     // ── SFMASK MSR ───────────────────────────────────────────────────────
     // Bits set here will be CLEARED in RFLAGS when `syscall` executes.
     // Bit 9 = IF (Interrupt Flag). Clearing it disables interrupts.
-    unsafe {
-        SFMask::write(x86_64::registers::rflags::RFlags::INTERRUPT_FLAG);
-    }
+    SFMask::write(x86_64::registers::rflags::RFlags::INTERRUPT_FLAG);
 
     // ── Enable SCE + NX in EFER ─────────────────────────────────────────
     // SCE: enables `syscall`/`sysret` instructions.
@@ -301,7 +287,6 @@ pub fn init() {
     crate::serial::write_str("[SYSCALL] MSRs configured\n");
 }
 
-use x86_64::structures::gdt::SegmentSelector;
 
 // ─────────────────────────────────────────────────────────────────────────────
 // Syscall entry handler
@@ -591,11 +576,22 @@ pub unsafe extern "C" fn syscall_dispatch(regs: *mut u64) -> u64 {
         2 => sys_yield(),
         3 => sys_getpid(),
         4 => sys_waitpid(arg0),
+        5 => sys_sleep(arg0),
+        6 => sys_read(arg0, arg1, arg2),
+        7 => sys_pipe(),
+        8 => sys_fork(),
+        9 => sys_exec(arg0),
+        10 => sys_close(arg0),
+        11 => sys_dup(arg0),
+        12 => sys_open(arg0),
+        13 => sys_lseek(arg0, arg1),
+        14 => sys_dup2(arg0, arg1),
+        15 => sys_readdir(arg0, arg1, arg2),
         _ => {
             crate::serial::write_str("[SYSCALL] Unknown syscall: ");
             crate::serial::write_u64(syscall_num);
             crate::serial::write_nl();
-            u64::MAX // -ENOSYS
+            errno::ENOSYS as u64
         }
     };
 
@@ -608,53 +604,6 @@ pub unsafe extern "C" fn syscall_dispatch(regs: *mut u64) -> u64 {
 // ─────────────────────────────────────────────────────────────────────────────
 // System call implementations
 // ─────────────────────────────────────────────────────────────────────────────
-
-/// SYS_WRITE (0) — Write data to a file descriptor.
-///
-/// For now, only fd=1 (serial/stdout) is supported.
-/// Validates that every page in the user buffer is mapped and user-accessible
-/// before reading any data, preventing kernel page faults from bad user pointers.
-///
-/// Arguments: fd, buf_ptr, count
-/// Returns: number of bytes written, or u64::MAX on error (-EINVAL)
-fn sys_write(fd: u64, buf_ptr: u64, count: u64) -> u64 {
-    if fd != 1 {
-        return u64::MAX; // Only stdout supported
-    }
-
-    // Validate the user buffer address range (bounds check)
-    if !is_valid_user_range(buf_ptr, count) {
-        crate::serial::write_str("[SYSCALL] sys_write: invalid user buffer addr=");
-        crate::serial::write_hex(buf_ptr);
-        crate::serial::write_str(" len=");
-        crate::serial::write_hex(count);
-        crate::serial::write_nl();
-        return u64::MAX; // -EINVAL
-    }
-
-    // Validate that every page in the buffer is actually mapped and user-accessible.
-    // This prevents a kernel page fault from an unmapped or kernel-only pointer.
-    let pml4_phys = {
-        let (frame, _) = x86_64::registers::control::Cr3::read();
-        frame.start_address().as_u64()
-    };
-    if !is_user_buffer_mapped(pml4_phys, buf_ptr, count) {
-        crate::serial::write_str("[SYSCALL] sys_write: unmapped user buffer addr=");
-        crate::serial::write_hex(buf_ptr);
-        crate::serial::write_str(" len=");
-        crate::serial::write_hex(count);
-        crate::serial::write_nl();
-        return u64::MAX; // -EFAULT
-    }
-
-    let slice = unsafe { core::slice::from_raw_parts(buf_ptr as *const u8, count as usize) };
-
-    for &byte in slice {
-        crate::serial::write_byte(byte);
-    }
-
-    count
-}
 
 /// SYS_EXIT (1) — Exit the current process.
 ///
@@ -672,6 +621,9 @@ fn sys_exit(exit_code: u64) -> u64 {
     {
         let mut sched = crate::process::scheduler::SCHEDULER.lock();
         if let Some(pid) = sched.current_pid() {
+            // Re-parent all live children to PID 1 (init/reaper) before becoming zombie.
+            // This prevents orphaned processes from being lost when this process is reaped.
+            sched.reparent_orphans_to_init(pid);
             if let Some(ref mut proc) = sched.processes_mut()[pid as usize] {
                 proc.state = crate::process::ProcessState::Zombie;
                 proc.exit_code = exit_code;
@@ -723,20 +675,21 @@ fn sys_waitpid(child_pid: u64) -> u64 {
     let mut sched = crate::process::scheduler::SCHEDULER.lock();
     let parent_pid = match sched.current_pid() {
         Some(pid) => pid,
-        None => return u64::MAX,
+        None => return errno::ESRCH as u64,
     };
+    let parent_gen = sched.get_generation(parent_pid);
 
     // Step 1: Find the target child and its state
     let (found_pid, is_zombie, exit_code) = if child_pid == 0 {
         // Wait for any child
         match sched.find_any_zombie_child() {
             Some((c_pid, _, exit)) => (c_pid, true, exit),
-            None => return u64::MAX, // No children at all
+            None => return errno::ESRCH as u64, // No children at all
         }
     } else {
         // Wait for specific child
-        if !sched.is_child_of(child_pid, parent_pid) {
-            return u64::MAX; // Not our child
+        if !sched.is_child_of(child_pid, parent_pid, parent_gen) {
+            return errno::ESRCH as u64; // Not our child
         }
         match sched.processes().get(child_pid as usize) {
             Some(Some(proc)) => {
@@ -744,7 +697,7 @@ fn sys_waitpid(child_pid: u64) -> u64 {
                 let exit = if is_z { proc.exit_code } else { 0 };
                 (child_pid, is_z, exit)
             }
-            _ => return u64::MAX, // Child slot empty
+            _ => return errno::ESRCH as u64, // Child slot empty
         }
     };
 
@@ -756,5 +709,1004 @@ fn sys_waitpid(child_pid: u64) -> u64 {
     } else {
         // Child still running (WNOHANG)
         0
+    }
+}
+
+/// SYS_SLEEP (5) — Sleep for a specified number of timer ticks.
+///
+/// The process enters Blocked state and will not be scheduled until
+/// the specified number of ticks have elapsed. Other processes continue
+/// to run during this time.
+///
+/// Arguments: ticks (number of 10 ms ticks to sleep)
+/// Returns: always 0
+fn sys_sleep(ticks: u64) -> u64 {
+    let deadline = crate::interrupts::pit::tick_count() + ticks;
+
+    {
+        let mut sched = crate::process::scheduler::SCHEDULER.lock();
+        if let Some(pid) = sched.current_pid() {
+            if let Some(ref mut proc) = sched.processes_mut()[pid as usize] {
+                proc.state = crate::process::ProcessState::Blocked;
+                proc.wake_reason = crate::process::WakeReason::Sleep { deadline };
+                #[cfg(DEBUG_KERNEL)]
+                {
+                    crate::serial::write_str("[SYSCALL] sleep PID=");
+                    crate::serial::write_u64(pid);
+                    crate::serial::write_str(" ticks=");
+                    crate::serial::write_u64(ticks);
+                    crate::serial::write_str(" deadline=");
+                    crate::serial::write_u64(deadline);
+                    crate::serial::write_nl();
+                }
+            }
+        }
+    }
+
+    // Force context switch — process is now Blocked, scheduler picks next Ready
+    unsafe { set_force_switch(); }
+
+    0
+}
+
+/// SYS_READ (6) — Read data from a file descriptor.
+///
+/// For fd=0 (stdin): reads from keyboard buffer. If buffer is empty,
+/// blocks the process until data arrives.
+/// For fd=1,2: returns error (can't read from stdout/stderr).
+///
+/// Arguments: fd, buf_ptr, count
+/// Returns: number of bytes read, or u64::MAX on error
+fn sys_read(fd: u64, buf_ptr: u64, count: u64) -> u64 {
+    if fd >= crate::process::MAX_FDS as u64 {
+        return errno::EBADF as u64;
+    }
+
+    if count == 0 {
+        return 0;
+    }
+
+    // Validate the user buffer address range
+    if !is_valid_user_range(buf_ptr, count) {
+        return errno::EFAULT as u64;
+    }
+
+    // Validate the user buffer is actually mapped before dereferencing
+    let pml4 = {
+        let sched = crate::process::scheduler::SCHEDULER.lock();
+        if let Some(pid) = sched.current_pid() {
+            if let Some(ref proc) = sched.processes()[pid as usize] {
+                proc.pml4_phys
+            } else {
+                return errno::ESRCH as u64;
+            }
+        } else {
+            return errno::ESRCH as u64;
+        }
+    };
+    if !is_user_buffer_mapped(pml4, buf_ptr, count) {
+        return errno::EFAULT as u64;
+    }
+
+    // Get the current process's FD type
+    let fd_type = {
+        let sched = crate::process::scheduler::SCHEDULER.lock();
+        if let Some(pid) = sched.current_pid() {
+            if let Some(ref proc) = sched.processes()[pid as usize] {
+                proc.fd_types[fd as usize]
+            } else {
+                return errno::ESRCH as u64;
+            }
+        } else {
+            return errno::ESRCH as u64;
+        }
+    };
+
+    match fd_type {
+        crate::process::FdType::Stdin | crate::process::FdType::Tty => {
+            // Read from the line discipline buffer (blocks until a line is available)
+            let buf = buf_ptr as *mut u8;
+            let slice = unsafe { core::slice::from_raw_parts_mut(buf, count as usize) };
+            let nread = crate::keyboard::read_line(slice);
+            nread as u64
+        }
+        crate::process::FdType::Stdout | crate::process::FdType::Stderr => {
+            errno::EBADF as u64 // Can't read from stdout/stderr
+        }
+        crate::process::FdType::Null => {
+            0
+        }
+        crate::process::FdType::Pipe { pipe_idx, writable } => {
+            if writable {
+                return errno::EBADF as u64; // Can't read from write end
+            }
+            let pipe_idx = pipe_idx as usize;
+            let buf = buf_ptr as *mut u8;
+                    let mut total_read = 0u64;
+
+            // Read available data from pipe (non-blocking check first)
+            unsafe {
+                if let Some(ref mut p) = crate::process::PIPES[pipe_idx] {
+                    let nread = p.nread.load(core::sync::atomic::Ordering::Relaxed) as u64;
+                    let nwrite = p.nwrite.load(core::sync::atomic::Ordering::Relaxed) as u64;
+                    while total_read < count && nread + total_read < nwrite {
+                        let idx = ((nread + total_read) as usize) % crate::process::pipe::PIPE_SIZE;
+                        *buf.add(total_read as usize) = p.data[idx];
+                        total_read += 1;
+                    }
+                    if total_read > 0 {
+                        p.nread.store((nread + total_read) as u32, core::sync::atomic::Ordering::Relaxed);
+                        return total_read;
+                    }
+                    // Check if writer is closed (EOF)
+                    if !p.write_open.load(core::sync::atomic::Ordering::Relaxed) {
+                        return 0; // EOF
+                    }
+                }
+            }
+
+            // Buffer empty — block until data arrives
+            {
+                let mut sched = crate::process::scheduler::SCHEDULER.lock();
+                if let Some(pid) = sched.current_pid() {
+                    if let Some(ref mut proc) = sched.processes_mut()[pid as usize] {
+                        proc.state = crate::process::ProcessState::Blocked;
+                        proc.wake_reason = crate::process::WakeReason::PipeRead { pipe_idx: pipe_idx as u8 };
+                    }
+                }
+            }
+            unsafe { set_force_switch(); }
+            0
+        }
+        crate::process::FdType::FsFile { index } => {
+            let index = index as usize;
+            let sched = crate::process::scheduler::SCHEDULER.lock();            if let Some(pid) = sched.current_pid() {
+                if let Some(ref proc) = sched.processes()[pid as usize] {
+                    if let Some(ref file_handle) = proc.file_handles[index] {
+                        let buf = buf_ptr as *mut u8;
+                        let slice = unsafe { core::slice::from_raw_parts_mut(buf, count as usize) };
+                        // Lock the mutex for interior mutability (File trait requires &mut self)
+                        let mut file = file_handle.lock();
+                        match file.read(slice) {
+                            Ok(n) => n as u64,
+                            Err(e) => e.to_errno() as u64,
+                        }
+                    } else {
+                        errno::EBADF as u64
+                    }
+                } else {
+                    errno::ESRCH as u64
+                }
+            } else {
+                errno::ESRCH as u64
+            }
+        }
+        crate::process::FdType::None => {
+            errno::EBADF as u64
+        }
+    }
+}
+
+/// SYS_WRITE (0) — Write data to a file descriptor (updated for pipes).
+fn sys_write(fd: u64, buf_ptr: u64, count: u64) -> u64 {
+    if fd >= crate::process::MAX_FDS as u64 {
+        return errno::EBADF as u64;
+    }
+
+    if count == 0 {
+        return 0;
+    }
+
+    if !is_valid_user_range(buf_ptr, count) {
+        return errno::EFAULT as u64;
+    }
+
+    let fd_type = {
+        let sched = crate::process::scheduler::SCHEDULER.lock();
+        if let Some(pid) = sched.current_pid() {
+            if let Some(ref proc) = sched.processes()[pid as usize] {
+                proc.fd_types[fd as usize]
+            } else {
+                return errno::ESRCH as u64;
+            }
+        } else {
+            return errno::ESRCH as u64;
+        }
+    };
+
+    // Validate the user buffer is actually mapped before dereferencing
+    let pml4 = {
+        let sched = crate::process::scheduler::SCHEDULER.lock();
+        if let Some(pid) = sched.current_pid() {
+            if let Some(ref proc) = sched.processes()[pid as usize] {
+                proc.pml4_phys
+            } else {
+                return errno::ESRCH as u64;
+            }
+        } else {
+            return errno::ESRCH as u64;
+        }
+    };
+    if !is_user_buffer_mapped(pml4, buf_ptr, count) {
+        return errno::EFAULT as u64;
+    }
+
+    match fd_type {
+        crate::process::FdType::Stdout | crate::process::FdType::Stderr | crate::process::FdType::Tty => {
+            let slice = unsafe { core::slice::from_raw_parts(buf_ptr as *const u8, count as usize) };
+            for &byte in slice {
+                crate::serial::write_byte(byte);
+            }
+            count
+        }
+        crate::process::FdType::Stdin => {
+            errno::EBADF as u64 // Can't write to stdin
+        }
+        crate::process::FdType::Null => {
+            count
+        }
+        crate::process::FdType::Pipe { pipe_idx, writable } => {
+            if !writable {
+                return errno::EBADF as u64; // Can't write to read end
+            }
+            let pipe_idx = pipe_idx as usize;
+            let buf = unsafe { core::slice::from_raw_parts(buf_ptr as *const u8, count as usize) };
+
+            unsafe {
+                if let Some(ref mut p) = crate::process::PIPES[pipe_idx] {
+                    let mut written = 0u64;
+                    for &byte in buf {
+                        loop {
+                            let nwrite = p.nwrite.load(core::sync::atomic::Ordering::Relaxed);
+                            let nread = p.nread.load(core::sync::atomic::Ordering::Relaxed);
+                            if nwrite < nread + crate::process::pipe::PIPE_SIZE as u32 {
+                                break;
+                            }
+                            if !p.read_open.load(core::sync::atomic::Ordering::Relaxed) {
+                                return written;
+                            }
+                            crate::process::yield_now();
+                        }
+                        let nwrite = p.nwrite.load(core::sync::atomic::Ordering::Relaxed);
+                        let idx = (nwrite as usize) % crate::process::pipe::PIPE_SIZE;
+                        p.data[idx] = byte;
+                        p.nwrite.store(nwrite + 1, core::sync::atomic::Ordering::Relaxed);
+                        written += 1;
+                    }
+                    crate::process::keyboard_wake();
+                    return written;
+                }
+            }
+            errno::EBADF as u64
+        }
+        crate::process::FdType::FsFile { index } => {
+            let index = index as usize;
+            let sched = crate::process::scheduler::SCHEDULER.lock();            if let Some(pid) = sched.current_pid() {
+                if let Some(ref proc) = sched.processes()[pid as usize] {
+                    if let Some(ref file_handle) = proc.file_handles[index] {
+                        let slice = unsafe { core::slice::from_raw_parts(buf_ptr as *const u8, count as usize) };
+                        let mut file = file_handle.lock();
+                        match file.write(slice) {
+                            Ok(n) => n as u64,
+                            Err(e) => e.to_errno() as u64,
+                        }
+                    } else {
+                        errno::EBADF as u64
+                    }
+                } else {
+                    errno::ESRCH as u64
+                }
+            } else {
+                errno::ESRCH as u64
+            }
+        }
+        crate::process::FdType::None => {
+            errno::EBADF as u64
+        }
+    }
+}
+
+/// SYS_PIPE (7) — Create a pipe pair.
+///
+/// Returns: (read_fd << 32) | write_fd, or negative errno on error
+fn sys_pipe() -> u64 {
+    let pipe_idx = match crate::process::alloc_pipe() {
+        Some(idx) => idx,
+        None => return errno::ENOMEM as u64,
+    };
+
+    let (read_fd, write_fd) = {
+        let mut sched = crate::process::scheduler::SCHEDULER.lock();
+        if let Some(pid) = sched.current_pid() {
+            if let Some(ref mut proc) = sched.processes_mut()[pid as usize] {
+                let mut first_free = None;
+                let mut second_free = None;
+                for i in 0..crate::process::MAX_FDS {
+                    if proc.fd_types[i] == crate::process::FdType::None {
+                        if first_free.is_none() {
+                            first_free = Some(i);
+                        } else {
+                            second_free = Some(i);
+                            break;
+                        }
+                    }
+                }
+                match (first_free, second_free) {
+                    (Some(r), Some(w)) => {
+                        proc.fd_types[r] = crate::process::FdType::Pipe { pipe_idx: pipe_idx as u8, writable: false };
+                        proc.fd_types[w] = crate::process::FdType::Pipe { pipe_idx: pipe_idx as u8, writable: true };
+                        (r as u64, w as u64)
+                    }
+                    _ => {
+                        // FD allocation failed — free the pipe to prevent global leak
+                        unsafe { crate::process::free_pipe(pipe_idx); }
+                        return errno::EMFILE as u64;
+                    }
+                }
+            } else {
+                return errno::ESRCH as u64;
+            }
+        } else {
+            return errno::ESRCH as u64;
+        }
+    };
+
+    crate::serial::write_str("[SYSCALL] pipe read_fd=");
+    crate::serial::write_u64(read_fd);
+    crate::serial::write_str(" write_fd=");
+    crate::serial::write_u64(write_fd);
+    crate::serial::write_nl();
+
+    (read_fd << 32) | write_fd
+}
+
+/// SYS_FORK (8) — Fork the current process.
+///
+/// Creates a copy using CoW. Child gets RAX=0, parent gets child PID.
+fn sys_fork() -> u64 {
+    use crate::memory::{self, vmm, PhysAddr};
+    use crate::process::process::Process;
+
+    let (parent_pid, parent_pml4, parent_sp, parent_is_user) = {
+        let sched = crate::process::scheduler::SCHEDULER.lock();
+        match sched.current_pid() {
+            Some(pid) => {
+                if let Some(ref proc) = sched.processes()[pid as usize] {
+                    (pid, proc.pml4_phys, proc.stack_pointer, proc.is_user)
+                } else {
+                    return errno::ESRCH as u64;
+                }
+            }
+            None => return errno::ESRCH as u64,
+        }
+    };
+
+    let kernel_pml4 = memory::kernel_pml4_phys();
+    let child_pml4 = vmm::create_user_pml4(PhysAddr::new(kernel_pml4));
+
+    match unsafe { vmm::copy_user_pages(PhysAddr::new(parent_pml4), child_pml4) } {
+        Ok(()) => {}
+        Err(()) => return errno::ENOMEM as u64,
+    }
+
+    let stack_base = {
+        let layout = core::alloc::Layout::from_size_align(crate::process::process::KERNEL_STACK_SIZE, 16)
+            .expect("Invalid kernel stack layout");
+        unsafe {
+            let ptr = alloc::alloc::alloc(layout);
+            if ptr.is_null() {
+                return errno::ENOMEM as u64;
+            }
+            core::ptr::write_bytes(ptr, 0, crate::process::process::KERNEL_STACK_SIZE);
+            ptr as u64
+        }
+    };
+    let stack_top = stack_base + crate::process::process::KERNEL_STACK_SIZE as u64;
+
+    let child_sp = {
+        let frame_size = 20 * 8;
+        let child_frame_base = stack_top - frame_size as u64;
+        unsafe {
+            let src = parent_sp as *const u64;
+            let dst = child_frame_base as *mut u64;
+            core::ptr::copy_nonoverlapping(src, dst, 20);
+            (child_frame_base as *mut u64).write(0);
+        }
+        child_frame_base
+    };
+
+    let child_pid = {
+        let mut sched = crate::process::scheduler::SCHEDULER.lock();
+        let pid = (1..crate::process::MAX_PROCESSES as u64)
+            .find(|&i| sched.processes()[i as usize].is_none());
+
+        match pid {
+            Some(pid) => {
+                let mut child = Process::new_kernel(pid, 0);
+                child.state = crate::process::ProcessState::Ready;
+                child.stack_pointer = child_sp;
+                child.kernel_stack_base = stack_base;
+                child.pml4_phys = child_pml4.as_u64();
+                child.is_user = parent_is_user;
+                child.parent_pid = Some(parent_pid);
+
+                if let Some(parent_proc) = sched.processes()[parent_pid as usize].as_ref() {
+                    child.fd_types = parent_proc.fd_types;
+                    child.file_handles = parent_proc.file_handles.clone();
+                    child.parent_generation = parent_proc.generation;
+                }
+
+                sched.processes_mut()[pid as usize] = Some(child);
+                pid
+            }
+            None => return errno::ENOMEM as u64,
+        }
+    };
+
+    crate::serial::write_str("[SYSCALL] fork parent=");
+    crate::serial::write_u64(parent_pid);
+    crate::serial::write_str(" child=");
+    crate::serial::write_u64(child_pid);
+    crate::serial::write_nl();
+
+    child_pid
+}
+
+/// SYS_EXEC (9) — Replace process address space with a new ELF binary.
+///
+/// Reads the path from user space, loads the ELF from VFS, replaces the
+/// process's address space, and resets the instruction/stack pointers.
+fn sys_exec(path_ptr: u64) -> u64 {
+    use alloc::string::String;
+    use alloc::vec::Vec;
+    use crate::memory::{self, vmm, PhysAddr};
+
+    if path_ptr == 0 {
+        return errno::EFAULT as u64;
+    }
+
+    // Read the path string from user space
+    let path = {
+        let mut buf = Vec::new();
+        let user_ptr = path_ptr as *const u8;
+        let pml4 = {
+            let sched = crate::process::scheduler::SCHEDULER.lock();
+            if let Some(pid) = sched.current_pid() {
+                if let Some(ref proc) = sched.processes()[pid as usize] {
+                    proc.pml4_phys
+                } else {
+                    return errno::ESRCH as u64;
+                }
+            } else {
+                return errno::ESRCH as u64;
+            }
+        };
+
+        for i in 0..4096u64 {
+            if !is_valid_user_range(user_ptr as u64 + i, 1) {
+                return errno::EFAULT as u64;
+            }
+            if !is_user_buffer_mapped(pml4, user_ptr as u64 + i, 1) {
+                return errno::EFAULT as u64;
+            }
+            let byte = unsafe { *user_ptr.add(i as usize) };
+            if byte == 0 {
+                break;
+            }
+            buf.push(byte);
+        }
+        String::from_utf8(buf).unwrap_or_default()
+    };
+
+    if path.is_empty() {
+        return errno::EINVAL as u64;
+    }
+
+    crate::serial::write_str("[SYSCALL] exec: ");
+    crate::serial::write_str(&path);
+    crate::serial::write_nl();
+
+    // Read the ELF from VFS
+    let elf_data = match crate::vfs::vfs().read_file(&path) {
+        Ok(data) => data,
+        Err(e) => return e.to_errno() as u64,
+    };
+
+    if elf_data.is_empty() {
+        return errno::ENOENT as u64;
+    }
+
+    // Get current process info
+    let (current_pid, old_pml4_phys, _old_kernel_stack_base) = {
+        let sched = crate::process::scheduler::SCHEDULER.lock();
+        if let Some(pid) = sched.current_pid() {
+            if let Some(ref proc) = sched.processes()[pid as usize] {
+                (pid, proc.pml4_phys, proc.kernel_stack_base)
+            } else {
+                return errno::ESRCH as u64;
+            }
+        } else {
+            return errno::ESRCH as u64;
+        }
+    };
+
+    // Create a new user PML4 (don't free old one yet — atomic transition)
+    let kernel_pml4 = memory::kernel_pml4_phys();
+    let new_pml4 = vmm::create_user_pml4(PhysAddr::new(kernel_pml4));
+
+    // Load the ELF into the new address space
+    let elf_image = match crate::elf::load_elf(&elf_data, new_pml4) {
+        Ok(img) => img,
+        Err(e) => {
+            crate::serial::write_str("[SYSCALL] exec: ELF load failed: ");
+            crate::serial::write_str(e.description());
+            crate::serial::write_nl();
+            // Free the new PML4 (no user pages were loaded)
+            unsafe { vmm::free_user_address_space(new_pml4); }
+            return errno::ENOEXEC as u64;
+        }
+    };
+
+    // Map a new user stack: 4 pages (16 KiB) + 1 guard page
+    let user_stack_top = crate::memory::USER_STACK_TOP;
+    let user_stack_bottom = user_stack_top - 4 * crate::memory::PAGE_SIZE;
+
+    // Map the stack pages
+    for i in 0..4u64 {
+        let page_virt = x86_64::VirtAddr::new(user_stack_bottom + i * crate::memory::PAGE_SIZE);
+        let frame = match vmm::PmmFrameAllocator.allocate_frame() {
+            Some(f) => f,
+            None => {
+                unsafe { vmm::free_user_address_space(new_pml4); }
+                return errno::ENOMEM as u64;
+            }
+        };
+        vmm::map_page(
+            new_pml4,
+            page_virt,
+            PhysAddr::new(frame.start_address().as_u64()),
+            x86_64::structures::paging::PageTableFlags::PRESENT
+                | x86_64::structures::paging::PageTableFlags::WRITABLE
+                | x86_64::structures::paging::PageTableFlags::USER_ACCESSIBLE,
+        );
+        // Zero the page
+        let frame_ptr = unsafe {
+            vmm::phys_to_virt(frame.start_address().as_u64()).as_mut_ptr::<u8>()
+        };
+        unsafe { core::ptr::write_bytes(frame_ptr, 0, 4096); }
+    }
+
+    // Map guard page (present but not writable — stack overflow hits this → page fault)
+    // No USER_ACCESSIBLE: kernel-only page, any user access triggers a fault.
+    let guard_virt = x86_64::VirtAddr::new(user_stack_bottom - crate::memory::PAGE_SIZE);
+    let guard_frame = match vmm::PmmFrameAllocator.allocate_frame() {
+        Some(f) => f,
+        None => {
+            unsafe { vmm::free_user_address_space(new_pml4); }
+            return errno::ENOMEM as u64;
+        }
+    };
+    vmm::map_page(
+        new_pml4,
+        guard_virt,
+        PhysAddr::new(guard_frame.start_address().as_u64()),
+        x86_64::structures::paging::PageTableFlags::PRESENT,
+    );
+
+    // NEW address space is fully built. NOW safe to free the old one.
+    unsafe {
+        vmm::free_user_address_space(PhysAddr::new(old_pml4_phys));
+    }
+
+    // Update the process
+    let user_rip = elf_image.entry;
+    let user_rsp = user_stack_top - 8; // ABI: RSP must be 16-byte aligned before CALL
+
+    {
+        let mut sched = crate::process::scheduler::SCHEDULER.lock();
+        if let Some(ref mut proc) = sched.processes_mut()[current_pid as usize] {
+            proc.pml4_phys = new_pml4.as_u64();
+            proc.user_rip = Some(user_rip);
+            proc.user_rsp = Some(user_rsp);
+            proc.is_user = true;
+
+            // Set up a new initial stack frame for this process
+            // We need to modify the saved RSP on the kernel stack to point to
+            // a new user-mode IRET frame that will return to the new entry point.
+            let sp = proc.stack_pointer as *mut u64;
+            unsafe {
+                // [rsp+2] = RCX = user RIP (for IRET)
+                sp.add(2).write(user_rip);
+                // [rsp+5] = RDI = user RSP (for IRET) — no, that's wrong.
+                // The frame layout is: [RAX][RBX][RCX][RDX][RSI][RDI][RBP][R8][R9][R10][R11][R12][R13][R14][R15]
+                // followed by IRET: [RIP][CS][RFLAGS][RSP][SS]
+                // RCX (offset 2) = user RIP saved by CPU on syscall
+                // R11 (offset 10) = user RFLAGS saved by CPU on syscall
+                // For the IRET frame (offset 15-19):
+                //   [15] = RIP
+                //   [16] = CS
+                //   [17] = RFLAGS
+                //   [18] = RSP
+                //   [19] = SS
+                sp.add(15).write(user_rip);  // RIP
+                sp.add(16).write(crate::gdt::user_code_selector().0 as u64); // CS
+                sp.add(17).write(0x202u64);  // RFLAGS (IF=1)
+                sp.add(18).write(user_rsp);   // RSP
+                sp.add(19).write(crate::gdt::user_data_selector().0 as u64); // SS
+            }
+        }
+    }
+
+    crate::serial::write_str("[SYSCALL] exec: entry=");
+    crate::serial::write_hex(user_rip);
+    crate::serial::write_str(" stack=");
+    crate::serial::write_hex(user_rsp);
+    crate::serial::write_nl();
+
+    0
+}
+
+/// SYS_CLOSE (10) — Close a file descriptor.
+fn sys_close(fd: u64) -> u64 {
+    if fd >= crate::process::MAX_FDS as u64 {
+        return errno::EBADF as u64;
+    }
+
+    let mut sched = crate::process::scheduler::SCHEDULER.lock();
+    if let Some(pid) = sched.current_pid() {
+        if let Some(ref mut proc) = sched.processes_mut()[pid as usize] {
+            let fd_type = proc.fd_types[fd as usize];
+            match fd_type {
+                crate::process::FdType::Pipe { pipe_idx, writable } => {
+                    let pipe_idx = pipe_idx as usize;
+                    unsafe {
+                        if let Some(ref mut p) = crate::process::PIPES[pipe_idx] {
+                            crate::process::pipe::pipe_close(p, writable);
+                            // Decrement refcount. If last reference, free the pipe slot.
+                            let old = p.refcount.fetch_sub(1, core::sync::atomic::Ordering::AcqRel);
+                            if old == 1 {
+                                crate::process::free_pipe(pipe_idx);
+                            }
+                        }
+                    }
+                }
+                crate::process::FdType::FsFile { index } => {
+                    let index = index as usize;
+                    // Only clear the file handle slot if no other FDs share it.
+                    // After dup, multiple FDs may reference the same handle slot.
+                    let still_referenced = proc.fd_types.iter().enumerate().any(|(i, f)| {
+                        i != fd as usize
+                            && matches!(f, crate::process::FdType::FsFile { index: idx } if *idx as usize == index)
+                    });
+                    if !still_referenced {
+                        proc.file_handles[index] = None;
+                    }
+                }
+                _ => {}
+            }
+            proc.fd_types[fd as usize] = crate::process::FdType::None;
+            return 0;
+        }
+    }
+    errno::EBADF as u64
+}
+
+/// SYS_DUP (11) — Duplicate a file descriptor to the lowest available slot.
+///
+/// File handles are ref-counted via Arc. dup clones the Arc, so multiple FDs
+/// can safely share one underlying file. When the last FD is closed, the Arc
+/// refcount drops to 0 and the File is dropped.
+fn sys_dup(fd: u64) -> u64 {
+    if fd >= crate::process::MAX_FDS as u64 {
+        return errno::EBADF as u64;
+    }
+
+    let mut sched = crate::process::scheduler::SCHEDULER.lock();
+    if let Some(pid) = sched.current_pid() {
+        if let Some(ref mut proc) = sched.processes_mut()[pid as usize] {
+            let fd_type = proc.fd_types[fd as usize];
+            if fd_type == crate::process::FdType::None {
+                return errno::EBADF as u64;
+            }
+            // For FsFile, share the same handle slot via Arc refcount.
+            // No new handle slot needed — multiple FDs point to the same index.
+            if let crate::process::FdType::FsFile { index } = fd_type {
+                let index = index as usize;
+                if proc.file_handles[index].is_none() {
+                    return errno::EBADF as u64;
+                }
+                // Find free FD slot and point it to the same handle index
+                for i in 0..crate::process::MAX_FDS {
+                    if proc.fd_types[i] == crate::process::FdType::None {
+                        proc.fd_types[i] = crate::process::FdType::FsFile { index: index as u8 };
+                        return i as u64;
+                    }
+                }
+                return errno::EMFILE as u64; // No free FD slots
+            }
+            // For non-FsFile types (Pipe, Stdin, etc.), copy the FD type directly.
+            // For Pipe, also increment the refcount so the pipe isn't freed when only
+            // the original FD is closed.
+            if let crate::process::FdType::Pipe { pipe_idx, writable: _ } = fd_type {
+                let pipe_idx = pipe_idx as usize;
+                unsafe {
+                    if let Some(ref mut p) = crate::process::PIPES[pipe_idx] {
+                        p.refcount.fetch_add(1, core::sync::atomic::Ordering::AcqRel);
+                    }
+                }
+            }
+            for i in 0..crate::process::MAX_FDS {
+                if proc.fd_types[i] == crate::process::FdType::None {
+                    proc.fd_types[i] = fd_type;
+                    return i as u64;
+                }
+            }
+        }
+    }
+    errno::EMFILE as u64
+}
+
+/// SYS_DUP2 (14) — Duplicate a file descriptor to a specific target number.
+///
+/// Arguments: oldfd (source), newfd (target)
+/// Returns: newfd on success, or negative errno on error.
+///
+/// Semantics (POSIX-compatible):
+/// 1. Validate oldfd — must be open
+/// 2. Validate newfd — must be in range 0..MAX_FDS
+/// 3. If oldfd == newfd, return newfd (no-op)
+/// 4. Close newfd if open (reuse sys_close logic inline to avoid double-locking)
+/// 5. Copy the FD type from oldfd to newfd
+/// 6. For Pipe: increment refcount
+/// 7. Return newfd
+fn sys_dup2(oldfd: u64, newfd: u64) -> u64 {
+    if oldfd >= crate::process::MAX_FDS as u64 {
+        return errno::EBADF as u64;
+    }
+    if newfd >= crate::process::MAX_FDS as u64 {
+        return errno::EBADF as u64;
+    }
+
+    let mut sched = crate::process::scheduler::SCHEDULER.lock();
+    if let Some(pid) = sched.current_pid() {
+        if let Some(ref mut proc) = sched.processes_mut()[pid as usize] {
+            // Validate oldfd is open
+            let old_type = proc.fd_types[oldfd as usize];
+            if old_type == crate::process::FdType::None {
+                return errno::EBADF as u64;
+            }
+
+            // If oldfd == newfd, return newfd (POSIX no-op)
+            if oldfd == newfd {
+                return newfd;
+            }
+
+            // Close newfd if open (inline close logic to avoid double-locking scheduler)
+            let new_type = proc.fd_types[newfd as usize];
+            if new_type != crate::process::FdType::None {
+                match new_type {
+                    crate::process::FdType::Pipe { pipe_idx, writable } => {
+                        let pipe_idx = pipe_idx as usize;
+                        unsafe {
+                            if let Some(ref mut p) = crate::process::PIPES[pipe_idx] {
+                                crate::process::pipe::pipe_close(p, writable);
+                                let old_ref = p.refcount.fetch_sub(1, core::sync::atomic::Ordering::AcqRel);
+                                if old_ref == 1 {
+                                    crate::process::free_pipe(pipe_idx);
+                                }
+                            }
+                        }
+                    }
+                    crate::process::FdType::FsFile { index } => {
+                        let index = index as usize;
+                        // Only clear the handle slot if no other FDs share it
+                        let still_referenced = proc.fd_types.iter().enumerate().any(|(i, f)| {
+                            i != newfd as usize
+                                && matches!(f, crate::process::FdType::FsFile { index: idx } if *idx as usize == index)
+                        });
+                        if !still_referenced {
+                            proc.file_handles[index] = None;
+                        }
+                    }
+                    _ => {}
+                }
+            }
+
+            // Copy oldfd type to newfd
+            // For Pipe, increment refcount
+            if let crate::process::FdType::Pipe { pipe_idx, writable: _ } = old_type {
+                let pipe_idx = pipe_idx as usize;
+                unsafe {
+                    if let Some(ref mut p) = crate::process::PIPES[pipe_idx] {
+                        p.refcount.fetch_add(1, core::sync::atomic::Ordering::AcqRel);
+                    }
+                }
+            }
+            proc.fd_types[newfd as usize] = old_type;
+            return newfd;
+        }
+    }
+    errno::EBADF as u64
+}
+
+/// SYS_READDIR (15) — Read directory entries into a buffer.
+///
+/// Arguments: fd (directory fd), buf_ptr (user buffer), count (buffer size)
+/// Returns: bytes written on success, 0 on end of directory, or negative errno.
+///
+/// Writes null-terminated filenames sequentially into buf.
+/// Returns 0 when all entries have been listed.
+fn sys_readdir(fd: u64, buf_ptr: u64, count: u64) -> u64 {
+    if fd >= crate::process::MAX_FDS as u64 {
+        return errno::EBADF as u64;
+    }
+    if count == 0 {
+        return 0;
+    }
+    if !is_valid_user_range(buf_ptr, count) {
+        return errno::EFAULT as u64;
+    }
+
+    let sched = crate::process::scheduler::SCHEDULER.lock();
+    if let Some(pid) = sched.current_pid() {
+        if let Some(ref proc) = sched.processes()[pid as usize] {
+            let fd_type = proc.fd_types[fd as usize];
+            match fd_type {
+                crate::process::FdType::FsFile { index } => {
+                    let index = index as usize;
+                    if let Some(ref file_handle) = proc.file_handles[index] {
+                        let mut file = file_handle.lock();
+                        // Read directory entries — ramfs files store entries as
+                        // null-terminated strings packed sequentially
+                        let buf = buf_ptr as *mut u8;
+                        let mut total = 0u64;
+                        let mut tmp = [0u8; 256];
+                        loop {
+                            if total >= count {
+                                break;
+                            }
+                            match file.read(&mut tmp) {
+                                Ok(0) => break,
+                                Ok(n) => {
+                                    let to_copy = core::cmp::min(n as u64, count - total);
+                                    unsafe {
+                                        core::ptr::copy_nonoverlapping(
+                                            tmp.as_ptr(),
+                                            buf.add(total as usize),
+                                            to_copy as usize,
+                                        );
+                                    }
+                                    total += to_copy;
+                                }
+                                Err(_) => break,
+                            }
+                        }
+                        return total;
+                    }
+                    errno::EBADF as u64
+                }
+                _ => errno::ENOTDIR as u64,
+            }
+        } else {
+            errno::ESRCH as u64
+        }
+    } else {
+        errno::ESRCH as u64
+    }
+}
+
+/// SYS_OPEN (12) — Open a file by path.
+///
+/// Arguments: path_ptr (user pointer to null-terminated path string)
+/// Returns: fd number on success, or negative errno on error
+fn sys_open(path_ptr: u64) -> u64 {
+    use alloc::string::String;
+
+    if path_ptr == 0 {
+        return errno::EFAULT as u64;
+    }
+
+    // Read the path string from user space
+    let path = {
+        let mut buf = Vec::new();
+        let user_ptr = path_ptr as *const u8;
+        let pml4 = {
+            let sched = crate::process::scheduler::SCHEDULER.lock();
+            if let Some(pid) = sched.current_pid() {
+                if let Some(ref proc) = sched.processes()[pid as usize] {
+                    proc.pml4_phys
+                } else {
+                    return errno::ESRCH as u64;
+                }
+            } else {
+                return errno::ESRCH as u64;
+            }
+        };
+
+        // Read byte by byte until null terminator
+        for i in 0..4096u64 {
+            if !is_valid_user_range(user_ptr as u64 + i, 1) {
+                return errno::EFAULT as u64;
+            }
+            if !is_user_buffer_mapped(pml4, user_ptr as u64 + i, 1) {
+                return errno::EFAULT as u64;
+            }
+            let byte = unsafe { *user_ptr.add(i as usize) };
+            if byte == 0 {
+                break;
+            }
+            buf.push(byte);
+        }
+        String::from_utf8(buf).unwrap_or_default()
+    };
+
+    if path.is_empty() {
+        return errno::EINVAL as u64;
+    }
+
+    // Open the file via VFS
+    let file = match crate::vfs::vfs().open(&path) {
+        Ok(f) => f,
+        Err(e) => return e.to_errno() as u64,
+    };
+
+    // Find a free FD slot and file handle slot
+    let mut sched = crate::process::scheduler::SCHEDULER.lock();
+    if let Some(pid) = sched.current_pid() {
+        if let Some(ref mut proc) = sched.processes_mut()[pid as usize] {
+            // Find free FD
+            let fd_slot = proc.fd_types.iter().position(|f| *f == crate::process::FdType::None);
+            let fh_slot = proc.file_handles.iter().position(|f| f.is_none());
+
+            match (fd_slot, fh_slot) {
+                (Some(fd), Some(fh)) => {
+                    // Wrap in Arc<Mutex<...>> for ref-counted sharing + interior mutability
+                    proc.file_handles[fh] = Some(alloc::sync::Arc::new(spin::Mutex::new(file)));
+                    proc.fd_types[fd] = crate::process::FdType::FsFile { index: fh as u8 };
+                    fd as u64
+                }
+                _ => errno::EMFILE as u64,
+            }
+        } else {
+            errno::ESRCH as u64
+        }
+    } else {
+        errno::ESRCH as u64
+    }
+}
+
+/// SYS_LSEEK (13) — Seek to a position in a file.
+///
+/// Arguments: fd, offset
+/// Returns: 0 on success, or negative errno on error
+fn sys_lseek(fd: u64, offset: u64) -> u64 {
+    if fd >= crate::process::MAX_FDS as u64 {
+        return errno::EBADF as u64;
+    }
+
+    let sched = crate::process::scheduler::SCHEDULER.lock();
+    if let Some(pid) = sched.current_pid() {
+        if let Some(ref proc) = sched.processes()[pid as usize] {
+            let fd_type = proc.fd_types[fd as usize];
+            match fd_type {
+                crate::process::FdType::FsFile { index } => {
+                    let index = index as usize;
+                    if let Some(ref file_handle) = proc.file_handles[index] {
+                        let mut file = file_handle.lock();
+                        match file.seek(offset) {
+                            Ok(()) => 0,
+                            Err(e) => e.to_errno() as u64,
+                        }
+                    } else {
+                        errno::EBADF as u64
+                    }
+                }
+                _ => errno::EINVAL as u64,
+            }
+        } else {
+            errno::ESRCH as u64
+        }
+    } else {
+        errno::ESRCH as u64
     }
 }

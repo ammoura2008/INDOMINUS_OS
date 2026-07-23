@@ -10,25 +10,77 @@
 //!   IRET frame has 5 entries (RIP, CS, RFLAGS, RSP, SS) — the CPU switches to
 //!   Ring 3 automatically when executing `iretq`.
 
-use crate::memory::vmm;
+use alloc::boxed::Box;
+use alloc::sync::Arc;
+use crate::vfs::File;
 
 /// Maximum number of concurrent processes.
-pub const MAX_PROCESSES: usize = 8;
+pub const MAX_PROCESSES: usize = 32;
 
 /// Size of each process's kernel stack (8 KiB = 2 pages).
 /// Must be large enough for syscall/interrupt handling.
 pub const KERNEL_STACK_SIZE: usize = 8192;
 
+/// Maximum number of file descriptors per process.
+pub const MAX_FDS: usize = 8;
+
 /// Process identifier.
 pub type Pid = u64;
 
+/// File descriptor types.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum FdType {
+    /// Not open.
+    None,
+    /// Stdin (keyboard input).
+    Stdin,
+    /// Stdout (serial output).
+    Stdout,
+    /// Stderr (serial output).
+    Stderr,
+    /// Null device (discards writes, returns EOF on read).
+    Null,
+    /// TTY (console input/output).
+    Tty,
+    /// Pipe endpoint. `writable` indicates write end (true) or read end (false).
+    Pipe { pipe_idx: u8, writable: bool },
+    /// VFS file. Index into process's `file_handles` array.
+    FsFile { index: u8 },
+}
+
+/// Reason a process is blocked.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum WakeReason {
+    /// Not blocked.
+    None,
+    /// Sleeping — wake when tick_count >= deadline.
+    Sleep { deadline: u64 },
+    /// Waiting for keyboard input.
+    Keyboard,
+    /// Waiting for pipe data (read end).
+    PipeRead { pipe_idx: u8 },
+    /// Waiting for pipe space (write end).
+    PipeWrite { pipe_idx: u8 },
+}
+
 /// Process states.
+///
+/// Valid transitions:
+///   Ready    → Running  (scheduler picks process)
+///   Running  → Ready    (preempted by timer)
+///   Running  → Blocked  (process calls sys_sleep or blocking waitpid)
+///   Running  → Zombie   (process calls sys_exit or is killed)
+///   Blocked  → Ready    (woken by timer/event)
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub enum ProcessState {
     Ready,
     Running,
+    Blocked,
     Zombie,
 }
+
+/// Maximum number of open file handles per process.
+pub const MAX_FILE_HANDLES: usize = 16;
 
 /// A kernel-mode or user-mode process.
 pub struct Process {
@@ -44,13 +96,27 @@ pub struct Process {
     pub user_rip: Option<u64>,
     /// User-mode initial stack pointer. None for kernel processes.
     pub user_rsp: Option<u64>,
-    /// Kernel-mode entry function address (raw physical). Used for diagnostics.
-    pub entry_addr: u64,
     pub exit_code: u64,
     /// Whether this is a user-mode process.
     pub is_user: bool,
     /// Parent process PID. None for the idle process and kernel tasks spawned at boot.
     pub parent_pid: Option<Pid>,
+    /// Generation of the parent at spawn time. Used to prevent cross-family reaping
+    /// when PIDs are reused. Matches against the parent's `generation` field.
+    pub parent_generation: u32,
+    /// Monotonic generation counter for this process slot. Incremented each time the
+    /// slot is reused. Prevents a new process at PID N from reaping orphans of the
+    /// previous process at PID N.
+    pub generation: u32,
+    /// Reason this process is blocked (sleep deadline, keyboard, etc.).
+    pub wake_reason: WakeReason,
+    /// File descriptor table. Index = FD number, value = FD type.
+    /// FDs 0, 1, 2 are pre-assigned to stdin/stdout/stderr.
+    pub fd_types: [FdType; MAX_FDS],
+    /// VFS file handles. Ref-counted via Arc — multiple FDs can share one handle
+    /// (e.g. after dup). The inner Box<dyn File> is wrapped in spin::Mutex for
+    /// interior mutability (File trait requires &mut self for read/write/seek).
+    pub file_handles: [Option<Arc<spin::Mutex<Box<dyn File>>>>; MAX_FILE_HANDLES],
 }
 
 impl Process {
@@ -64,7 +130,7 @@ impl Process {
         let sp = setup_initial_stack_frame_kernel(stack_top, entry_phys);
 
         // Use the boot page tables (kernel processes share the kernel's PML4)
-        let pml4 = unsafe {
+        let pml4 = {
             let (frame, _flags) = x86_64::registers::control::Cr3::read();
             frame.start_address().as_u64()
         };
@@ -77,10 +143,14 @@ impl Process {
             pml4_phys: pml4,
             user_rip: None,
             user_rsp: None,
-            entry_addr: entry_phys,
             exit_code: 0,
             is_user: false,
             parent_pid: None,
+            parent_generation: 0,
+            generation: 0,
+            wake_reason: WakeReason::None,
+            fd_types: [FdType::None; MAX_FDS],
+            file_handles: Default::default(),
         }
     }
 
@@ -90,10 +160,16 @@ impl Process {
     /// - `user_rsp`: initial user stack pointer
     /// - `pml4`: per-process page table (from `create_user_pml4`)
     /// - `parent_pid`: PID of the parent process (the spawner)
-    pub fn new_user(pid: Pid, user_rip: u64, user_rsp: u64, pml4: u64, parent_pid: Option<Pid>) -> Self {
+    /// - `parent_generation`: generation of the parent at spawn time
+    pub fn new_user(pid: Pid, user_rip: u64, user_rsp: u64, pml4: u64, parent_pid: Option<Pid>, parent_generation: u32) -> Self {
         let stack_base = alloc_kernel_stack();
         let stack_top = stack_base + KERNEL_STACK_SIZE as u64;
         let sp = setup_initial_stack_frame_user(stack_top, user_rip, user_rsp);
+
+        let mut fd_types = [FdType::None; MAX_FDS];
+        fd_types[0] = FdType::Stdin;
+        fd_types[1] = FdType::Stdout;
+        fd_types[2] = FdType::Stderr;
 
         Process {
             pid,
@@ -103,10 +179,65 @@ impl Process {
             pml4_phys: pml4,
             user_rip: Some(user_rip),
             user_rsp: Some(user_rsp),
-            entry_addr: 0,
             exit_code: 0,
             is_user: true,
             parent_pid,
+            parent_generation,
+            generation: 0,
+            wake_reason: WakeReason::None,
+            fd_types,
+            file_handles: Default::default(),
+        }
+    }
+}
+
+impl Drop for Process {
+    fn drop(&mut self) {
+        // Close all open file handles — drop the Arc refs
+        for i in 0..MAX_FILE_HANDLES {
+            self.file_handles[i] = None;
+        }
+
+        // Close any pipe FDs — decrement refcounts so pipes aren't leaked.
+        // This runs when a process is reaped (waitpid) or killed (exception handler).
+        for i in 0..MAX_FDS {
+            if let FdType::Pipe { pipe_idx, writable } = self.fd_types[i] {
+                let pipe_idx = pipe_idx as usize;
+                unsafe {
+                    if let Some(ref mut p) = crate::process::PIPES[pipe_idx] {
+                        crate::process::pipe::pipe_close(p, writable);
+                        let old = p.refcount.fetch_sub(1, core::sync::atomic::Ordering::AcqRel);
+                        if old == 1 {
+                            crate::process::free_pipe(pipe_idx);
+                        }
+                    }
+                }
+            }
+            self.fd_types[i] = FdType::None;
+        }
+
+        // Free user address space if this was a user process with a valid PML4.
+        // This prevents permanent page table + physical frame leaks when zombies
+        // are reaped via waitpid. The context_switch paths (force_switch, kill_process)
+        // free resources for processes that die while running, but reaped zombies
+        // only get cleaned up here.
+        //
+        // Safety: we must be on the kernel PML4 when calling free_user_address_space.
+        // Drop runs from reap_zombie (syscall context with scheduler lock held),
+        // where the kernel PML4 is guaranteed active.
+        if self.is_user && self.pml4_phys != 0 {
+            unsafe {
+                crate::memory::vmm::free_user_address_space(
+                    crate::memory::PhysAddr::new(self.pml4_phys)
+                );
+            }
+            self.pml4_phys = 0;
+        }
+
+        // Free the kernel stack (heap allocation)
+        if self.kernel_stack_base != 0 {
+            free_kernel_stack(self.kernel_stack_base);
+            self.kernel_stack_base = 0;
         }
     }
 }

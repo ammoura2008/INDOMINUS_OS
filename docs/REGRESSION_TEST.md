@@ -24,19 +24,19 @@ After any kernel change, run this checklist to verify no regressions.
 ## Process Creation
 
 ```
-[ ] 4 processes created (PID 0–3 minimum)
-[ ] PID 1 (task_a) prints "[TASK_A] tick" messages
-[ ] PID 2 (task_b) prints "[TASK_B] tick" messages
-[ ] PID 3 (user) spawned successfully
-[ ] PID 4 (user) spawned successfully
+[ ] Minimum 3 processes created (PID 0–2)
+[ ] PID 0 = idle (HLT loop)
+[ ] PID 1 = init/reaper (kernel-mode, reaps orphaned zombies)
+[ ] PID 2 = shell (indosh) or first user process
+[ ] PID 3+ = additional user processes / test binaries
 ```
 
 ## Scheduler Behavior
 
 ```
-[ ] PID 1 and PID 2 alternate in 5-tick quanta
-[ ] PID 1 prints 5 ticks, then PID 2 prints 5 ticks
-[ ] Round-robin cycling continues indefinitely for kernel tasks
+[ ] Round-robin scheduling with 5-tick quantum (50ms)
+[ ] Shell process (PID 2) receives input via sys_read, produces output via sys_write
+[ ] Init process (PID 1) reaps zombie children
 [ ] No process starvation (all Ready processes eventually run)
 [ ] [TICK] and [SWITCH] markers appear in serial output
 ```
@@ -45,12 +45,10 @@ After any kernel change, run this checklist to verify no regressions.
 
 ```
 [ ] Timer interrupts fire from Ring 3 (user processes receive ticks)
-[ ] PID 3 writes "Hello from user!" via sys_write (syscall 0)
-[ ] PID 3 calls sys_exit (syscall 1) → transitions to ZOMBIE
-[ ] After PID 3 exits, PID 4 runs
-[ ] PID 4 writes "Hello from user!" via sys_write
-[ ] PID 4 calls sys_exit → transitions to ZOMBIE
-[ ] After both user processes exit, PID 1/2 resume round-robin
+[ ] Shell process (PID 2) responds to keyboard input via sys_read
+[ ] Shell process writes output via sys_write
+[ ] User processes can call sys_exit → transitions to ZOMBIE
+[ ] PID 1 (init) reaps zombie children
 [ ] No page faults after user process exit
 [ ] No triple faults
 ```
@@ -93,6 +91,16 @@ After any kernel change, run this checklist to verify no regressions.
 [ ] sys_exit causes force_switch (never returns)
 [ ] sys_yield causes force_switch (always context switches)
 [ ] sys_getpid returns current PID
+[ ] sys_read reads from file descriptor (stdin/pipe)
+[ ] sys_pipe creates pipe pair
+[ ] sys_fork creates child via Copy-on-Write
+[ ] sys_exec replaces process with new ELF
+[ ] sys_close closes file descriptor
+[ ] sys_dup duplicates file descriptor
+[ ] sys_open opens file from VFS
+[ ] sys_lseek seeks in file
+[ ] sys_dup2 duplicates to specific FD slot
+[ ] sys_readdir reads directory entries
 [ ] Syscall frame layout is canonical (R15 first → RAX last)
 [ ] swapgs on syscall entry AND before iretq in force_switch path
 ```
@@ -105,6 +113,7 @@ After any kernel change, run this checklist to verify no regressions.
 [ ] verify_kernel.py exits 0 after kernel build
 [ ] tools/ directory is clean (no temp files)
 [ ] .gitignore covers QEMU logs, test outputs, tmp/
+[ ] 0 compiler errors, warnings limited to intentionally-kept items
 ```
 
 ## How to Run
@@ -124,7 +133,8 @@ powershell -ExecutionPolicy Bypass -File run.bat
 
 ## What to Look For
 
-- **PASS:** `Hello from user!` appears twice, then kernel tasks resume
+- **PASS:** Shell prompt appears, keyboard input produces output, syscalls work
+- **PASS:** `[TICK]` and `[SWITCH]` markers appear continuously
 - **FAIL:** Triple fault, triple fault, triple fault (QEMU reboots)
-- **FAIL:** Only kernel ticks, no user output (Ring 3 not executing)
-- **FAIL:** Page fault after user process exits (syscall exit path broken)
+- **FAIL:** Only `[TICK]` markers, no `[SWITCH]` (scheduler not context-switching)
+- **FAIL:** Page fault or general protection fault (syscall or memory bug)

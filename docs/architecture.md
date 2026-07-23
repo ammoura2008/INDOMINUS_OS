@@ -10,8 +10,6 @@
 0xFFFF_FFFF_FEE0_0000 ─────────────────────────────────── LAPIC MMIO (1 page)
 0xFFFF_FFFF_FED0_0000                                       (mapped from phys 0xFEE00000)
                     ...
-0xFFFF_FFFF_D000_0000 ─────────────────────────────────── Kernel stack top (16 KiB)
-0xFFFF_FFFF_CFFF_FFFF                                       Kernel stack bottom
 0xFFFF_FFFF_C000_0000 ─────────────────────────────────── Kernel heap start (4 MiB)
 0xFFFF_FFFF_BFFF_FFFF                                       Kernel heap end
                     ...
@@ -24,7 +22,11 @@
 
 ```text
 0x0000_7FFF_FFFF_0000 ─────────────────────────────────── User stack top (grows down)
-0x0000_7FFF_FFFE_FFFF                                       User stack bottom
+0x0000_7FFF_FFFE_F000                                       Stack page 1 (top)
+0x0000_7FFF_FFFE_E000                                       Stack page 2
+0x0000_7FFF_FFFE_D000                                       Stack page 3
+0x0000_7FFF_FFFE_C000                                       Stack page 4 (bottom)
+0x0000_7FFF_FFFE_B000                                       Guard page (no USER, no WRITABLE)
                     ...
 0x0000_0000_0060_0000 ─────────────────────────────────── User code end (top of 6 MiB)
 0x0000_0000_0040_0000 ─────────────────────────────────── User code base (ELF load)
@@ -38,12 +40,10 @@
 | `KERNEL_VIRT_BASE` | `0xFFFFFFFF80000000` | Kernel virtual base (-2 GiB) |
 | `KERNEL_HEAP_BASE` | `0xFFFFFFFFC0000000` | Kernel heap start |
 | `KERNEL_HEAP_INITIAL_SIZE` | `4 * 1024 * 1024` | 4 MiB initial heap |
-| `KERNEL_STACK_TOP` | `0xFFFFFFFFD0000000` | Kernel stack top (16 KiB) |
-| `KERNEL_STACK_SIZE` | `16 * 1024` | 16 KiB kernel stack |
-| `USER_CODE_BASE` | `0x00400000` | User ELF load address |
-| `USER_STACK_TOP` | `0x7FFFFFFF0000` | User stack top |
-| `USER_KERNEL_STACK_SIZE` | `8192` | 8 KiB per-process kernel stack |
+| `USER_STACK_TOP` | `0x00007FFFFFFF0000` | User stack top |
 | `PAGE_SIZE` | `4096` | 4 KiB page |
+
+Note: Kernel stack, user code base, and per-process kernel stack size are allocated dynamically or defined in their respective subsystems (not as global constants).
 
 ### Page Table Layout
 
@@ -80,19 +80,28 @@ This applies to:
 
 ```
  1. Set KERNEL_PHYS_START from BootInfo
- 2. gdt::init()                    — Build GDT, load TSS, load segment registers
- 3. pmm::init(&memory_map)         — Initialize physical memory manager (bitmap)
- 4. vmm::init_kernel_page_tables() — Create new PML4 with higher-half + identity map
- 5. vmm::switch_page_table()       — Load new PML4 into CR3 (identity map still active)
- 6. gdt::switch_gdt_to_virtual()   — Patch GDT/TSS to virtual addresses, reload GDTR+TR
- 7. init_heap()                    — Initialize kernel heap allocator (4 MiB)
- 8. idt::init()                    — Build IDT with virtual handler addresses
- 9. interrupts::init()             — Initialize LAPIC, PIT, IO-APIC
-10. syscall::init()                — Initialize syscall MSRs (STAR, LSTAR, SFMASK, EFER)
-11. process::init()                — Initialize scheduler, create PID 0 (idle), PID 1/2 (kernel tasks)
-12. process::spawn() × 2           — Spawn kernel tasks (task_a, task_b)
-13. process::spawn_user() × 2     — Spawn user ELF processes (PID 3, PID 4)
-14. process::start_scheduler()     — Enable PIT, start timer-driven context switching
+ 2. gdt::init()                      — Build GDT, load TSS, load segment registers
+ 3. pmm::init(&memory_map)           — Initialize physical memory manager (bitmap allocator)
+ 4. pmm::mark_region_used()          — Reserve kernel's physical memory range (from BootInfo)
+ 5. cpu::detect()                    — Detect CPU features (NX, SMEP, SMAP, APIC)
+ 6. cpu::print_features()            — Print detected features to serial
+ 7. cpu::enable_smep_smap()          — Enable SMEP and SMAP if supported
+ 8. vmm::init_kernel_page_tables()   — Create new PML4 with higher-half + identity map
+ 9. vmm::switch_page_table()         — Load new PML4 into CR3 (identity map still active)
+10. gdt::switch_gdt_to_virtual()     — Patch GDT/TSS to virtual addresses, reload GDTR+TR
+11. init_heap()                      — Initialize kernel heap allocator (4 MiB)
+12. idt::init()                      — Build IDT with virtual handler addresses
+13. acpi::init()                     — Parse ACPI tables (RSDP → XSDT → MADT, HPET, etc.)
+14. pci::enumerate()                 — Enumerate PCI devices on all buses
+15. interrupts::init()               — Initialize LAPIC, PIT, IO-APIC (from ACPI MADT)
+16. keyboard::init()                 — Initialize PS/2 keyboard driver
+17. syscall::init()                  — Initialize syscall MSRs (STAR, LSTAR, SFMASK, EFER)
+18. vmm::harden_identity_map()       — Set NX on all identity-mapped pages
+19. process::init()                  — Initialize scheduler, create PID 0 (idle), PID 1 (init/reaper)
+20. vfs::init()                      — Initialize VFS (RAM filesystem)
+21. initrd::load_initrd()            — Load initrd (cpio newc archive)
+22. Spawn user processes             — Load ELF from VFS or test binaries (PID 2+)
+23. process::start_scheduler()       — Enable PIT, start timer-driven context switching
 ```
 
 ## GDT / TSS Layout
@@ -370,7 +379,7 @@ GS_BASE = 0 (user mode).
    code/data/LAPIC/per-CPU use higher-half virtual addresses (entries 256–511).
 4. **No identity map in user PML4.** Only upper-half entries are copied.
 
-### Current Syscall Table
+### Current Syscall Table (16 syscalls)
 
 | Num | Name | Args | Returns |
 |-----|------|------|---------|
@@ -378,6 +387,18 @@ GS_BASE = 0 (user mode).
 | 1 | sys_exit | exit_code | never (force_switch) |
 | 2 | sys_yield | — | 0 (force_switch) |
 | 3 | sys_getpid | — | current PID |
+| 4 | sys_waitpid | child_pid | exit_code or u64::MAX |
+| 5 | sys_sleep | ticks | 0 |
+| 6 | sys_read | fd, buf_ptr, count | bytes read or u64::MAX |
+| 7 | sys_pipe | — | 0 or u64::MAX |
+| 8 | sys_fork | — | child_pid or u64::MAX |
+| 9 | sys_exec | path_ptr | never (force_switch) or u64::MAX |
+| 10 | sys_close | fd | 0 or u64::MAX |
+| 11 | sys_dup | fd | new_fd or u64::MAX |
+| 12 | sys_open | path_ptr | fd or u64::MAX |
+| 13 | sys_lseek | fd, offset, whence | position or u64::MAX |
+| 14 | sys_dup2 | oldfd, newfd | new_fd or u64::MAX |
+| 15 | sys_readdir | fd, buf_ptr, count | bytes read or u64::MAX |
 
 ## Process Lifecycle
 
@@ -419,7 +440,7 @@ GS_BASE = 0 (user mode).
 
 | From | To | Trigger | Code |
 |------|----|---------|------|
-| — | READY | `spawn()` / `spawn_user()` | `Scheduler::spawn*()` |
+| — | READY | `spawn_idle()` / `spawn_kernel()` / `spawn_user()` | `Scheduler::spawn*()` |
 | READY | RUNNING | `dispatch_first()` or `switch_next()` | `Scheduler::switch_next*()` |
 | RUNNING | READY | Timer quantum expires | `switch_next()` |
 | RUNNING | Zombie | `sys_exit()` | `sys_exit()` |
@@ -451,9 +472,8 @@ Maximum 8 concurrent processes (`MAX_PROCESSES = 8`).
 | PID | Role | Kernel Stack | Page Table |
 |-----|------|-------------|------------|
 | 0 | Idle (HLT loop) | Boot stack | Kernel PML4 |
-| 1 | task_a (kernel) | Heap-allocated | Kernel PML4 |
-| 2 | task_b (kernel) | Heap-allocated | Kernel PML4 |
-| 3+ | User processes | Heap-allocated | Per-process PML4 |
+| 1 | Init/reaper (kernel-mode) | Heap-allocated | Kernel PML4 |
+| 2+ | User processes (shell, test binaries) | Heap-allocated | Per-process PML4 |
 
 ## DEBUG_KERNEL — Diagnostic Gating
 

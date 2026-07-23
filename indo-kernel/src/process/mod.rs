@@ -15,12 +15,46 @@
 
 pub mod context_switch;
 pub mod idle;
+pub mod init;
+pub mod pipe;
 pub mod process;
 pub mod scheduler;
 pub mod tasks;
 
-pub use process::{Process, ProcessState, Pid, MAX_PROCESSES, KERNEL_STACK_SIZE};
-pub use scheduler::{Scheduler, SCHEDULER};
+pub use process::{ProcessState, Pid, MAX_PROCESSES, FdType, WakeReason, MAX_FDS};
+pub use scheduler::SCHEDULER;
+
+/// Maximum number of pipes in the system.
+pub const MAX_PIPES: usize = 16;
+
+/// Global pipe table. Allocated on demand by sys_pipe.
+pub static mut PIPES: [Option<pipe::Pipe>; MAX_PIPES] = {
+    const NONE: Option<pipe::Pipe> = None;
+    [NONE; MAX_PIPES]
+};
+
+/// Allocate a pipe from the global table. Returns its index.
+pub fn alloc_pipe() -> Option<usize> {
+    unsafe {
+        for i in 0..MAX_PIPES {
+            if PIPES[i].is_none() {
+                PIPES[i] = Some(pipe::Pipe::new());
+                return Some(i);
+            }
+        }
+    }
+    None
+}
+
+/// Free a pipe from the global table.
+///
+/// # Safety
+/// `idx` must be a valid pipe index returned by `alloc_pipe` that hasn't been freed yet.
+pub unsafe fn free_pipe(idx: usize) {
+    if idx < MAX_PIPES {
+        PIPES[idx] = None;
+    }
+}
 
 /// Initialize the process subsystem.
 ///
@@ -34,19 +68,14 @@ pub fn init() {
     let mut sched = SCHEDULER.lock();
     sched.init();
     sched.spawn_idle(idle::idle_main as *const () as u64);
+
+    // Spawn PID 1 (init/reaper) — adopts all orphaned processes
+    sched.spawn_kernel(init::init_main as *const () as u64);
+
     drop(sched);
     // NOTE: interrupts remain DISABLED — caller must enable them later.
 
     crate::serial::write_str("[PROC] Process subsystem initialized\n");
-}
-
-/// Spawn a new kernel-mode process.
-///
-/// # Safety
-/// Must be called with interrupts DISABLED.
-pub fn spawn(entry_phys: u64) -> Option<Pid> {
-    let result = SCHEDULER.lock().spawn(entry_phys);
-    result
 }
 
 /// Spawn a new user-mode process from an ELF binary.
@@ -54,7 +83,7 @@ pub fn spawn(entry_phys: u64) -> Option<Pid> {
 /// Creates a per-process PML4, loads ELF segments via the ELF loader,
 /// maps a user stack page, and creates the process.
 pub fn spawn_user(elf_data: &[u8], parent: Option<Pid>) -> Option<Pid> {
-    use crate::memory::{self, vmm, PAGE_SIZE, USER_STACK_TOP};
+    use crate::memory::{self, vmm, USER_STACK_TOP};
     use x86_64::structures::paging::{FrameAllocator, PageTableFlags};
     use x86_64::VirtAddr;
 
@@ -78,23 +107,42 @@ pub fn spawn_user(elf_data: &[u8], parent: Option<Pid>) -> Option<Pid> {
         }
     };
 
-    // 4. Map a user stack page below USER_STACK_TOP (4 KiB for now)
-    let stack_frame = vmm::PmmFrameAllocator.allocate_frame()
-        .expect("PMM: out of memory for user stack page");
-    let stack_virt = VirtAddr::new(USER_STACK_TOP - PAGE_SIZE);
-    let stack_flags = PageTableFlags::PRESENT
-        | PageTableFlags::WRITABLE
-        | PageTableFlags::USER_ACCESSIBLE
-        | PageTableFlags::NO_EXECUTE;
-    vmm::map_page(user_pml4, stack_virt, memory::PhysAddr::new(stack_frame.start_address().as_u64()), stack_flags);
+    // 4. Map user stack with guard page below
+    //    Layout (grows downward):
+    //    USER_STACK_TOP                          = stack top (RSP starts here)
+    //    USER_STACK_TOP - PAGE_SIZE              = stack page 4
+    //    USER_STACK_TOP - 2*PAGE_SIZE            = stack page 3
+    //    USER_STACK_TOP - 3*PAGE_SIZE            = stack page 2
+    //    USER_STACK_TOP - 4*PAGE_SIZE            = stack page 1 (bottom)
+    //    USER_STACK_TOP - 5*PAGE_SIZE            = guard page (not user-accessible)
+    let guard_page_frame = vmm::PmmFrameAllocator.allocate_frame()
+        .expect("PMM: out of memory for user stack guard page");
+    let guard_page_virt = VirtAddr::new(crate::memory::USER_STACK_TOP - 5 * crate::memory::PAGE_SIZE);
+    let guard_flags = PageTableFlags::PRESENT; // No USER_ACCESSIBLE, no WRITABLE
+    vmm::map_page(user_pml4, guard_page_virt, memory::PhysAddr::new(guard_page_frame.start_address().as_u64()), guard_flags);
+
+    // Map 4 stack pages (16 KiB)
+    for i in 0..4 {
+        let frame = vmm::PmmFrameAllocator.allocate_frame()
+            .expect("PMM: out of memory for user stack page");
+        let offset = (4 - i) * crate::memory::PAGE_SIZE; // pages 4,3,2,1 from top
+        let stack_virt = VirtAddr::new(crate::memory::USER_STACK_TOP - offset);
+        let stack_flags = PageTableFlags::PRESENT
+            | PageTableFlags::WRITABLE
+            | PageTableFlags::USER_ACCESSIBLE
+            | PageTableFlags::NO_EXECUTE;
+        vmm::map_page(user_pml4, stack_virt, memory::PhysAddr::new(frame.start_address().as_u64()), stack_flags);
+    }
 
     // User RSP starts at the top of the stack region
     let user_rsp = USER_STACK_TOP;
 
     crate::serial::write_str("[PROC] ELF loaded: entry=");
     crate::serial::write_hex(elf_image.entry);
-    crate::serial::write_str(", stack=");
-    crate::serial::write_hex(stack_virt.as_u64());
+    crate::serial::write_str(", stack_top=");
+    crate::serial::write_hex(USER_STACK_TOP);
+    crate::serial::write_str(", stack_guard=");
+    crate::serial::write_hex(crate::memory::USER_STACK_TOP - 5 * crate::memory::PAGE_SIZE);
     crate::serial::write_str(", pml4=");
     crate::serial::write_hex(user_pml4.as_u64());
     crate::serial::write_nl();
@@ -134,4 +182,61 @@ pub fn start_scheduler() -> ! {
     loop {
         unsafe { core::arch::asm!("hlt", options(nostack, nomem)); }
     }
+}
+
+/// Wake all processes blocked on keyboard input or pipe I/O.
+///
+/// Called by the keyboard IRQ handler and pipe write/read operations.
+pub fn keyboard_wake() {
+    let mut sched = SCHEDULER.lock();
+    for i in 0..process::MAX_PROCESSES as u64 {
+        if let Some(Some(ref mut proc)) = sched.processes_mut().get_mut(i as usize) {
+            if proc.state == process::ProcessState::Blocked {
+                match proc.wake_reason {
+                    process::WakeReason::Keyboard => {
+                        proc.state = process::ProcessState::Ready;
+                        proc.wake_reason = process::WakeReason::None;
+                    }
+                    process::WakeReason::PipeRead { pipe_idx } => {
+                        // Check if pipe has data
+                        unsafe {
+                            if let Some(ref p) = PIPES[pipe_idx as usize] {
+                                let nread = p.nread.load(core::sync::atomic::Ordering::Relaxed);
+                                let nwrite = p.nwrite.load(core::sync::atomic::Ordering::Relaxed);
+                                if nread < nwrite || !p.write_open.load(core::sync::atomic::Ordering::Relaxed) {
+                                    proc.state = process::ProcessState::Ready;
+                                    proc.wake_reason = process::WakeReason::None;
+                                }
+                            }
+                        }
+                    }
+                    process::WakeReason::PipeWrite { pipe_idx } => {
+                        // Check if pipe has space
+                        unsafe {
+                            if let Some(ref p) = PIPES[pipe_idx as usize] {
+                                let nread = p.nread.load(core::sync::atomic::Ordering::Relaxed);
+                                let nwrite = p.nwrite.load(core::sync::atomic::Ordering::Relaxed);
+                                if nwrite < nread + pipe::PIPE_SIZE as u32 {
+                                    proc.state = process::ProcessState::Ready;
+                                    proc.wake_reason = process::WakeReason::None;
+                                }
+                            }
+                        }
+                    }
+                    _ => {}
+                }
+            }
+        }
+    }
+}
+
+/// Yield the CPU to the next process.
+///
+/// Used by pipe read/write to block while waiting for data/space.
+pub fn yield_now() {
+    unsafe { crate::syscall::set_force_switch(); }
+    // After force_switch, we need to re-enable interrupts since syscall clears IF
+    unsafe { core::arch::asm!("sti", options(nostack, nomem)); }
+    // HLT until next timer interrupt reschedules us
+    unsafe { core::arch::asm!("hlt", options(nostack, nomem)); }
 }

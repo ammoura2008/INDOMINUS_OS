@@ -22,11 +22,11 @@
 //! - CURRENT COUNT (0x390): Timer current count
 //! - DIVIDE CONFIG (0x3E0): Timer divide configuration
 
-use core::ptr;
+use crate::mmio::MmioRegion;
+use crate::sync_cell::SyncUnsafeCell;
 
-/// LAPIC base virtual address (mapped in the upper half so it survives
-/// CR3 switches to user PML4s that lack the identity map).
-const LAPIC_BASE: u64 = 0xFFFF_FFFF_FEE0_0000;
+/// LAPIC MMIO region (mapped via mmio framework)
+static LAPIC: SyncUnsafeCell<Option<MmioRegion>> = SyncUnsafeCell::new(None);
 
 /// LAPIC register offsets (in bytes, each register is 16-byte aligned).
 const LAPIC_ID: u32 = 0x020;
@@ -35,7 +35,6 @@ const LAPIC_EOI: u32 = 0x0B0;
 const LAPIC_SVR: u32 = 0x0F0;
 const LAPIC_LVT_TIMER: u32 = 0x320;
 const LAPIC_INIT_COUNT: u32 = 0x380;
-const LAPIC_CURRENT_COUNT: u32 = 0x390;
 const LAPIC_DIVIDE_CONFIG: u32 = 0x3E0;
 
 /// Spurious interrupt vector number (common convention).
@@ -47,9 +46,6 @@ const SVR_ENABLE: u32 = 1 << 8;
 /// LVT Timer mode bits.
 const LVT_TIMER_PERIODIC: u32 = 1 << 17;
 
-/// LVT Timer mask bit (bit 16). When set, the timer interrupt is masked.
-const LVT_TIMER_MASK: u32 = 1 << 16;
-
 /// LVT Timer vector for the APIC timer interrupt.
 const TIMER_VECTOR: u8 = 32;
 
@@ -59,7 +55,13 @@ const TIMER_VECTOR: u8 = 32;
 /// The caller must ensure `offset` is a valid LAPIC register offset.
 #[inline]
 unsafe fn lapic_read(offset: u32) -> u32 {
-    ptr::read_volatile((LAPIC_BASE + offset as u64) as *const u32)
+    match (*LAPIC.get()).as_ref() {
+        Some(lapic) => lapic.read_reg(offset),
+        None => {
+            crate::serial::write_str("[LAPIC] ERROR: read before init\n");
+            0
+        }
+    }
 }
 
 /// Write a 32-bit value to a LAPIC register.
@@ -68,22 +70,32 @@ unsafe fn lapic_read(offset: u32) -> u32 {
 /// The caller must ensure `offset` is a valid LAPIC register offset.
 #[inline]
 unsafe fn lapic_write(offset: u32, value: u32) {
-    ptr::write_volatile((LAPIC_BASE + offset as u64) as *mut u32, value);
+    if let Some(lapic) = (*LAPIC.get()).as_ref() {
+        lapic.write_reg(offset, value);
+    } else {
+        crate::serial::write_str("[LAPIC] ERROR: write before init\n");
+    }
 }
 
 /// Initialize the Local APIC.
 ///
 /// This function:
-/// 1. Reads the LAPIC ID to verify the LAPIC is accessible
-/// 2. Sets the Task Priority Register to 0 (accept all interrupts)
-/// 3. Enables the LAPIC via the Spurious Interrupt Vector Register
-/// 4. Configures the LAPIC timer in periodic mode
+/// 1. Maps the LAPIC MMIO region
+/// 2. Reads the LAPIC ID to verify MMIO access works
+/// 3. Sets the Task Priority Register to 0 (accept all interrupts)
+/// 4. Enables the LAPIC via the Spurious Interrupt Vector Register
+/// 5. Configures the LAPIC timer in periodic mode
 ///
 /// # Safety
 /// Must be called once during kernel initialization, after page tables
-/// are set up and the LAPIC MMIO region is identity-mapped.
-pub fn init() {
+/// are set up.
+pub fn init(lapic_phys: u64) {
     unsafe {
+        *LAPIC.get() = Some(MmioRegion::new(lapic_phys));
+        crate::serial::write_str("[LAPIC] Mapped at phys=");
+        crate::serial::write_hex(lapic_phys);
+        crate::serial::write_nl();
+
         // Read LAPIC ID to verify MMIO access works
         let id = lapic_read(LAPIC_ID);
         crate::serial::write_str("[LAPIC] ID: 0x");
@@ -134,16 +146,3 @@ pub unsafe fn send_eoi() {
     lapic_write(LAPIC_EOI, 0);
 }
 
-/// Mask (disable) the LAPIC timer.
-///
-/// Sets the mask bit (bit 16) in the LVT Timer register.
-/// This prevents the LAPIC timer from delivering interrupts,
-/// independent of the IO-APIC mask.
-///
-/// # Safety
-/// Must be called after LAPIC init.
-pub unsafe fn mask_lapic_timer() {
-    let current = lapic_read(LAPIC_LVT_TIMER);
-    lapic_write(LAPIC_LVT_TIMER, current | LVT_TIMER_MASK);
-    crate::serial::write_str_nl("[LAPIC] Timer masked");
-}

@@ -9,13 +9,20 @@ mod cpu;
 mod gdt;
 mod idt;
 mod interrupts;
+mod keyboard;
 mod memory;
 mod process;
 mod serial;
 mod panic;
 mod syscall;
 mod elf;
+mod vfs;
+mod initrd;
+mod acpi;
+mod mmio;
+mod pci;
 mod debug;
+pub mod sync_cell;
 
 use indo_core::BootInfo;
 
@@ -86,9 +93,34 @@ pub extern "sysv64" fn kernel_main(boot_info: *const BootInfo) -> ! {
     write_str_nl("[MARK] Before IDT init");
     idt::init();
     write_str_nl("[MARK] After IDT init");
+
+    // Initialize ACPI (after heap init, needs Vec)
+    // Use RSDP from bootloader if available, otherwise scan memory
+    write_str_nl("[MARK] Before ACPI init");
+    let rsdp_from_boot = bi.rsdp_addr.as_u64();
+    crate::acpi::init(if rsdp_from_boot != 0 { Some(rsdp_from_boot) } else { None });
+    write_str_nl("[MARK] After ACPI init");
+
+    // Enumerate PCI devices
+    write_str_nl("[MARK] Before PCI enumerate");
+    crate::pci::enumerate();
+    write_str_nl("[MARK] After PCI enumerate");
+
     write_str_nl("[MARK] Before interrupts init");
-    interrupts::init();
+    let (lapic_phys, ioapic_phys, ioapic_gsi_base) = match crate::acpi::madt_info() {
+        Some(madt) => {
+            let ioapic_phys = if madt.io_apic_addr != 0 { madt.io_apic_addr } else { 0xFEC0_0000 };
+            (madt.local_apic_addr, ioapic_phys, madt.io_apic_gsi_base)
+        }
+        None => (0xFEE0_0000, 0xFEC0_0000, 0),
+    };
+    interrupts::init(lapic_phys, ioapic_phys, ioapic_gsi_base);
     write_str_nl("[MARK] After interrupts init");
+
+    // Initialize keyboard driver (after interrupts, before processes)
+    write_str_nl("[MARK] Before keyboard init");
+    keyboard::init();
+    write_str_nl("[MARK] After keyboard init");
 
     // Initialize syscall MSRs (STAR, LSTAR, SFMASK, EFER SCE, GSBase)
     write_str_nl("[MARK] Before syscall init");
@@ -99,47 +131,101 @@ pub extern "sysv64" fn kernel_main(boot_info: *const BootInfo) -> ! {
     // This prevents code execution via the identity map while keeping it
     // functional for data access (needed to walk user page tables at runtime).
     write_str_nl("[MARK] Before harden_identity_map");
-    unsafe {
-        crate::memory::vmm::harden_identity_map(new_pml4);
-    }
+    crate::memory::vmm::harden_identity_map(new_pml4);
     write_str_nl("[MARK] After harden_identity_map");
 
     write_str_nl("[MARK] Before process init");
     crate::process::init();
     write_str_nl("[MARK] After process init");
 
+    // Initialize VFS and load initrd
+    write_str_nl("[MARK] Before VFS init");
+    crate::vfs::init();
+    write_str_nl("[MARK] After VFS init");
+    write_str_nl("[MARK] Before initrd load");
+    let initrd_data = include_bytes!("../initrd.img");
+    crate::initrd::load_initrd(initrd_data);
+    write_str_nl("[MARK] After initrd load");
+
     write_str_nl("[KERNEL] All init done.");
 
-    // Phase 7: spawn all 7 comprehensive test binaries.
-    // PID 0 = idle, PIDs 1..7 = test processes (MAX_PROCESSES = 8).
-    let tests: &[&[u8]] = &[
-        include_bytes!("../test1_normal.bin"),
-        include_bytes!("../test2_multi.bin"),
-        include_bytes!("../test3_null_deref.bin"),
-        include_bytes!("../test4_invalid_ptr.bin"),
-        include_bytes!("../test5_unmapped.bin"),
-        include_bytes!("../test6_null_ptr.bin"),
-        include_bytes!("../test7_bad_syscall.bin"),
-    ];
-
-    write_str("[KERNEL] Spawning ");
-    write_hex(tests.len() as u64);
-    write_str_nl(" test processes...");
-
-    for (i, test_elf) in tests.iter().enumerate() {
-        write_str("[KERNEL] Test ");
-        write_hex(i as u64 + 1);
-        write_str(" ELF size=");
-        write_hex(test_elf.len() as u64);
-        write_nl();
-        match crate::process::spawn_user(test_elf, Some(0)) {
-            Some(pid) => {
-                write_str("[KERNEL]   -> PID=");
-                write_hex(pid);
-                write_nl();
+    // Phase 9: Spawn the shell from VFS.
+    // PID 0 = idle, PID 1 = init/reaper (kernel-mode).
+    // The shell is loaded from /bin/indosh in the initrd (VFS).
+    // parent=Some(1) means PID 1 reaps the shell when it exits.
+    match crate::vfs::vfs().read_file("/bin/indosh") {
+        Ok(shell_elf) => {
+            write_str("[KERNEL] Shell binary found: ");
+            write_hex(shell_elf.len() as u64);
+            write_str_nl(" bytes");
+            match crate::process::spawn_user(&shell_elf, Some(1)) {
+                Some(pid) => {
+                    write_str("[KERNEL] Shell spawned as PID=");
+                    write_hex(pid);
+                    write_nl();
+                }
+                None => {
+                    write_str_nl("[KERNEL] FAILED to spawn shell (no slot)");
+                }
             }
-            None => {
-                write_str("[KERNEL]   -> FAILED (no slot)\n");
+        }
+        Err(e) => {
+            write_str("[KERNEL] WARNING: /bin/indosh read failed, errno=");
+            write_hex(e.to_errno() as u64);
+            write_nl();
+            // Also try /indosh (flat path in case nested create failed)
+            match crate::vfs::vfs().read_file("/indosh") {
+                Ok(shell_elf) => {
+                    write_str("[KERNEL] Found /indosh (flat): ");
+                    write_hex(shell_elf.len() as u64);
+                    write_str_nl(" bytes");
+                    match crate::process::spawn_user(&shell_elf, Some(1)) {
+                        Some(pid) => {
+                            write_str("[KERNEL] Shell spawned as PID=");
+                            write_hex(pid);
+                            write_nl();
+                        }
+                        None => {
+                            write_str_nl("[KERNEL] FAILED to spawn shell (no slot)");
+                        }
+                    }
+                }
+                Err(e2) => {
+                    write_str("[KERNEL] /indosh also failed, errno=");
+                    write_hex(e2.to_errno() as u64);
+                    write_nl();
+                    write_str_nl("[KERNEL] Falling back to test binaries");
+                }
+            }
+            // Fallback: spawn test binaries if shell not available
+            let tests: &[&[u8]] = &[
+                include_bytes!("../test1_normal.bin"),
+                include_bytes!("../test2_multi.bin"),
+                include_bytes!("../test3_null_deref.bin"),
+                include_bytes!("../test4_invalid_ptr.bin"),
+                include_bytes!("../test5_unmapped.bin"),
+                include_bytes!("../test6_null_ptr.bin"),
+                include_bytes!("../test7_bad_syscall.bin"),
+                include_bytes!("../test8_sleep.bin"),
+                include_bytes!("../test9_stack_overflow.bin"),
+                include_bytes!("../test10_errno.bin"),
+            ];
+            for (i, test_elf) in tests.iter().enumerate() {
+                write_str("[KERNEL] Test ");
+                write_hex(i as u64 + 1);
+                write_str(" ELF size=");
+                write_hex(test_elf.len() as u64);
+                write_nl();
+                match crate::process::spawn_user(test_elf, Some(0)) {
+                    Some(pid) => {
+                        write_str("[KERNEL]   -> PID=");
+                        write_hex(pid);
+                        write_nl();
+                    }
+                    None => {
+                        write_str("[KERNEL]   -> FAILED (no slot)\n");
+                    }
+                }
             }
         }
     }

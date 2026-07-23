@@ -3,22 +3,12 @@
 //! Direct port I/O — no Mutex, no statics.
 //! Safe to call before VMM initialization (works on the UEFI identity map).
 
-use core::fmt;
-
 const COM1_BASE: u16 = 0x3F8;
 
 const UART_DATA:        u16 = COM1_BASE + 0;
-const UART_INT_ENABLE:  u16 = COM1_BASE + 1;
-const UART_FIFO_CTRL:   u16 = COM1_BASE + 2;
-const UART_LINE_CTRL:   u16 = COM1_BASE + 3;
-const UART_MODEM_CTRL:  u16 = COM1_BASE + 4;
 const UART_LINE_STATUS: u16 = COM1_BASE + 5;
 
-const UART_BAUD_LSB:    u16 = COM1_BASE + 0;
-const UART_BAUD_MSB:    u16 = COM1_BASE + 1;
-
 const LSR_THRE: u8 = 1 << 5;
-const BAUD_DIVISOR_115200: u16 = 1;
 
 #[inline]
 unsafe fn outb(port: u16, value: u8) {
@@ -48,18 +38,6 @@ fn wait_for_transmit() {
         while (inb(UART_LINE_STATUS) & LSR_THRE) == 0 {
             core::hint::spin_loop();
         }
-    }
-}
-
-pub fn init() {
-    unsafe {
-        outb(UART_INT_ENABLE, 0x00);
-        outb(UART_LINE_CTRL, 0x80);
-        outb(UART_BAUD_LSB, (BAUD_DIVISOR_115200 & 0xFF) as u8);
-        outb(UART_BAUD_MSB, ((BAUD_DIVISOR_115200 >> 8) & 0xFF) as u8);
-        outb(UART_LINE_CTRL, 0x03);
-        outb(UART_FIFO_CTRL, 0xC7);
-        outb(UART_MODEM_CTRL, 0x03);
     }
 }
 

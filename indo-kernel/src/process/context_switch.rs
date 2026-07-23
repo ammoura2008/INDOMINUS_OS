@@ -468,8 +468,8 @@ pub unsafe extern "C" fn schedule(saved_rsp: u64) -> u64 {
     // ═══════════════════════════════════════════════════════════════════
     // NORMAL PATH
     // ═══════════════════════════════════════════════════════════════════
-    let old_pid_for_diag = sched.current_pid();
-    let old_sp_for_diag = saved_rsp;
+    let _old_pid_for_diag = sched.current_pid();
+    let _old_sp_for_diag = saved_rsp;
 
     // ── DIAGNOSTIC: dump IRET frame of process BEING SAVED (preempted) ──
     // The IRET frame is at saved_rsp + 15*8 (after 15 GP register pushes)
@@ -495,9 +495,9 @@ pub unsafe extern "C" fn schedule(saved_rsp: u64) -> u64 {
 
     sched.save_current_sp(saved_rsp);
 
-    let old_pid = sched.current_pid().unwrap_or(99);
+    let _old_pid = sched.current_pid().unwrap_or(99);
     let new_sp = sched.on_tick();
-    let new_pid = sched.current_pid().unwrap_or(99);
+    let _new_pid = sched.current_pid().unwrap_or(99);
 
     #[cfg(DEBUG_KERNEL)]
     {
@@ -612,7 +612,7 @@ pub unsafe extern "C" fn schedule_force(saved_rsp: u64) -> u64 {
 
     // Force switch: always call switch_next() regardless of quantum.
     let new_sp = sched.switch_next_force();
-    let new_pid = sched.current_pid().unwrap_or(99);
+    let _new_pid = sched.current_pid().unwrap_or(99);
 
     // ── Checkpoint S: after switch_next_force ─────────────────────────
     crate::serial::ddbg(b'S');
@@ -689,6 +689,15 @@ pub unsafe extern "C" fn schedule_force(saved_rsp: u64) -> u64 {
         super::process::free_kernel_stack(dead_kstack);
     }
 
+    // Prevent double-free: zero freed resources so Drop::drop() skips them.
+    // Only when the old process was actually a zombie (resources were freed).
+    if dead_kstack != 0 {
+        if let Some(ref mut old_proc) = sched.processes_mut()[old_pid as usize] {
+            old_proc.kernel_stack_base = 0;
+            old_proc.pml4_phys = 0;
+        }
+    }
+
     // Restore CR3 to the new process's PML4 (required for iretq to user mode)
     if saved_cr3.start_address().as_u64() != kernel_pml4 {
         vmm::switch_page_table(crate::memory::PhysAddr::new(
@@ -718,12 +727,13 @@ pub unsafe extern "C" fn kill_process() -> u64 {
     let mut sched = SCHEDULER.lock();
 
     // Save the dying process's resources BEFORE switching away.
-    let (dead_kstack, dead_pml4, dead_is_user) = {
+    let (dead_kstack, dead_pml4, dead_is_user, dead_pid) = {
         let proc = sched.current_process();
         (
             proc.map(|p| p.kernel_stack_base).unwrap_or(0),
             proc.map(|p| p.pml4_phys).unwrap_or(0),
             proc.map(|p| p.is_user).unwrap_or(false),
+            sched.current_pid().unwrap_or(0),
         )
     };
 
@@ -759,6 +769,15 @@ pub unsafe extern "C" fn kill_process() -> u64 {
     }
     if dead_kstack != 0 {
         super::process::free_kernel_stack(dead_kstack);
+    }
+
+    // Prevent double-free: zero freed resources so Drop::drop() skips them.
+    // kill_process always frees resources, so this is always guarded.
+    if dead_kstack != 0 {
+        if let Some(ref mut old_proc) = sched.processes_mut()[dead_pid as usize] {
+            old_proc.kernel_stack_base = 0;
+            old_proc.pml4_phys = 0;
+        }
     }
 
     // Restore CR3 to the new process's PML4

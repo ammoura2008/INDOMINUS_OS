@@ -99,39 +99,10 @@ pub const KERNEL_HEAP_BASE: u64 = 0xFFFF_FFFF_C000_0000;
 /// Initial size of the kernel heap (4 MiB).
 pub const KERNEL_HEAP_INITIAL_SIZE: u64 = 4 * 1024 * 1024;
 
-/// Virtual address of the kernel stack (grows downward from here).
-/// Placed at the top of the kernel's address range.
-pub const KERNEL_STACK_TOP: u64 = 0xFFFF_FFFF_D000_0000;
-
-/// Size of the kernel stack (16 KiB = 4 pages).
-pub const KERNEL_STACK_SIZE: u64 = 16 * 1024;
-
-/// Virtual address range for per-process kernel stacks.
-/// Each process gets an 8 KiB (2-page) kernel stack from this region.
-/// Stacks grow downward, so the base is the lowest address of the stack.
-pub const PER_PROCESS_KERNEL_STACK_BASE: u64 = 0xFFFF_FFFF_D000_0000;
-pub const PER_PROCESS_KERNEL_STACK_SIZE: u64 = 8192; // 8 KiB = 2 pages
-pub const MAX_PER_PROCESS_STACKS: usize = 8; // Maximum number of per-process stacks
-
-/// Next available offset for a per-process kernel stack.
-static mut NEXT_STACK_OFFSET: u64 = 0;
-
-// ─────────────────────────────────────────────────────────────────────────────
-// User-space memory layout (Ring 3)
-// ─────────────────────────────────────────────────────────────────────────────
-
-/// Virtual base address for user code (4 MiB, below the kernel).
-/// Standard ELF load address — avoids the zero page (NULL pointer safety).
-pub const USER_CODE_BASE: u64 = 0x0000_0000_0040_0000;
-
 /// Virtual address of user stack top (grows downward).
 /// Placed near the top of the canonical lower half, leaving room for
 /// stack growth and guard pages.
 pub const USER_STACK_TOP: u64 = 0x0000_7FFF_FFFF_0000;
-
-/// Size of each user process's kernel stack (8 KiB = 2 pages).
-/// Used for Ring 3 → Ring 0 transitions (syscall, interrupt).
-pub const USER_KERNEL_STACK_SIZE: u64 = 8192;
 
 // ─────────────────────────────────────────────────────────────────────────────
 // Global heap allocator
@@ -180,48 +151,4 @@ fn alloc_error_layout(layout: core::alloc::Layout) -> ! {
     );
 }
 
-/// Allocate a per-process kernel stack from PMM and map it into kernel virtual space.
-///
-/// Returns the virtual address of the stack base (lowest address).
-/// The stack grows downward, so the initial RSP should be at base + PER_PROCESS_KERNEL_STACK_SIZE.
-///
-/// # Safety
-/// Must be called after VMM initialization and with interrupts disabled.
-pub unsafe fn alloc_per_process_kernel_stack() -> u64 {
-    use self::pmm;
-    use self::vmm;
-    use x86_64::structures::paging::PageTableFlags;
 
-    // Allocate 2 contiguous frames (8 KiB)
-    let phys = pmm::alloc_contiguous(2)
-        .expect("PMM: out of memory for per-process kernel stack");
-
-    // Get the next available virtual address
-    let offset = NEXT_STACK_OFFSET;
-    NEXT_STACK_OFFSET += PER_PROCESS_KERNEL_STACK_SIZE;
-
-    if offset >= MAX_PER_PROCESS_STACKS as u64 * PER_PROCESS_KERNEL_STACK_SIZE {
-        panic!("PMM: too many per-process kernel stacks");
-    }
-
-    let virt_base = PER_PROCESS_KERNEL_STACK_BASE + offset;
-
-    // Map the frames into kernel virtual space
-    let flags = PageTableFlags::PRESENT | PageTableFlags::WRITABLE;
-    // Use the kernel's page tables (boot PML4)
-    let kernel_pml4 = {
-        let (frame, _flags) = x86_64::registers::control::Cr3::read();
-        frame.start_address().as_u64()
-    };
-
-    for i in 0..2 {
-        let frame_phys = PhysAddr::new(phys.as_u64() + i * PAGE_SIZE);
-        let frame_virt = x86_64::VirtAddr::new(virt_base + i * PAGE_SIZE);
-        vmm::map_page(PhysAddr::new(kernel_pml4), frame_virt, frame_phys, flags);
-    }
-
-    // Zero the stack
-    core::ptr::write_bytes(virt_base as *mut u64, 0, PER_PROCESS_KERNEL_STACK_SIZE as usize / 8);
-
-    virt_base
-}

@@ -43,7 +43,8 @@ pub const IST_STACK_SIZE: usize = 4096 * 4;
 pub static mut DOUBLE_FAULT_STACK: [u8; IST_STACK_SIZE] = [0; IST_STACK_SIZE];
 
 /// The Task State Segment.
-static mut TSS: TaskStateSegment = TaskStateSegment::new();
+/// Wrapped in SyncUnsafeCell to avoid UB from shared references to mutable statics.
+static TSS: crate::sync_cell::SyncUnsafeCell<TaskStateSegment> = crate::sync_cell::SyncUnsafeCell::new(TaskStateSegment::new());
 
 /// The Global Descriptor Table and its selectors.
 static GDT: Once<(GlobalDescriptorTable, Selectors)> = Once::new();
@@ -85,12 +86,7 @@ pub fn kernel_code_selector() -> SegmentSelector {
 /// Must be called with interrupts disabled (from the timer handler or
 /// with interrupts globally disabled).
 pub unsafe fn set_tss_rsp0(rsp0: u64) {
-    TSS.privilege_stack_table[0] = VirtAddr::new(rsp0);
-}
-
-/// Get the current TSS RSP0 value.
-pub fn get_tss_rsp0() -> u64 {
-    unsafe { TSS.privilege_stack_table[0].as_u64() }
+    (*TSS.get()).privilege_stack_table[0] = VirtAddr::new(rsp0);
 }
 
 // ─────────────────────────────────────────────────────────────────────────────
@@ -105,8 +101,9 @@ pub fn get_tss_rsp0() -> u64 {
 pub fn init() {
     // ── Configure TSS ───────────────────────────────────────────────────────
     unsafe {
+        let tss = &mut *TSS.get();
         // IST[0] = double-fault stack (top, since stacks grow downward)
-        TSS.interrupt_stack_table[DOUBLE_FAULT_IST_INDEX as usize] = {
+        tss.interrupt_stack_table[DOUBLE_FAULT_IST_INDEX as usize] = {
             // With PIC, &raw const gives a physical address. The IST entry
             // must be a kernel virtual address so it works after CR3 switch
             // to a user PML4 (which lacks the identity map).
@@ -127,7 +124,7 @@ pub fn init() {
         let user_code = gdt.append(Descriptor::user_code_segment());
         let user_data = gdt.append(Descriptor::user_data_segment());
 
-        let tss_selector = gdt.append(unsafe { Descriptor::tss_segment(&TSS) });
+        let tss_selector = gdt.append(unsafe { Descriptor::tss_segment(&*TSS.get()) });
 
         (
             gdt,
@@ -202,7 +199,7 @@ pub fn switch_gdt_to_virtual() {
     //
     unsafe {
         // TSS physical address (PIC: &raw const gives relocated phys addr)
-        let tss_phys = &raw const TSS as u64;
+        let tss_phys = &raw const *TSS.get() as u64;
         let tss_virt = crate::memory::phys_to_kernel_virt(tss_phys);
 
         crate::serial::write_str("[TSS] phys="); crate::serial::write_hex(tss_phys);

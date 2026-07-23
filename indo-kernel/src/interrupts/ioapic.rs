@@ -23,16 +23,17 @@
 //! - REDTBL (0x10 + 2*n): Redirection table entry for IRQ n (low dword)
 //! - REDTBL+1 (0x11 + 2*n): Redirection table entry for IRQ n (high dword)
 
-use core::ptr;
+use crate::mmio::MmioRegion;
+use crate::sync_cell::SyncUnsafeCell;
 
-/// IO-APIC base physical address (standard x86, QEMU Q35).
-const IOAPIC_BASE: u64 = 0xFEC0_0000;
+/// IO-APIC MMIO region (mapped via mmio framework)
+static IOAPIC: SyncUnsafeCell<Option<MmioRegion>> = SyncUnsafeCell::new(None);
 
 /// IO-APIC register select port (offset from base).
-const IOREGSEL: u64 = 0x00;
+const IOREGSEL: u32 = 0x00;
 
 /// IO-APIC data window port (offset from base).
-const IOWIN: u64 = 0x10;
+const IOWIN: u32 = 0x10;
 
 /// IO-APIC register IDs.
 const IOAPICID: u32 = 0x00;
@@ -48,8 +49,16 @@ const REDTBL_BASE: u32 = 0x10;
 /// The caller must ensure `reg` is a valid IO-APIC register ID.
 #[inline]
 unsafe fn ioapic_read(reg: u32) -> u32 {
-    ptr::write_volatile((IOAPIC_BASE + IOREGSEL) as *mut u32, reg);
-    ptr::read_volatile((IOAPIC_BASE + IOWIN) as *const u32)
+    match (*IOAPIC.get()).as_ref() {
+        Some(ioapic) => {
+            ioapic.write_reg(IOREGSEL, reg);
+            ioapic.read_reg(IOWIN)
+        }
+        None => {
+            crate::serial::write_str("[IOAPIC] ERROR: read before init\n");
+            0
+        }
+    }
 }
 
 /// Write a 32-bit value to an IO-APIC register.
@@ -58,22 +67,32 @@ unsafe fn ioapic_read(reg: u32) -> u32 {
 /// The caller must ensure `reg` is a valid IO-APIC register ID.
 #[inline]
 unsafe fn ioapic_write(reg: u32, value: u32) {
-    ptr::write_volatile((IOAPIC_BASE + IOREGSEL) as *mut u32, reg);
-    ptr::write_volatile((IOAPIC_BASE + IOWIN) as *mut u32, value);
+    if let Some(ioapic) = (*IOAPIC.get()).as_ref() {
+        ioapic.write_reg(IOREGSEL, reg);
+        ioapic.write_reg(IOWIN, value);
+    } else {
+        crate::serial::write_str("[IOAPIC] ERROR: write before init\n");
+    }
 }
 
 /// Initialize the I/O APIC.
 ///
 /// This function:
-/// 1. Reads the IO-APIC ID and version to verify MMIO access
-/// 2. Masks all redirection entries (disables all IRQs)
-/// 3. Reports the number of redirection entries available
+/// 1. Maps the IO-APIC MMIO region
+/// 2. Reads the IO-APIC ID and version to verify MMIO access
+/// 3. Masks all redirection entries (disables all IRQs)
+/// 4. Reports the number of redirection entries available
 ///
 /// # Safety
 /// Must be called once during kernel initialization, after page tables
-/// are set up and the IO-APIC MMIO region is identity-mapped.
-pub fn init() {
+/// are set up and ACPI has been parsed.
+pub fn init(ioapic_phys: u64) {
     unsafe {
+        *IOAPIC.get() = Some(MmioRegion::new(ioapic_phys));
+        crate::serial::write_str("[IOAPIC] Mapped at phys=");
+        crate::serial::write_hex(ioapic_phys);
+        crate::serial::write_nl();
+
         let id = ioapic_read(IOAPICID);
         let version = ioapic_read(IOAPICVER);
 

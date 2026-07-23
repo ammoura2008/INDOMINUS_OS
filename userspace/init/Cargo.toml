@@ -1,0 +1,11 @@
+[package]
+name = "init"
+version = "0.1.0"
+edition = "2021"
+
+[dependencies]
+indo-syscall = { path = "../syscall" }
+
+[lib]
+name = "init_lib"
+path = "src/lib.rs"

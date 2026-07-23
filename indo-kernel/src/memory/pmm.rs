@@ -53,14 +53,19 @@ const BITMAP_SIZE: usize = MAX_FRAMES / 8;
 /// The bitmap. Each bit represents one 4 KiB physical frame.
 /// Stored as a static array in BSS — zero-initialized (all frames marked free).
 /// We will mark reserved/used frames during initialization.
-static mut BITMAP: [u8; BITMAP_SIZE] = [0; BITMAP_SIZE];
+static BITMAP: crate::sync_cell::SyncUnsafeCell<[u8; BITMAP_SIZE]> = crate::sync_cell::SyncUnsafeCell::new([0; BITMAP_SIZE]);
+
+/// Reference counts for each physical frame. Used by CoW fork.
+/// Value of 0 means the frame is not allocated (don't touch).
+/// Value of 1 means single owner. >1 means shared.
+static REFCOUNTS: crate::sync_cell::SyncUnsafeCell<[u8; MAX_FRAMES]> = crate::sync_cell::SyncUnsafeCell::new([0; MAX_FRAMES]);
 
 /// Number of physical frames we're actually tracking.
 /// Determined by the highest usable address in the UEFI memory map.
-static mut TOTAL_FRAMES: usize = 0;
+static TOTAL_FRAMES: crate::sync_cell::SyncUnsafeCell<usize> = crate::sync_cell::SyncUnsafeCell::new(0);
 
 /// Number of currently free frames.
-static mut FREE_FRAMES: usize = 0;
+static FREE_FRAMES: crate::sync_cell::SyncUnsafeCell<usize> = crate::sync_cell::SyncUnsafeCell::new(0);
 
 /// The PMM is not behind a Mutex because:
 /// 1. During early boot, only one CPU exists (no SMP yet)
@@ -81,7 +86,7 @@ static mut FREE_FRAMES: usize = 0;
 unsafe fn bitmap_set(index: usize) {
     let byte_index = index / 8;
     let bit_offset = index % 8;
-    BITMAP[byte_index] |= 1 << bit_offset;
+    (*BITMAP.get())[byte_index] |= 1 << bit_offset;
 }
 
 /// Clear the bit for frame `index` to 0 (free).
@@ -92,7 +97,7 @@ unsafe fn bitmap_set(index: usize) {
 unsafe fn bitmap_clear(index: usize) {
     let byte_index = index / 8;
     let bit_offset = index % 8;
-    BITMAP[byte_index] &= !(1 << bit_offset);
+    (*BITMAP.get())[byte_index] &= !(1 << bit_offset);
 }
 
 /// Test if the bit for frame `index` is set (allocated).
@@ -103,7 +108,7 @@ unsafe fn bitmap_clear(index: usize) {
 unsafe fn bitmap_test(index: usize) -> bool {
     let byte_index = index / 8;
     let bit_offset = index % 8;
-    (BITMAP[byte_index] & (1 << bit_offset)) != 0
+    ((*BITMAP.get())[byte_index] & (1 << bit_offset)) != 0
 }
 
 // ─────────────────────────────────────────────────────────────────────────────
@@ -133,9 +138,9 @@ pub fn init(memory_map: & indo_core::MemoryMap) {
             }
         }
 
-        TOTAL_FRAMES = ((max_addr + PAGE_SIZE - 1) / PAGE_SIZE) as usize;
-        if TOTAL_FRAMES > MAX_FRAMES {
-            TOTAL_FRAMES = MAX_FRAMES;
+        *TOTAL_FRAMES.get() = ((max_addr + PAGE_SIZE - 1) / PAGE_SIZE) as usize;
+        if *TOTAL_FRAMES.get() > MAX_FRAMES {
+            *TOTAL_FRAMES.get() = MAX_FRAMES;
         }
 
         // Step 2: Start with all frames marked as used (safe default)
@@ -148,21 +153,24 @@ pub fn init(memory_map: & indo_core::MemoryMap) {
         // 2. Mark usable regions as free (clear those bits)
 
         // Set all bits to 1 (all frames used)
-        for byte in BITMAP.iter_mut() {
-            *byte = 0xFF;
+        {
+            let bitmap = &mut *BITMAP.get();
+            for byte in bitmap.iter_mut() {
+                *byte = 0xFF;
+            }
         }
-        FREE_FRAMES = 0;
+        *FREE_FRAMES.get() = 0;
 
         // Step 3: Mark usable regions as free
         for region in memory_map.usable_regions() {
             let start_frame = (region.start.as_u64() / PAGE_SIZE) as usize;
             let end_frame = ((region.start.as_u64() + region.length + PAGE_SIZE - 1) / PAGE_SIZE) as usize;
 
-            let clamped_end = end_frame.min(TOTAL_FRAMES);
+            let clamped_end = end_frame.min(*TOTAL_FRAMES.get());
 
             for frame in start_frame..clamped_end {
                 bitmap_clear(frame);
-                FREE_FRAMES += 1;
+                *FREE_FRAMES.get() += 1;
             }
         }
 
@@ -170,7 +178,7 @@ pub fn init(memory_map: & indo_core::MemoryMap) {
         // Must be after marking usable regions to ensure it stays allocated.
         if !bitmap_test(0) {
             bitmap_set(0);
-            FREE_FRAMES -= 1;
+            *FREE_FRAMES.get() -= 1;
         }
     }
 }
@@ -191,10 +199,11 @@ pub fn alloc_frame() -> Option<PhysAddr> {
     unsafe {
         // Start at frame 1 to skip physical address 0 (BIOS/IVT area).
         // Frame 0 must never be allocated.
-        for index in 1..TOTAL_FRAMES {
+        for index in 1..*TOTAL_FRAMES.get() {
             if !bitmap_test(index) {
                 bitmap_set(index);
-                FREE_FRAMES -= 1;
+                (*REFCOUNTS.get())[index] = 1;
+                *FREE_FRAMES.get() -= 1;
                 return Some(PhysAddr::new(index as u64 * PAGE_SIZE));
             }
         }
@@ -212,78 +221,65 @@ pub fn free_frame(frame: PhysAddr) {
     let index = (frame.as_u64() / PAGE_SIZE) as usize;
 
     unsafe {
-        assert!(index < TOTAL_FRAMES, "frame address out of range");
+        assert!(index != 0, "cannot free frame 0 (BIOS/IVT)");
+        assert!(index < *TOTAL_FRAMES.get(), "frame address out of range");
         assert!(frame.as_u64() % PAGE_SIZE == 0, "frame not page-aligned");
         assert!(bitmap_test(index), "double-free detected");
+        assert!((*REFCOUNTS.get())[index] == 1, "free_frame: refcount != 1 (still referenced by {} other users)", (*REFCOUNTS.get())[index]);
         bitmap_clear(index);
-        FREE_FRAMES += 1;
+        (*REFCOUNTS.get())[index] = 0;
+        *FREE_FRAMES.get() += 1;
     }
 }
 
-/// Allocate contiguous physical frames.
+/// Increment the reference count of a physical frame.
 ///
-/// `count` is the number of contiguous frames to allocate.
-/// Returns the physical address of the first frame, or `None` if
-/// no contiguous region of the requested size is available.
-pub fn alloc_contiguous(count: usize) -> Option<PhysAddr> {
-    if count == 0 {
-        return None;
-    }
-
-    unsafe {
-        let mut run_start: Option<usize> = None;
-        let mut run_length: usize = 0;
-
-        for index in 0..TOTAL_FRAMES {
-            if !bitmap_test(index) {
-                if run_start.is_none() {
-                    run_start = Some(index);
-                    run_length = 1;
-                } else {
-                    run_length += 1;
-                }
-
-                if run_length == count {
-                    let start = run_start.unwrap();
-                    for frame in start..(start + count) {
-                        bitmap_set(frame);
-                        FREE_FRAMES -= 1;
-                    }
-                    return Some(PhysAddr::new(start as u64 * PAGE_SIZE));
-                }
-            } else {
-                run_start = None;
-                run_length = 0;
-            }
-        }
-        None // No contiguous region found
-    }
-}
-
-// ─────────────────────────────────────────────────────────────────────────────
-// Query functions
-// ─────────────────────────────────────────────────────────────────────────────
-
-/// Returns the total number of physical frames the PMM tracks.
-pub fn total_frames() -> usize {
-    unsafe { TOTAL_FRAMES }
-}
-
-/// Returns the number of free physical frames.
-pub fn free_frames() -> usize {
-    unsafe { FREE_FRAMES }
-}
-
-/// Returns the total usable physical memory in bytes.
-pub fn total_usable_bytes() -> u64 {
-    free_frames() as u64 * PAGE_SIZE
-}
-
-/// Check if a physical frame is currently allocated.
-pub fn is_allocated(frame: PhysAddr) -> bool {
+/// Called when a page table entry is duplicated (fork, dup).
+///
+/// # Safety
+/// `frame` must be currently allocated.
+pub fn incref(frame: PhysAddr) {
     let index = (frame.as_u64() / PAGE_SIZE) as usize;
-    assert!(index < unsafe { TOTAL_FRAMES }, "frame address out of range");
-    unsafe { bitmap_test(index) }
+    unsafe {
+        assert!(index < *TOTAL_FRAMES.get(), "frame address out of range");
+        assert!(bitmap_test(index), "incref on unallocated frame");
+        if (*REFCOUNTS.get())[index] < 255 {
+            (*REFCOUNTS.get())[index] += 1;
+        }
+    }
+}
+
+/// Decrement the reference count of a physical frame.
+///
+/// If the reference count reaches 0, the frame is freed.
+/// Called when a page table entry is removed or a process exits.
+///
+/// # Safety
+/// `frame` must be currently allocated with refcount >= 1.
+pub fn decref(frame: PhysAddr) {
+    let index = (frame.as_u64() / PAGE_SIZE) as usize;
+    unsafe {
+        assert!(index < *TOTAL_FRAMES.get(), "frame address out of range");
+        assert!(bitmap_test(index), "decref on unallocated frame");
+        assert!((*REFCOUNTS.get())[index] > 0, "decref: refcount already 0");
+        (*REFCOUNTS.get())[index] -= 1;
+        if (*REFCOUNTS.get())[index] == 0 {
+            bitmap_clear(index);
+            *FREE_FRAMES.get() += 1;
+        }
+    }
+}
+
+/// Get the reference count of a physical frame.
+///
+/// # Safety
+/// `frame` must be currently allocated.
+pub fn get_refcount(frame: PhysAddr) -> u8 {
+    let index = (frame.as_u64() / PAGE_SIZE) as usize;
+    unsafe {
+        assert!(index < *TOTAL_FRAMES.get(), "frame address out of range");
+        (*REFCOUNTS.get())[index]
+    }
 }
 
 /// Mark a physical address range as used (reserved) in the PMM bitmap.
@@ -302,11 +298,11 @@ pub fn mark_region_used(phys_start: u64, phys_end: u64) {
 
     unsafe {
         #[cfg(DEBUG_KERNEL)]
-        let before = FREE_FRAMES;
+        let before = *FREE_FRAMES.get();
         for frame in start_frame..end_frame {
-            if frame < TOTAL_FRAMES && !bitmap_test(frame) {
+            if frame < *TOTAL_FRAMES.get() && !bitmap_test(frame) {
                 bitmap_set(frame);
-                FREE_FRAMES -= 1;
+                *FREE_FRAMES.get() -= 1;
             }
         }
         #[cfg(DEBUG_KERNEL)]
@@ -318,7 +314,7 @@ pub fn mark_region_used(phys_start: u64, phys_end: u64) {
             crate::serial::write_str(" freed_before=");
             crate::serial::write_hex(before as u64);
             crate::serial::write_str(" freed_after=");
-            crate::serial::write_hex(FREE_FRAMES as u64);
+            crate::serial::write_hex(*FREE_FRAMES.get() as u64);
             crate::serial::write_nl();
         }
     }

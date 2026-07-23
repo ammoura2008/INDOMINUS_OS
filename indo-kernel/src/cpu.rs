@@ -6,6 +6,8 @@
 //! - SMAP (Supervisor Mode Access Prevention) — CR4 bit 21
 //! - Other features logged for diagnostics
 
+use crate::sync_cell::SyncUnsafeCell;
+
 /// Cached CPU feature flags, detected once at boot.
 pub struct CpuFeatures {
     pub nx: bool,
@@ -26,26 +28,27 @@ pub struct CpuFeatures {
     pub avx2: bool,
     pub fsgsbase: bool,
     pub tsc_deadline: bool,
-    pub lahf_lm: bool,
     pub rdtscp: bool,
     pub invariant_tsc: bool,
     pub maxphyaddr: u8,
 }
 
 /// Global cached features. Detected once, read many times.
-static mut CPU_FEATURES: CpuFeatures = CpuFeatures {
+/// Wrapped in SyncUnsafeCell to avoid undefined behavior from shared references
+/// to mutable statics (Rust 2024 edition).
+static CPU_FEATURES: SyncUnsafeCell<CpuFeatures> = SyncUnsafeCell::new(CpuFeatures {
     nx: false, smep: false, smap: false, pat: false, apic: false,
     sep: false, syscall: false, mmx: false, sse: false, sse2: false,
     sse3: false, ssse3: false, sse4_1: false, sse4_2: false,
     avx: false, avx2: false, fsgsbase: false, tsc_deadline: false,
-    lahf_lm: false, rdtscp: false, invariant_tsc: false, maxphyaddr: 36,
-};
+    rdtscp: false, invariant_tsc: false, maxphyaddr: 36,
+});
 
 /// Run CPUID with the given leaf and sub-leaf, return (EAX, EBX, ECX, EDX).
 #[inline]
 fn cpuid(leaf: u32, subleaf: u32) -> (u32, u32, u32, u32) {
-    let mut out_eax = leaf;
-    let mut out_ecx = subleaf;
+    let mut eax = leaf;
+    let mut ecx = subleaf;
     let mut result = [0u32; 4];
     unsafe {
         core::arch::asm!(
@@ -56,8 +59,8 @@ fn cpuid(leaf: u32, subleaf: u32) -> (u32, u32, u32, u32) {
             "mov [{ptr} + 8], ecx",
             "mov [{ptr} + 12], edx",
             "pop rbx",
-            inout("eax") out_eax,
-            inout("ecx") out_ecx,
+            inout("eax") eax,
+            inout("ecx") ecx,
             ptr = in(reg) result.as_mut_ptr(),
             out("edx") _,
         );
@@ -72,11 +75,11 @@ pub fn detect() {
         sep: false, syscall: false, mmx: false, sse: false, sse2: false,
         sse3: false, ssse3: false, sse4_1: false, sse4_2: false,
         avx: false, avx2: false, fsgsbase: false, tsc_deadline: false,
-        lahf_lm: false, rdtscp: false, invariant_tsc: false, maxphyaddr: 36,
+        rdtscp: false, invariant_tsc: false, maxphyaddr: 36,
     };
 
     // ── CPUID leaf 0x01: Basic feature flags ───────────────────────────
-    let (eax, ebx, ecx, edx) = cpuid(0x01, 0);
+    let (_eax, ebx, ecx, edx) = cpuid(0x01, 0);
 
     // Max CPUID leaf
     let (max_leaf, _, _, _) = cpuid(0x00, 0);
@@ -124,7 +127,7 @@ pub fn detect() {
     }
 
     unsafe {
-        CPU_FEATURES = f;
+        CPU_FEATURES.get().write(f);
     }
 }
 
@@ -133,7 +136,7 @@ pub fn detect() {
 /// # Safety
 /// Must call `detect()` before reading.
 pub fn features() -> &'static CpuFeatures {
-    unsafe { &CPU_FEATURES }
+    unsafe { &*CPU_FEATURES.get() }
 }
 
 /// Enable SMEP (CR4 bit 20) and SMAP (CR4 bit 21) if supported.

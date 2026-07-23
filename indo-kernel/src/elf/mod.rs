@@ -43,30 +43,9 @@ const PT_LOAD: u32 = 1;
 // Program header flags
 const PF_X: u32 = 1;
 const PF_W: u32 = 2;
-const PF_R: u32 = 4;
-
 // ─────────────────────────────────────────────────────────────────────────────
 // ELF header types (packed C repr for direct parsing from byte slice)
 // ─────────────────────────────────────────────────────────────────────────────
-
-#[repr(C)]
-#[derive(Clone, Copy)]
-struct Elf64Ehdr {
-    e_ident: [u8; 16],
-    e_type: u16,
-    e_machine: u16,
-    e_version: u32,
-    e_entry: u64,
-    e_phoff: u64,
-    e_shoff: u64,
-    e_flags: u32,
-    e_ehsize: u16,
-    e_phentsize: u16,
-    e_phnum: u16,
-    e_shentsize: u16,
-    e_shnum: u16,
-    e_shstrndx: u16,
-}
 
 #[repr(C)]
 #[derive(Clone, Copy)]
@@ -89,9 +68,6 @@ struct Elf64Phdr {
 pub struct ElfImage {
     /// Virtual address of the entry point.
     pub entry: u64,
-    /// Highest virtual address used by any loaded segment (page-aligned upper bound).
-    /// Useful for setting up brk/sbrk.
-    pub max_addr: u64,
 }
 
 /// Errors that can occur during ELF loading.
@@ -105,6 +81,9 @@ pub enum ElfError {
     SegmentOutOfBounds,
     SegmentOverlap,
     MapFailed,
+    BadEntry,
+    BadPhdrSize,
+    SegmentTooLarge,
 }
 
 impl ElfError {
@@ -118,6 +97,9 @@ impl ElfError {
             ElfError::SegmentOutOfBounds => "segment data out of ELF bounds",
             ElfError::SegmentOverlap => "segment overlaps kernel address space",
             ElfError::MapFailed => "failed to map segment pages",
+            ElfError::BadEntry => "entry point not in any loaded segment",
+            ElfError::BadPhdrSize => "invalid program header size",
+            ElfError::SegmentTooLarge => "segment exceeds memory limit",
         }
     }
 }
@@ -191,6 +173,16 @@ fn parse_ehdr(data: &[u8]) -> Result<(u64, u64, u16, u16, u16), ElfError> {
         return Err(ElfError::NoProgramHeaders);
     }
 
+    // Validate program header size (must be at least 56 bytes for Elf64Phdr)
+    if (e_phentsize as usize) < core::mem::size_of::<Elf64Phdr>() {
+        return Err(ElfError::BadPhdrSize);
+    }
+
+    // Validate program header offset is within the ELF data
+    if e_phoff as usize >= data.len() {
+        return Err(ElfError::SegmentOutOfBounds);
+    }
+
     Ok((e_entry, e_phoff, e_phentsize, e_phnum, e_type))
 }
 
@@ -232,10 +224,17 @@ fn parse_phdr(data: &[u8], phoff: u64, phentsize: u16, index: u16) -> Option<Elf
 ///
 /// # Panics
 /// Panics if frame allocation fails or page mapping fails.
+/// Maximum user-space memory per process (256 MiB).
+const MAX_USER_MEM: u64 = 256 * 1024 * 1024;
+
+/// Canonical user-space boundary: everything below this is user-accessible.
+const USER_SPACE_END: u64 = 0x0000_8000_0000_0000;
+
 pub fn load_elf(elf_data: &[u8], pml4_phys: memory::PhysAddr) -> Result<ElfImage, ElfError> {
     let (entry, phoff, phentsize, phnum, _type) = parse_ehdr(elf_data)?;
 
-    let mut max_addr: u64 = 0;
+    let mut entry_in_segment = false;
+    let mut total_mem: u64 = 0; // Cumulative memory across all segments
 
     for i in 0..phnum {
         let phdr = parse_phdr(elf_data, phoff, phentsize, i)
@@ -246,15 +245,41 @@ pub fn load_elf(elf_data: &[u8], pml4_phys: memory::PhysAddr) -> Result<ElfImage
             continue;
         }
 
-        // Validate segment bounds
+        // Validate segment data bounds
         let seg_end = phdr.p_offset.saturating_add(phdr.p_filesz);
         if seg_end > elf_data.len() as u64 {
             return Err(ElfError::SegmentOutOfBounds);
         }
 
-        // Don't allow mapping into kernel space (upper half)
-        if phdr.p_vaddr >= 0xFFFF_8000_0000_0000 {
+        // Don't allow mapping into kernel space (upper half) or non-canonical gap
+        if phdr.p_vaddr >= USER_SPACE_END {
             return Err(ElfError::SegmentOverlap);
+        }
+
+        // Calculate page-aligned bounds with overflow check
+        let virt_start = phdr.p_vaddr & !(PAGE_SIZE - 1);
+        let raw_end = phdr.p_vaddr.checked_add(phdr.p_memsz)
+            .ok_or(ElfError::SegmentOverlap)?;
+        if raw_end >= USER_SPACE_END {
+            return Err(ElfError::SegmentOverlap);
+        }
+        let virt_end = (raw_end + PAGE_SIZE - 1) & !(PAGE_SIZE - 1);
+
+        // Prevent non-canonical addresses (gap between user and kernel halves)
+        if virt_end >= USER_SPACE_END {
+            return Err(ElfError::SegmentOverlap);
+        }
+
+        // Cumulative memory limit across ALL segments
+        let seg_mem = virt_end - virt_start;
+        total_mem = total_mem.checked_add(seg_mem).ok_or(ElfError::SegmentTooLarge)?;
+        if total_mem > MAX_USER_MEM {
+            return Err(ElfError::SegmentTooLarge);
+        }
+
+        // Check if entry point falls within this segment
+        if entry >= virt_start && entry < virt_end {
+            entry_in_segment = true;
         }
 
         // Build page table flags from ELF flags
@@ -262,32 +287,18 @@ pub fn load_elf(elf_data: &[u8], pml4_phys: memory::PhysAddr) -> Result<ElfImage
         if phdr.p_flags & PF_W != 0 {
             flags |= PageTableFlags::WRITABLE;
         }
-        // NX (No Execute): apply to segments that are NOT executable.
-        // This enforces DEP — data/stack/heap cannot be executed.
-        // Requires EFER.NXE to be set (done in syscall::init).
         if phdr.p_flags & PF_X == 0 {
             flags |= PageTableFlags::NO_EXECUTE;
         }
 
-        // Calculate page-aligned bounds
-        let virt_start = phdr.p_vaddr & !(PAGE_SIZE - 1); // align down
-        let virt_end = (phdr.p_vaddr + phdr.p_memsz + PAGE_SIZE - 1) & !(PAGE_SIZE - 1); // align up
-        let num_pages = (virt_end - virt_start) / PAGE_SIZE;
-
-        // Track max address for brk
-        if phdr.p_vaddr + phdr.p_memsz > max_addr {
-            max_addr = phdr.p_vaddr + phdr.p_memsz;
-        }
-
         // Map pages and copy data
+        let num_pages = (virt_end - virt_start) / PAGE_SIZE;
         for page_idx in 0..num_pages {
             let page_virt = VirtAddr::new(virt_start + page_idx * PAGE_SIZE);
 
-            // Allocate a physical frame for this page
             let frame = vmm::PmmFrameAllocator.allocate_frame()
                 .ok_or(ElfError::MapFailed)?;
 
-            // Map the page in the process's PML4
             vmm::map_page(
                 pml4_phys,
                 page_virt,
@@ -295,15 +306,13 @@ pub fn load_elf(elf_data: &[u8], pml4_phys: memory::PhysAddr) -> Result<ElfImage
                 flags,
             );
 
-            // Get the virtual address of the frame (identity-mapped) for copying
             let frame_ptr = unsafe {
                 vmm::phys_to_virt(frame.start_address().as_u64()).as_mut_ptr()
             };
 
-            // Calculate what portion of this page has data vs BSS
             let page_virt_addr = virt_start + page_idx * PAGE_SIZE;
             let seg_data_start = if page_virt_addr >= phdr.p_vaddr {
-                page_virt_addr - phdr.p_vaddr // offset within segment
+                page_virt_addr - phdr.p_vaddr
             } else {
                 0
             };
@@ -324,7 +333,6 @@ pub fn load_elf(elf_data: &[u8], pml4_phys: memory::PhysAddr) -> Result<ElfImage
                 0
             };
 
-            // Copy data from ELF
             if data_in_page > 0 {
                 let src_offset = phdr.p_offset + seg_data_start;
                 let src = &elf_data[src_offset as usize..(src_offset + data_in_page) as usize];
@@ -333,7 +341,6 @@ pub fn load_elf(elf_data: &[u8], pml4_phys: memory::PhysAddr) -> Result<ElfImage
                 }
             }
 
-            // Zero BSS portion
             if bss_in_page > 0 {
                 unsafe {
                     core::ptr::write_bytes(
@@ -346,9 +353,13 @@ pub fn load_elf(elf_data: &[u8], pml4_phys: memory::PhysAddr) -> Result<ElfImage
         }
     }
 
+    // Validate entry point is within a loaded segment
+    if !entry_in_segment {
+        return Err(ElfError::BadEntry);
+    }
+
     Ok(ElfImage {
         entry,
-        max_addr,
     })
 }
 

@@ -129,21 +129,6 @@ pub fn map_page(
     }
 }
 
-/// Unmap a single 4 KiB page at `virtual_addr`.
-///
-/// # Panics
-/// - If the page is not mapped
-pub fn unmap_page(pml4_phys: super::PhysAddr, virtual_addr: VirtAddr) {
-    let page = Page::<Size4KiB>::containing_address(virtual_addr);
-
-    // Safety: pml4_phys is valid, identity map is active
-    let mut mapper = unsafe { mapper_from_pml4(pml4_phys) };
-
-    let (_frame, flush) = mapper.unmap(page)
-        .expect("VMM: failed to unmap page");
-    flush.flush();
-}
-
 /// Translate a virtual address to its physical address.
 ///
 /// Returns `None` if the page is not mapped.
@@ -160,6 +145,59 @@ pub fn translate_addr(pml4_phys: super::PhysAddr, virtual_addr: VirtAddr) -> Opt
         }
         Err(_) => None,
     }
+}
+
+/// Walk the page tables and return a mutable pointer to the leaf PTE for a virtual address.
+///
+/// Returns `None` if any intermediate page table entry is not present.
+/// The returned pointer can be used to read/write the PTE flags (for CoW).
+///
+/// # Safety
+/// - Must be called with the identity map active (kernel PML4 as CR3)
+/// - The caller must ensure the virtual address is valid
+pub unsafe fn walk_page_table_to_pte(
+    pml4_phys: super::PhysAddr,
+    virtual_addr: VirtAddr,
+) -> Option<*mut x86_64::structures::paging::page_table::PageTableEntry> {
+    use x86_64::structures::paging::{PageTable, PageTableIndex};
+
+    let virt = virtual_addr.as_u64();
+    let pml4_virt = phys_to_virt(pml4_phys.as_u64());
+    let pml4 = &*(pml4_virt.as_ptr() as *const PageTable);
+
+    let pml4_idx = PageTableIndex::new(((virt >> 39) & 0x1FF) as u16);
+    if !pml4[pml4_idx].flags().contains(PageTableFlags::PRESENT) {
+        return None;
+    }
+    let pdpt_virt = phys_to_virt(pml4[pml4_idx].addr().as_u64());
+    let pdpt = &*(pdpt_virt.as_ptr() as *const PageTable);
+
+    let pdpt_idx = PageTableIndex::new(((virt >> 30) & 0x1FF) as u16);
+    if !pdpt[pdpt_idx].flags().contains(PageTableFlags::PRESENT) {
+        return None;
+    }
+    if pdpt[pdpt_idx].flags().contains(PageTableFlags::HUGE_PAGE) {
+        return None; // Huge pages not handled for CoW
+    }
+    let pd_virt = phys_to_virt(pdpt[pdpt_idx].addr().as_u64());
+    let pd = &*(pd_virt.as_ptr() as *const PageTable);
+
+    let pd_idx = PageTableIndex::new(((virt >> 21) & 0x1FF) as u16);
+    if !pd[pd_idx].flags().contains(PageTableFlags::PRESENT) {
+        return None;
+    }
+    if pd[pd_idx].flags().contains(PageTableFlags::HUGE_PAGE) {
+        return None; // Huge pages not handled for CoW
+    }
+    let pt_virt = phys_to_virt(pd[pd_idx].addr().as_u64());
+    let pt = &mut *(pt_virt.as_mut_ptr() as *mut PageTable);
+
+    let pt_idx = PageTableIndex::new(((virt >> 12) & 0x1FF) as u16);
+    if !pt[pt_idx].flags().contains(PageTableFlags::PRESENT) {
+        return None;
+    }
+
+    Some(&mut pt[pt_idx] as *mut x86_64::structures::paging::page_table::PageTableEntry)
 }
 
 /// Flush the entire TLB by reloading CR3.
@@ -186,14 +224,6 @@ pub fn flush_tlb_full() {
 pub unsafe fn phys_to_virt(phys: u64) -> VirtAddr {
     // Identity mapping: virtual == physical
     VirtAddr::new(phys)
-}
-
-/// Convert a virtual address to a physical address.
-///
-/// # Safety
-/// The caller must ensure the virtual address is mapped.
-pub unsafe fn virt_to_phys(virt: VirtAddr) -> super::PhysAddr {
-    super::PhysAddr::new(virt.as_u64())
 }
 
 // ─────────────────────────────────────────────────────────────────────────────
@@ -506,9 +536,9 @@ pub unsafe fn free_user_address_space(pml4_phys: super::PhysAddr) {
                             continue;
                         }
 
-                        // Free the mapped physical frame
+                        // Free the mapped physical frame (use decref for CoW pages)
                         let frame_phys = pt_entry.addr().as_u64();
-                        pmm::free_frame(super::PhysAddr::new(frame_phys));
+                        pmm::decref(super::PhysAddr::new(frame_phys));
                     }
 
                     // Free the PT frame itself
@@ -530,4 +560,237 @@ pub unsafe fn free_user_address_space(pml4_phys: super::PhysAddr) {
     // Free the PML4 frame itself (last!) — after restoring CR3, since we're
     // no longer using it.
     pmm::free_frame(pml4_phys);
+}
+
+/// Copy user page mappings from parent to child using Copy-on-Write.
+///
+/// Walks the parent's lower-half page tables. For each present leaf PTE:
+/// 1. Increments the physical frame's reference count
+/// 2. Maps the same physical frame in the child's PML4 as read-only
+/// 3. Makes the parent's PTE read-only too
+///
+/// On write fault, the page fault handler checks refcount:
+/// - refcount > 1 → CoW: allocate private copy
+/// - refcount == 1 → genuine protection fault: kill process
+///
+/// # Safety
+/// - Must be called with the kernel PML4 active (identity map)
+/// - Both parent_pml4 and child_pml4 must be valid user PML4s
+pub unsafe fn copy_user_pages(
+    parent_pml4: super::PhysAddr,
+    child_pml4: super::PhysAddr,
+) -> Result<(), ()> {
+    use x86_64::structures::paging::{PageTable, PageTableFlags, PageTableIndex};
+
+    // Track all child page table frames allocated during this call.
+    // On failure, free them all to prevent physical memory leaks.
+    let mut allocated_frames: alloc::vec::Vec<super::PhysAddr> = alloc::vec::Vec::new();
+
+    // Switch to kernel PML4 for identity map access
+    let kernel_pml4 = super::kernel_pml4_phys();
+    let old_cr3: u64;
+    core::arch::asm!("mov {0}, cr3", out(reg) old_cr3);
+    core::arch::asm!("mov cr3, {0}", in(reg) kernel_pml4);
+
+    let parent_virt = phys_to_virt(parent_pml4.as_u64());
+    let parent_pml4 = &*(parent_virt.as_ptr() as *const PageTable);
+
+    let child_virt = phys_to_virt(child_pml4.as_u64());
+    let child_pml4 = &mut *(child_virt.as_mut_ptr() as *mut PageTable);
+
+    // Walk lower half (entries 0-255)
+    let result: Result<(), ()> = (|| {
+        for pml4_idx in 0..256u16 {
+            let pml4_entry = &parent_pml4[PageTableIndex::new(pml4_idx)];
+            if !pml4_entry.flags().contains(PageTableFlags::PRESENT) {
+                continue;
+            }
+
+            let pdpt_phys = pml4_entry.addr().as_u64();
+            let pdpt_virt = phys_to_virt(pdpt_phys);
+            let pdpt = &*(pdpt_virt.as_ptr() as *const PageTable);
+
+            // Allocate a new PDPT for the child
+            let child_pdpt_frame = pmm::alloc_frame().ok_or(())?;
+            allocated_frames.push(super::PhysAddr::new(child_pdpt_frame.as_u64()));
+            let child_pdpt_virt = phys_to_virt(child_pdpt_frame.as_u64());
+            let child_pdpt = &mut *(child_pdpt_virt.as_mut_ptr() as *mut PageTable);
+
+            // Map the child's PDPT in the child's PML4
+            child_pml4[PageTableIndex::new(pml4_idx)].set_addr(
+                x86_64::PhysAddr::new(child_pdpt_frame.as_u64()),
+                PageTableFlags::PRESENT | PageTableFlags::WRITABLE | PageTableFlags::USER_ACCESSIBLE,
+            );
+
+            for pdpt_idx in 0..512u16 {
+                let pdpt_entry = &pdpt[PageTableIndex::new(pdpt_idx)];
+                if !pdpt_entry.flags().contains(PageTableFlags::PRESENT) {
+                    continue;
+                }
+                if pdpt_entry.flags().contains(PageTableFlags::HUGE_PAGE) {
+                    continue;
+                }
+
+                let pd_phys = pdpt_entry.addr().as_u64();
+                let pd_virt = phys_to_virt(pd_phys);
+                let pd = &*(pd_virt.as_ptr() as *const PageTable);
+
+                let child_pd_frame = pmm::alloc_frame().ok_or(())?;
+                allocated_frames.push(super::PhysAddr::new(child_pd_frame.as_u64()));
+                let child_pd_virt = phys_to_virt(child_pd_frame.as_u64());
+                let child_pd = &mut *(child_pd_virt.as_mut_ptr() as *mut PageTable);
+
+                child_pdpt[PageTableIndex::new(pdpt_idx)].set_addr(
+                    x86_64::PhysAddr::new(child_pd_frame.as_u64()),
+                    PageTableFlags::PRESENT | PageTableFlags::WRITABLE | PageTableFlags::USER_ACCESSIBLE,
+                );
+
+                for pd_idx in 0..512u16 {
+                    let pd_entry = &pd[PageTableIndex::new(pd_idx)];
+                    if !pd_entry.flags().contains(PageTableFlags::PRESENT) {
+                        continue;
+                    }
+                    if pd_entry.flags().contains(PageTableFlags::HUGE_PAGE) {
+                        continue;
+                    }
+
+                    let pt_phys = pd_entry.addr().as_u64();
+                    let pt_virt = phys_to_virt(pt_phys);
+                    let pt = &*(pt_virt.as_ptr() as *const PageTable);
+
+                    let child_pt_frame = pmm::alloc_frame().ok_or(())?;
+                    allocated_frames.push(super::PhysAddr::new(child_pt_frame.as_u64()));
+                    let child_pt_virt = phys_to_virt(child_pt_frame.as_u64());
+                    let child_pt = &mut *(child_pt_virt.as_mut_ptr() as *mut PageTable);
+
+                    child_pd[PageTableIndex::new(pd_idx)].set_addr(
+                        x86_64::PhysAddr::new(child_pt_frame.as_u64()),
+                        PageTableFlags::PRESENT | PageTableFlags::WRITABLE | PageTableFlags::USER_ACCESSIBLE,
+                    );
+
+                    for pt_idx in 0..512u16 {
+                        let pt_entry = &pt[PageTableIndex::new(pt_idx)];
+                        if !pt_entry.flags().contains(PageTableFlags::PRESENT) {
+                            continue;
+                        }
+
+                        let frame_phys = pt_entry.addr().as_u64();
+                        let mut flags = pt_entry.flags();
+
+                        // Increment refcount on the shared physical frame
+                        pmm::incref(super::PhysAddr::new(frame_phys));
+
+                        // Make the page read-only in both parent and child
+                        // The page fault handler uses refcount to detect CoW
+                        flags.remove(PageTableFlags::WRITABLE);
+
+                        // Map in child (read-only)
+                        child_pt[PageTableIndex::new(pt_idx)].set_addr(
+                            x86_64::PhysAddr::new(frame_phys),
+                            flags,
+                        );
+
+                        // Make parent read-only too
+                        let parent_pt_mut = &mut *(pt_virt.as_mut_ptr() as *mut PageTable);
+                        let parent_addr = parent_pt_mut[PageTableIndex::new(pt_idx)].addr();
+                        parent_pt_mut[PageTableIndex::new(pt_idx)].set_addr(
+                            parent_addr,
+                            flags,
+                        );
+                    }
+                }
+            }
+        }
+        Ok(())
+    })();
+
+    if result.is_err() {
+        // Rollback: free all child page table frames allocated so far
+        for frame in allocated_frames {
+            pmm::free_frame(frame);
+        }
+    }
+
+    // Flush TLB
+    super::vmm::flush_tlb_full();
+
+    // Restore original CR3
+    core::arch::asm!("mov cr3, {0}", in(reg) old_cr3);
+
+    result
+}
+
+/// Handle a Copy-on-Write page fault.
+///
+/// Called from the page fault handler when a user-mode write fault occurs.
+/// Checks if the faulting page is shared (refcount > 1) and if so,
+/// allocates a private copy and remaps it as writable.
+///
+/// Returns Ok(()) if CoW was handled, Err(()) if it's a genuine fault.
+pub unsafe fn handle_cow_fault(virtual_addr: u64) -> Result<(), ()> {
+    use x86_64::structures::paging::PageTableFlags;
+
+    // Get the current process's PML4
+    let (cr3_frame, _) = x86_64::registers::control::Cr3::read();
+    let pml4_phys = super::PhysAddr::new(cr3_frame.start_address().as_u64());
+
+    // Switch to kernel PML4 for identity map access
+    let kernel_pml4 = super::kernel_pml4_phys();
+    let old_cr3: u64;
+    core::arch::asm!("mov {0}, cr3", out(reg) old_cr3);
+    core::arch::asm!("mov cr3, {0}", in(reg) kernel_pml4);
+
+    // Walk page tables to find the PTE
+    let pte_ptr = walk_page_table_to_pte(pml4_phys, VirtAddr::new(virtual_addr));
+
+    let result = match pte_ptr {
+        Some(pte_ptr) => {
+            let pte = &*pte_ptr;
+            let frame_phys = pte.addr().as_u64();
+            let flags = pte.flags();
+
+            // Check if this is a CoW page (refcount > 1)
+            let refcount = pmm::get_refcount(super::PhysAddr::new(frame_phys));
+            if refcount > 1 {
+                // CoW: allocate a new frame and copy
+                if let Some(new_frame) = pmm::alloc_frame() {
+                    // Copy the old page contents
+                    let src = phys_to_virt(frame_phys).as_ptr() as *const u8;
+                    let dst = phys_to_virt(new_frame.as_u64()).as_mut_ptr() as *mut u8;
+                    core::ptr::copy_nonoverlapping(src, dst, 4096);
+
+                    // Update the PTE: point to new frame, make writable
+                    let mut new_flags = flags;
+                    new_flags.insert(PageTableFlags::WRITABLE);
+                    (*pte_ptr).set_addr(
+                        x86_64::PhysAddr::new(new_frame.as_u64()),
+                        new_flags,
+                    );
+
+                    // Decrement refcount on old frame
+                    pmm::decref(super::PhysAddr::new(frame_phys));
+
+                    Ok(())
+                } else {
+                    Err(()) // OOM
+                }
+            } else {
+                // refcount == 1: not CoW, genuine protection fault
+                Err(())
+            }
+        }
+        None => Err(()), // Page not mapped
+    };
+
+    // Flush TLB for the faulting address
+    x86_64::registers::control::Cr3::read(); // implicit TLB flush on CR3 reload
+    let (_, _) = x86_64::registers::control::Cr3::read();
+
+    // Restore original CR3
+    core::arch::asm!("mov cr3, {0}", in(reg) old_cr3);
+
+    // Force TLB flush for the specific address
+    x86_64::instructions::tlb::flush(x86_64::VirtAddr::new(virtual_addr));
+
+    result
 }
