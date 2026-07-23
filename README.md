@@ -4,6 +4,45 @@ A from-scratch x86_64 operating system kernel written in Rust and Assembly, desi
 
 ---
 
+## Current Vision
+
+INDOMINUS OS focuses on three core principles:
+
+### 🛡️ Security First
+
+The operating system is designed around strong isolation:
+
+- User programs run separately from the kernel
+- Ring 3 user-space execution
+- Page fault isolation
+- NX (No Execute) memory protection
+- Future application sandboxing
+- Future memory protection improvements
+
+The goal is to make unsafe behavior fail safely instead of compromising the entire system.
+
+### ⚡ Lightweight Performance
+
+INDOMINUS OS aims to remain small and efficient:
+
+- Minimal kernel footprint
+- Custom memory management
+- No unnecessary background services
+- Direct hardware interaction
+- Controlled resource usage
+
+### 🧩 Native User Experience
+
+Instead of relying on many external extensions, future versions aim to integrate useful features directly into the operating system:
+
+- Native application isolation
+- Intelligent window management
+- Built-in recovery/versioning systems
+- Lightweight customization engine
+- Efficient system tools
+
+---
+
 ## Current Status
 
 **Phase:** Foundation Freeze (Phase 7 complete, Foundation Hardening complete)
@@ -19,7 +58,7 @@ A from-scratch x86_64 operating system kernel written in Rust and Assembly, desi
 | IDT | Complete | 256 vectors, exception handlers, keyboard IRQ |
 | PMM | Complete | Bitmap allocator, reference counting, frame 0 protection |
 | VMM | Complete | 4-level page tables, CoW, guard pages, identity-map hardening |
-| Kernel Heap | Complete | Linked-list allocator, 256 KiB initial |
+| Kernel Heap | Complete | Linked-list allocator, 4 MiB initial |
 | ACPI | Complete | RSDP/XSDT/RSDT parsing, MADT, HPET, MCFG, WAET, BGRT |
 | PCI | Complete | Full bus enumeration, BAR parsing, 6 devices detected |
 | LAPIC/IOAPIC | Complete | Dynamic routing from MADT, timer at ~100 Hz |
@@ -280,10 +319,13 @@ indominus rex operating system/
         scheduler.rs            Round-robin scheduler
         context_switch.rs       Timer handler, force_switch, kill_process
         idle.rs                 Idle process (HLT loop)
+        init.rs                 Init/reaper process (PID 1)
         pipe.rs                 Pipe IPC (ring buffer, atomic ops)
       serial.rs                 Serial port output (COM1)
+      sync_cell.rs              SyncUnsafeCell<T> for safe static mut access
       syscall/
-        mod.rs                  14 syscalls, naked handler, MSR setup
+        mod.rs                  16 syscalls, naked handler, MSR setup
+        errno.rs                Negative errno definitions
       vfs/
         mod.rs                  VFS core (File, Inode, FileSystem traits)
         ramfs.rs                RAM filesystem
