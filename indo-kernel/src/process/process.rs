@@ -82,6 +82,15 @@ pub enum ProcessState {
 /// Maximum number of open file handles per process.
 pub const MAX_FILE_HANDLES: usize = 16;
 
+/// Open flags for sys_open (POSIX-compatible values).
+pub const O_RDONLY: u64 = 0x0000;
+pub const O_WRONLY: u64 = 0x0001;
+pub const O_RDWR: u64 = 0x0002;
+pub const O_CREAT: u64 = 0x0040;
+pub const O_TRUNC: u64 = 0x0200;
+/// Close this FD on exec(). POSIX default is inherit (flag clear).
+pub const O_CLOEXEC: u64 = 0x80000;
+
 /// A kernel-mode or user-mode process.
 pub struct Process {
     pub pid: Pid,
@@ -113,6 +122,9 @@ pub struct Process {
     /// File descriptor table. Index = FD number, value = FD type.
     /// FDs 0, 1, 2 are pre-assigned to stdin/stdout/stderr.
     pub fd_types: [FdType; MAX_FDS],
+    /// Per-FD flags. Bit 0 = close_on_exec. When set, the FD is closed on exec().
+    /// POSIX default: clear (FDs are inherited across exec).
+    pub fd_flags: [u8; MAX_FDS],
     /// VFS file handles. Ref-counted via Arc — multiple FDs can share one handle
     /// (e.g. after dup). The inner Box<dyn File> is wrapped in spin::Mutex for
     /// interior mutability (File trait requires &mut self for read/write/seek).
@@ -150,6 +162,7 @@ impl Process {
             generation: 0,
             wake_reason: WakeReason::None,
             fd_types: [FdType::None; MAX_FDS],
+            fd_flags: [0; MAX_FDS],
             file_handles: Default::default(),
         }
     }
@@ -186,6 +199,7 @@ impl Process {
             generation: 0,
             wake_reason: WakeReason::None,
             fd_types,
+            fd_flags: [0; MAX_FDS],
             file_handles: Default::default(),
         }
     }

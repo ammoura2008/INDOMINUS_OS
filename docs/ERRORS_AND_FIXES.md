@@ -294,6 +294,19 @@ Runs with `IF=0` (interrupt gate). No preemption during cleanup.
 | No SMP support | LOW | Phase 12+ | Single-CPU only; all globals unsynchronized |
 | REFCOUNTS overflow silent clamp at 255 | LOW | Phase 9+ | Theoretical only |
 
+### Phase 9.2 Issues (Resolved)
+
+| Issue | Severity | Phase | Status |
+|-------|----------|-------|--------|
+| sys_open had no flags parameter | MEDIUM | 9.2 | **Fixed**: Added flags arg (O_RDONLY/O_WRONLY/O_RDWR/O_CREAT/O_TRUNC) |
+| sys_exec didn't close FDs before loading | HIGH | 9.2 | **Fixed**: Closes FDs with O_CLOEXEC flag, inherits others |
+| Userspace lacked dup2/readdir wrappers | LOW | 9.2 | **Fixed**: Added dup2() and readdir() wrappers |
+| VFS had no end-to-end file I/O test | LOW | 9.2 | **Fixed**: Added phase92_vfs_file_test in main.rs |
+| File descriptor model incomplete | MEDIUM | 9.2 | **Fixed**: Added FdType::File with Arc<Mutex<Box<dyn File>>> + ref_count |
+| exec() unconditionally closed FDs 3+ | HIGH | 9.2b | **Fixed**: Added O_CLOEXEC flag per FD; exec only closes flagged FDs |
+| dup/dup2 didn't clear close-on-exec | MEDIUM | 9.2b | **Fixed**: dup/dup2 always clear O_CLOEXEC on new FD |
+| fd_flags not cleaned up on close | LOW | 9.2b | **Fixed**: sys_close clears fd_flags[fd] |
+
 ---
 
 ## 10. Lessons Learned

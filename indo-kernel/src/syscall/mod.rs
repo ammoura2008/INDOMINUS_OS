@@ -583,7 +583,7 @@ pub unsafe extern "C" fn syscall_dispatch(regs: *mut u64) -> u64 {
         9 => sys_exec(arg0),
         10 => sys_close(arg0),
         11 => sys_dup(arg0),
-        12 => sys_open(arg0),
+        12 => sys_open(arg0, arg1),
         13 => sys_lseek(arg0, arg1),
         14 => sys_dup2(arg0, arg1),
         15 => sys_readdir(arg0, arg1, arg2),
@@ -1206,6 +1206,53 @@ fn sys_exec(path_ptr: u64) -> u64 {
     crate::serial::write_str(&path);
     crate::serial::write_nl();
 
+    // Close FDs marked close-on-exec before loading.
+    // POSIX: only FDs with FD_CLOEXEC flag are closed on exec.
+    // FDs 0, 1, 2 are never closed by exec (stdin/stdout/stderr).
+    {
+        let mut sched = crate::process::scheduler::SCHEDULER.lock();
+        if let Some(pid) = sched.current_pid() {
+            if let Some(ref mut proc) = sched.processes_mut()[pid as usize] {
+                const CLOEXEC_BIT: u8 = 1;
+                for i in 3..crate::process::MAX_FDS {
+                    if proc.fd_flags[i] & CLOEXEC_BIT == 0 {
+                        continue; // Not marked close-on-exec — inherit it
+                    }
+                    let fd_type = proc.fd_types[i];
+                    if fd_type == crate::process::FdType::None {
+                        continue;
+                    }
+                    match fd_type {
+                        crate::process::FdType::Pipe { pipe_idx, writable } => {
+                            let pipe_idx = pipe_idx as usize;
+                            unsafe {
+                                if let Some(ref mut p) = crate::process::PIPES[pipe_idx] {
+                                    crate::process::pipe::pipe_close(p, writable);
+                                    let old = p.refcount.fetch_sub(1, core::sync::atomic::Ordering::AcqRel);
+                                    if old == 1 {
+                                        crate::process::free_pipe(pipe_idx);
+                                    }
+                                }
+                            }
+                        }
+                        crate::process::FdType::FsFile { index } => {
+                            let index = index as usize;
+                            // Check if any other FD shares this handle
+                            let still_referenced = proc.fd_types.iter().enumerate().any(|(j, f)| {
+                                j != i && matches!(f, crate::process::FdType::FsFile { index: idx } if *idx as usize == index)
+                            });
+                            if !still_referenced {
+                                proc.file_handles[index] = None;
+                            }
+                        }
+                        _ => {}
+                    }
+                    proc.fd_types[i] = crate::process::FdType::None;
+                }
+            }
+        }
+    }
+
     // Read the ELF from VFS
     let elf_data = match crate::vfs::vfs().read_file(&path) {
         Ok(data) => data,
@@ -1385,6 +1432,7 @@ fn sys_close(fd: u64) -> u64 {
                 _ => {}
             }
             proc.fd_types[fd as usize] = crate::process::FdType::None;
+            proc.fd_flags[fd as usize] = 0;
             return 0;
         }
     }
@@ -1419,6 +1467,7 @@ fn sys_dup(fd: u64) -> u64 {
                 for i in 0..crate::process::MAX_FDS {
                     if proc.fd_types[i] == crate::process::FdType::None {
                         proc.fd_types[i] = crate::process::FdType::FsFile { index: index as u8 };
+                        proc.fd_flags[i] = 0; // POSIX: dup clears close-on-exec
                         return i as u64;
                     }
                 }
@@ -1438,6 +1487,7 @@ fn sys_dup(fd: u64) -> u64 {
             for i in 0..crate::process::MAX_FDS {
                 if proc.fd_types[i] == crate::process::FdType::None {
                     proc.fd_types[i] = fd_type;
+                    proc.fd_flags[i] = 0; // POSIX: dup clears close-on-exec
                     return i as u64;
                 }
             }
@@ -1523,6 +1573,8 @@ fn sys_dup2(oldfd: u64, newfd: u64) -> u64 {
                 }
             }
             proc.fd_types[newfd as usize] = old_type;
+            // POSIX: dup2 clears close-on-exec on the new FD
+            proc.fd_flags[newfd as usize] = 0;
             return newfd;
         }
     }
@@ -1597,9 +1649,16 @@ fn sys_readdir(fd: u64, buf_ptr: u64, count: u64) -> u64 {
 
 /// SYS_OPEN (12) — Open a file by path.
 ///
-/// Arguments: path_ptr (user pointer to null-terminated path string)
+/// Arguments: path_ptr (user pointer to null-terminated path string), flags
 /// Returns: fd number on success, or negative errno on error
-fn sys_open(path_ptr: u64) -> u64 {
+///
+/// Flags (POSIX-compatible):
+///   0x0000 = O_RDONLY (default)
+///   0x0001 = O_WRONLY
+///   0x0002 = O_RDWR
+///   0x0040 = O_CREAT (create file if it doesn't exist)
+///   0x0200 = O_TRUNC (truncate to zero length)
+fn sys_open(path_ptr: u64, flags: u64) -> u64 {
     use alloc::string::String;
 
     if path_ptr == 0 {
@@ -1644,10 +1703,25 @@ fn sys_open(path_ptr: u64) -> u64 {
         return errno::EINVAL as u64;
     }
 
-    // Open the file via VFS
-    let file = match crate::vfs::vfs().open(&path) {
-        Ok(f) => f,
-        Err(e) => return e.to_errno() as u64,
+    // Open the file via VFS, creating if O_CREAT is set
+    let vfs = crate::vfs::vfs();
+    let file = if flags & crate::process::process::O_CREAT != 0 {
+        // Try to open existing file first
+        match vfs.open(&path) {
+            Ok(f) => f,
+            Err(_) => {
+                // File doesn't exist — create it
+                match vfs.create_file(&path) {
+                    Ok(f) => f,
+                    Err(e) => return e.to_errno() as u64,
+                }
+            }
+        }
+    } else {
+        match vfs.open(&path) {
+            Ok(f) => f,
+            Err(e) => return e.to_errno() as u64,
+        }
     };
 
     // Find a free FD slot and file handle slot
@@ -1663,6 +1737,11 @@ fn sys_open(path_ptr: u64) -> u64 {
                     // Wrap in Arc<Mutex<...>> for ref-counted sharing + interior mutability
                     proc.file_handles[fh] = Some(alloc::sync::Arc::new(spin::Mutex::new(file)));
                     proc.fd_types[fd] = crate::process::FdType::FsFile { index: fh as u8 };
+                    // Set close-on-exec flag if O_CLOEXEC was in the flags
+                    const CLOEXEC_BIT: u8 = 1;
+                    if flags & crate::process::process::O_CLOEXEC != 0 {
+                        proc.fd_flags[fd] |= CLOEXEC_BIT;
+                    }
                     fd as u64
                 }
                 _ => errno::EMFILE as u64,

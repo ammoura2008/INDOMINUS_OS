@@ -93,15 +93,16 @@ This applies to:
 12. idt::init()                      — Build IDT with virtual handler addresses
 13. acpi::init()                     — Parse ACPI tables (RSDP → XSDT → MADT, HPET, etc.)
 14. pci::enumerate()                 — Enumerate PCI devices on all buses
-15. interrupts::init()               — Initialize LAPIC, PIT, IO-APIC (from ACPI MADT)
-16. keyboard::init()                 — Initialize PS/2 keyboard driver
-17. syscall::init()                  — Initialize syscall MSRs (STAR, LSTAR, SFMASK, EFER)
-18. vmm::harden_identity_map()       — Set NX on all identity-mapped pages
-19. process::init()                  — Initialize scheduler, create PID 0 (idle), PID 1 (init/reaper)
-20. vfs::init()                      — Initialize VFS (RAM filesystem)
-21. initrd::load_initrd()            — Load initrd (cpio newc archive)
-22. Spawn user processes             — Load ELF from VFS or test binaries (PID 2+)
-23. process::start_scheduler()       — Enable PIT, start timer-driven context switching
+15. phase91_block_test()             — Verify block device abstraction (RAM disk I/O)
+16. interrupts::init()               — Initialize LAPIC, PIT, IO-APIC (from ACPI MADT)
+17. keyboard::init()                 — Initialize PS/2 keyboard driver
+18. syscall::init()                  — Initialize syscall MSRs (STAR, LSTAR, SFMASK, EFER)
+19. vmm::harden_identity_map()       — Set NX on all identity-mapped pages
+20. process::init()                  — Initialize scheduler, create PID 0 (idle), PID 1 (init/reaper)
+21. vfs::init()                      — Initialize VFS (RAM filesystem)
+22. initrd::load_initrd()            — Load initrd (cpio newc archive)
+23. Spawn user processes             — Load ELF from VFS or test binaries (PID 2+)
+24. process::start_scheduler()       — Enable PIT, start timer-driven context switching
 ```
 
 ## GDT / TSS Layout
@@ -245,6 +246,104 @@ Hardware IRQs (vectors 33–47) use `extern "x86-interrupt"` handlers generated 
 Physical `0xFEE00000` is mapped to virtual `0xFFFFFFFFFEE00000` in the kernel's page table (via `vmm::init_kernel_page_tables`). The upper-half mapping is shared by all PML4s (entries 256–511), so it survives CR3 switches to user PML4s (which lack the identity map).
 
 LAPIC EOI register: `0xFFFFFFFFFEE000B0` (physical `0xFEE000B0`).
+
+## Block Device Layer (Phase 9.1)
+
+### Purpose
+
+The block device layer is the boundary between storage hardware and filesystems. It provides a hardware-agnostic interface so that filesystems (FAT32, ext2, etc.) can operate without knowing whether the underlying device is AHCI, NVMe, VirtIO, USB storage, or a RAM disk.
+
+### Architecture
+
+```text
+User Applications
+       ↓
+Syscalls / File Descriptor API
+       ↓
+Process File Descriptor Table
+       ↓
+VFS
+       ↓
+Filesystem Implementation (FAT32, ext2, etc.)
+       ↓
+Block Device Layer  ← ← ← YOU ARE HERE
+       ↓
+Hardware Driver (AHCI, NVMe, VirtIO, USB, RAM)
+```
+
+### BlockDevice Trait (`block/mod.rs`)
+
+```rust
+pub trait BlockDevice: Send + Sync {
+    fn read_sector(&self, lba: u64, buf: &mut [u8]) -> Result<(), BlockError>;
+    fn write_sector(&self, lba: u64, buf: &[u8]) -> Result<(), BlockError>;
+    fn sector_size(&self) -> u32;
+    fn total_sectors(&self) -> u64;
+    fn name(&self) -> &str;
+}
+```
+
+Key design decisions:
+- **Sector-based API:** Initial implementation assumes 512-byte sectors. Callers must always use `sector_size()` — never hardcode 512.
+- **`&self` for writes:** Real hardware devices mutate state through MMIO registers despite shared references. The RAM disk uses `Mutex<Vec<u8>>` for interior mutability.
+- **`Send + Sync`:** Required for `Arc<dyn BlockDevice>` across threads.
+- **Single-sector operations:** Keeps the API simple. Multi-sector transfers can be built on top.
+
+### BlockError Enum
+
+| Variant | errno | Description |
+|---------|-------|-------------|
+| `InvalidBufferSize` | EINVAL (22) | Buffer size doesn't match sector size |
+| `OutOfBounds` | EINVAL (22) | LBA >= total_sectors |
+| `DeviceNotReady` | ENODEV (19) | Device not initialized |
+| `IoError` | EIO (5) | Hardware read/write failure |
+| `ReadOnly` | EROFS (30) | Device is read-only |
+| `TooManyDevices` | EMFILE (24) | Registry full (max 16) |
+| `DeviceAlreadyExists` | EEXIST (17) | Device already registered |
+| `NoSuchDevice` | ENODEV (19) | Device ID not found |
+
+### BlockDeviceRegistry (`block/registry.rs`)
+
+Global registry for block devices. Devices are identified by numeric IDs (0..15).
+
+```rust
+pub fn register_device(device: Arc<dyn BlockDevice>) -> Result<usize, BlockError>;
+pub fn get_device(id: usize) -> Option<Arc<dyn BlockDevice>>;
+pub fn unregister_device(id: usize) -> Option<Arc<dyn BlockDevice>>;
+```
+
+Uses `spin::Mutex` for safe concurrent access, matching the PCI device enumeration pattern.
+
+### RAM Disk (`block/ramdisk.rs`)
+
+In-memory block device for development and testing. Allocates a fixed heap buffer (max 16 MiB) and exposes it as a block device.
+
+```rust
+let rd = Arc::new(RamDisk::new(8, 512)); // 8 sectors, 512 bytes each
+crate::block::registry::register_device(rd.clone())?;
+```
+
+The RAM disk proves that higher layers can operate without knowing the underlying storage hardware. Future drivers (AHCI, NVMe, VirtIO) will implement the same `BlockDevice` trait.
+
+### Validation Rules
+
+The block device layer treats all inputs as untrusted:
+- Buffer sizes are validated against `sector_size()`
+- LBAs are validated against `total_sectors()`
+- Integer overflow is checked in offset calculations (`checked_mul`)
+- Errors are returned (not panicked) for invalid parameters
+
+### Future Integration
+
+```
+AHCI driver    → implements BlockDevice → registered in BlockDeviceRegistry
+NVMe driver    → implements BlockDevice → registered in BlockDeviceRegistry
+VirtIO driver  → implements BlockDevice → registered in BlockDeviceRegistry
+USB driver     → implements BlockDevice → registered in BlockDeviceRegistry
+FAT32          → calls read_sector/write_sector via Arc<dyn BlockDevice>
+ext2           → calls read_sector/write_sector via Arc<dyn BlockDevice>
+procfs/devfs   → filesystem-only, no block device needed
+```
 
 ## Syscall ABI
 
@@ -395,10 +494,130 @@ GS_BASE = 0 (user mode).
 | 9 | sys_exec | path_ptr | never (force_switch) or u64::MAX |
 | 10 | sys_close | fd | 0 or u64::MAX |
 | 11 | sys_dup | fd | new_fd or u64::MAX |
-| 12 | sys_open | path_ptr | fd or u64::MAX |
+| 12 | sys_open | path_ptr, flags | fd or u64::MAX |
 | 13 | sys_lseek | fd, offset, whence | position or u64::MAX |
 | 14 | sys_dup2 | oldfd, newfd | new_fd or u64::MAX |
 | 15 | sys_readdir | fd, buf_ptr, count | bytes read or u64::MAX |
+
+## VFS Core & File Descriptor Model (Phase 9.2)
+
+### Overview
+
+The VFS provides a unified, filesystem-independent view. Every file operation
+flows through the FD table → VFS → filesystem → block device chain.
+
+### Core Traits (`vfs/mod.rs`)
+
+```rust
+trait Inode {
+    fn inode_number(&self) -> usize;
+    fn name(&self) -> &str;
+    fn file_type(&self) -> FileType;
+    fn size(&self) -> usize;
+    fn open(&self) -> Result<Arc<Mutex<Box<dyn File>>>, VfsError>;
+}
+
+trait File: Send + Sync {
+    fn read(&self, buf: &mut [u8], offset: usize) -> Result<usize, VfsError>;
+    fn write(&self, data: &[u8], offset: usize) -> Result<usize, VfsError>;
+    fn seek(&self, pos: SeekFrom) -> Result<usize, VfsError>;
+    fn truncate(&self, size: usize) -> Result<(), VfsError>;
+    fn close(&self);
+}
+
+trait FileSystem: Send + Sync {
+    fn name(&self) -> &str;
+    fn root(&self) -> Arc<Mutex<dyn Inode>>;
+    fn open(&self, path: &str, flags: u32) -> Result<Arc<Mutex<dyn Inode>>, VfsError>;
+    fn create(&self, path: &str) -> Result<Arc<Mutex<dyn Inode>>, VfsError>;
+    fn ls(&self, path: &str) -> Result<Vec<(String, FileType)>, VfsError>;
+}
+```
+
+### File Descriptor Model (`process/process.rs`)
+
+```rust
+enum FdType {
+    File(Arc<Mutex<Box<dyn File>>>),
+    Pipe(Arc<Pipe>),
+    None,
+}
+
+struct FileDescriptor {
+    fd_type: FdType,
+    ref_count: u8,
+    position: usize,
+}
+```
+
+- Max 8 FDs per process, 16 global file handles
+- FD 0 = stdin (pipe), FD 1 = stdout (pipe)
+- Ref-counting supports dup/dup2/fork/inheritance
+- Open flags: O_RDONLY (0), O_WRONLY (1), O_RDWR (2), O_CREAT (0x40), O_TRUNC (0x200), O_CLOEXEC (0x80000)
+
+### FD Semantics (POSIX-compatible)
+
+**dup2(oldfd, newfd):**
+- Both FDs share the same open-file description (same `Arc<Mutex<Box<dyn File>>>`)
+- Shared state: file offset, status flags — read/write on either FD advances the shared offset
+- close-on-exec flag is cleared on newfd (POSIX: dup never inherits CLOEXEC)
+- Ref-counted: closing one FD does not affect the other
+
+**Independent open() calls:**
+- Each open() creates a new `RamFileHandle` with `pos: 0`
+- The underlying data (`Arc<Mutex<Vec<u8>>>`) is shared (same file data)
+- The file position is independent — read/write on one does not affect the other
+
+**fork():**
+- Parent and child share the same open-file descriptions (Arc refcount++)
+- File offsets are shared — read/write by one process advances the other's offset
+- This is correct POSIX behavior (not CoW for file offsets)
+
+**exec():**
+- Only FDs with the O_CLOEXEC flag (bit 0 of fd_flags) are closed
+- FDs without O_CLOEXEC are inherited by the new program
+- FDs 0, 1, 2 (stdin/stdout/stderr) are never closed by exec
+- Default: O_CLOEXEC is clear (FDs are inherited across exec)
+- dup/dup2 always clear O_CLOEXEC on the new FD
+
+### FD Lifecycle
+
+```
+open() → allocates fd_slot + file_handles slot → FdType::FsFile { index }
+  ↓
+dup2(old, new) → copies FdType, clears fd_flags[new] → both share same handle
+  ↓
+fork() → clones fd_types + file_handles (Arc refcount++) → shared file descriptions
+  ↓
+exec() → closes FDs with O_CLOEXEC set → inherited FDs remain open
+  ↓
+close() → if last reference, drops Arc → frees file handle
+  ↓
+Process::drop() → closes all FDs, decrements pipe refcounts
+```
+
+### VFS Flow
+
+```
+Userspace: open(path) → syscall(SYS_OPEN)
+  → sys_open(path_ptr, flags)
+  → VFS::open(path, flags)
+    → if O_CREAT: RamFs::create(path) → FileEntry → Arc<File>
+    → RamFs::open(path) → FileEntry → Arc<File>
+  → process.install_file_handle(Arc<File>)
+  → returns fd index
+
+Userspace: write(fd, buf) → syscall(SYS_WRITE)
+  → sys_write(fd, buf)
+  → process.get_file_handle(fd) → Arc<File>
+  → file.write(buf) → updates inode size
+
+Userspace: read(fd, buf) → syscall(SYS_READ)
+  → sys_read(fd, buf)
+  → process.get_file_handle(fd) → Arc<File>
+  → file.read(buf, offset) → data
+  → process.file_handles[fd].position += bytes_read
+```
 
 ## Process Lifecycle
 

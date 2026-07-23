@@ -45,9 +45,9 @@ Instead of relying on many external extensions, future versions aim to integrate
 
 ## Current Status
 
-**Phase:** Foundation Freeze (Phase 7 complete, Foundation Hardening complete)
+**Phase:** Foundation Freeze (Phase 7 complete, Foundation Hardening complete, Phase 9.1-9.2 complete)
 **Stability:** 10/10 regression passes, all critical/high-severity bugs fixed
-**Binary size:** 281.8 KB kernel, 51 KB bootloader
+**Binary size:** 307 KB kernel, 51 KB bootloader
 
 ### What Works
 
@@ -69,6 +69,8 @@ Instead of relying on many external extensions, future versions aim to integrate
 | Process Mgmt | Complete | Spawn, fork, exec, exit, waitpid, zombie reaping |
 | Scheduler | Complete | Preemptive round-robin, 5-tick quantum (50ms) |
 | VFS | Complete | RAM filesystem, path resolution, file operations |
+| Block Devices | Complete | BlockDevice trait, RamDisk, device registry, Arc<dyn BlockDevice> abstraction |
+| File Descriptors | Complete | FD table, open/close/read/write/dup/dup2/lseek, ref-counted handles, O_CLOEXEC |
 | Initrd | Complete | cpio newc parser, security-hardened |
 | Pipe IPC | Complete | Ring buffer, blocking read/write, atomic operations |
 | User Programs | Complete | 10 test binaries, Python ELF generator |
