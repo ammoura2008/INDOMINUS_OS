@@ -376,9 +376,9 @@ fn read_file_data(
             if bytes_read >= buf_len {
                 break;
             }
-            device
-                .read_sector(sector + s, &mut sector_buf)
-                .map_err(|_| VfsError::IoError)?;
+            if let Err(_) = device.read_sector(sector + s, &mut sector_buf) {
+                return Err(VfsError::IoError);
+            }
             let to_copy = core::cmp::min(512, buf_len - bytes_read);
             buf[bytes_read..bytes_read + to_copy]
                 .copy_from_slice(&sector_buf[..to_copy]);
@@ -627,9 +627,11 @@ impl Inode for FatFileInode {
     fn open(&self) -> Result<Box<dyn File>, VfsError> {
         let device =
             crate::block::registry::get_device(self.inner.device_id).ok_or(VfsError::IoError)?;
+
         let chain = read_cluster_chain(device.as_ref(), &self.inner.bpb, self.first_cluster)?;
 
         let mut data = vec![0u8; self.size as usize];
+
         read_file_data(device.as_ref(), &self.inner.bpb, &chain, &mut data)?;
 
         Ok(Box::new(FatFileHandle {

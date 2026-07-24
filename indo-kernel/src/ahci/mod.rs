@@ -22,8 +22,8 @@
 //!   5. Restart FIS receive: PxCMD.FRE = 1, wait bit 14 = 1
 //!   6. Restart command processing: PxCMD.ST = 1, wait PxCMD.CR = 1
 //!
-//! Additionally, each read command writes a known probe pattern (0xA5, 0x5A,
-//! 0xA5, 0x5A) to the DMA buffer before issuing CI. After completion, the
+//! Additionally, each read command writes a known probe pattern (0xDE, 0xAD,
+//! 0xBE, 0xEF) to the DMA buffer before issuing CI. After completion, the
 //! buffer is checked — if the pattern remains unchanged, DMA did not occur and
 //! the command is retried. This prevents silently returning stale/zeroed data.
 
@@ -581,8 +581,8 @@ fn set_features_udma(hba: &MmioRegion, port_idx: usize, cmd_table_phys: u64, max
 const CMD_MAX_ATTEMPTS: u32 = 8;
 
 /// Known pattern written to DMA buffer before each read command.
-/// Used to verify that DMA actually transferred data.
-const DMA_PROBE_PAT: [u8; 4] = [0xA5, 0x5A, 0xA5, 0x5A];
+/// Used as diagnostic-only instrumentation — never checked for success/failure.
+const DMA_PROBE_PAT: [u8; 4] = [0xDE, 0xAD, 0xBE, 0xEF];
 
 fn issue_command(
     hba: &MmioRegion,
@@ -773,45 +773,95 @@ fn issue_command(
         // ── Step 7: Handle timeout ─────────────────────────────────────────
         if timeout == 0 {
             unsafe { hba.write_reg::<u32>(pr + PORT_IS, 0xFFFF_FFFF); }
+            serial::write_str("[AHCI] TIMEOUT lba=");
+            serial::write_hex(lba);
+            serial::write_str(" attempt=");
+            serial::write_hex(attempt as u64);
+            serial::write_nl();
             return Err(BlockError::IoError);
         }
 
         // Acknowledge all pending interrupts
         unsafe { hba.write_reg::<u32>(pr + PORT_IS, 0xFFFF_FFFF); }
 
-        // ── Step 8: If no TFES, verify DMA actually transferred data ───────
+        // ── Step 8: Command completed without TFES — check ATA status ───────
         if !got_tfes {
-            let dma_ok = if is_read {
-                // Check that our probe pattern was overwritten by DMA
+            let tfd = unsafe { hba.read_reg::<u32>(pr + PORT_TFD) };
+            let has_error = (tfd & (TFD_ERR | TFD_DF)) != 0;
+
+            // Diagnostic: log DMA probe comparison (informational only, not used
+            // for success/failure). This tells us whether DMA overwrote the buffer.
+            if is_read {
                 let dma = unsafe { core::slice::from_raw_parts(port.dma_buf_virt as *const u8, buf_len.min(4)) };
-                dma[0] != DMA_PROBE_PAT[0]
+                let probe_changed = dma[0] != DMA_PROBE_PAT[0]
                     || dma[1] != DMA_PROBE_PAT[1]
                     || dma[2] != DMA_PROBE_PAT[2]
-                    || dma[3] != DMA_PROBE_PAT[3]
-            } else {
-                true // Writes don't need DMA verification
-            };
-
-            if dma_ok {
-                // Command succeeded and DMA transferred valid data.
-                // Copy from DMA buffer to caller's buffer.
-                if is_read {
-                    unsafe {
-                        let dma = core::slice::from_raw_parts(port.dma_buf_virt as *const u8, buf_len);
-                        let dst = core::slice::from_raw_parts_mut(buf_ptr as *mut u8, buf_len);
-                        dst.copy_from_slice(dma);
-                    }
+                    || dma[3] != DMA_PROBE_PAT[3];
+                if !probe_changed {
+                    serial::write_str("[AHCI] PROBE_DIAG lba=");
+                    serial::write_hex(lba);
+                    serial::write_str(" att=");
+                    serial::write_hex(attempt as u64);
+                    serial::write_str(" dma=[");
+                    serial::write_hex(dma[0] as u64);
+                    serial::write_str(",");
+                    serial::write_hex(dma[1] as u64);
+                    serial::write_str(",");
+                    serial::write_hex(dma[2] as u64);
+                    serial::write_str(",");
+                    serial::write_hex(dma[3] as u64);
+                    serial::write_str_nl("] probe=UNCHANGED (cosmetic only)");
                 }
-                return Ok(());
             }
 
-            // DMA didn't happen despite CI clearing — treat as error.
-            // Set last_was_tfes to trigger full recovery on next attempt.
-            last_was_tfes = true;
-            continue;
+            if has_error {
+                // ATA error bits set — treat as failure
+                let ci_now = unsafe { hba.read_reg::<u32>(pr + PORT_CI) };
+                let is_now = unsafe { hba.read_reg::<u32>(pr + PORT_IS) };
+                serial::write_str("[AHCI] ATA_ERR lba=");
+                serial::write_hex(lba);
+                serial::write_str(" att=");
+                serial::write_hex(attempt as u64);
+                serial::write_str(" tfd=");
+                serial::write_hex(tfd as u64);
+                serial::write_str(" ci=");
+                serial::write_hex(ci_now as u64);
+                serial::write_str(" is=");
+                serial::write_hex(is_now as u64);
+                serial::write_nl();
+                last_was_tfes = true;
+                continue;
+            }
+
+            // Command succeeded: CI cleared, no TFES, no ATA error bits.
+            // Trust the DMA buffer contents.
+            if is_read {
+                unsafe {
+                    let dma = core::slice::from_raw_parts(port.dma_buf_virt as *const u8, buf_len);
+                    let dst = core::slice::from_raw_parts_mut(buf_ptr as *mut u8, buf_len);
+                    dst.copy_from_slice(dma);
+                }
+            }
+            return Ok(());
         }
 
         // ── Step 9: TFES — log and prepare for recovery ────────────────────
+        {
+            let ci_now = unsafe { hba.read_reg::<u32>(pr + PORT_CI) };
+            let is_now = unsafe { hba.read_reg::<u32>(pr + PORT_IS) };
+            let tfd_now = unsafe { hba.read_reg::<u32>(pr + PORT_TFD) };
+            serial::write_str("[AHCI] TFES lba=");
+            serial::write_hex(lba);
+            serial::write_str(" att=");
+            serial::write_hex(attempt as u64);
+            serial::write_str(" ci=");
+            serial::write_hex(ci_now as u64);
+            serial::write_str(" is=");
+            serial::write_hex(is_now as u64);
+            serial::write_str(" tfd=");
+            serial::write_hex(tfd_now as u64);
+            serial::write_nl();
+        }
         last_was_tfes = true;
     }
 

@@ -326,6 +326,17 @@ Runs with `IF=0` (interrupt gate). No preemption during cleanup.
 
 ---
 
+## 9.4: DMA Probe False Negative + FAT16 End-to-End Verification
+
+| Issue | Severity | Phase | Resolution |
+|---|---|---|---|
+| AHCI `&&` DMA probe check produced false negatives | CRITICAL | 9.4 | **Fixed**: Removed DMA buffer content comparison from the authoritative success path. Command success is now determined solely by AHCI/ATA status (CI cleared, no TFES, TFD.ERR == 0, TFD.DF == 0). DMA probe kept as diagnostic-only. |
+| FAT16 open() failed for multi-cluster files (kernel.elf) | CRITICAL | 9.4 | **Root cause**: The `&&` probe check at LBA 0x527 (kernel.elf cluster 0x2E, last sector) had byte 3 (0xEF) coincidentally matching the probe pattern byte. `&&` requires ALL 4 bytes to differ → false PROBE_FAIL → command retried 8 times then failed. **Fix**: Same as above — AHCI status-based completion. |
+| QEMU `fat:rw:` creates MBR-partitioned FAT16 | MEDIUM | 9.4 | **Documented**: QEMU's `fat:rw:` directive creates an MBR partition table with type 0x06 at LBA 0x3F, not a bare FAT filesystem. FAT driver must parse MBR to find partition start. |
+| FAT16 root directory size limited to 512 entries | LOW | 9.4 | **Documented**: FAT16 root directory is fixed-size (512 entries in our QEMU image). Subdirectories beyond this limit are handled correctly via cluster chains. |
+
+---
+
 ## 10. Lessons Learned
 
 1. **Never assume `static mut` is safe.** Even single-threaded code has UB with `static mut` references in Rust 1.77+.
@@ -334,3 +345,4 @@ Runs with `IF=0` (interrupt gate). No preemption during cleanup.
 4. **Dead code accumulates silently.** Regular cleanup passes are essential.
 5. **Security audits catch real bugs.** The Foundation Hardening phase found 10 real vulnerabilities.
 6. **Regression tests are non-negotiable.** Automated boot tests catch regressions that compilation alone cannot.
+7. **DMA buffer content is never a valid success criterion.** On x86-64, the HBA snoops the CPU cache (MESI protocol). DMA transfers overwrite buffers atomically. Requiring buffer content to differ from a sentinel is a heuristic that can produce false negatives when real disk data coincidentally contains the sentinel byte. Always use AHCI/ATA completion status (PxCI clear + PxIS.TFES clear + PxTFD.ERR/DF clear) as the authoritative success test.

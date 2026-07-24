@@ -116,6 +116,48 @@ After any kernel change, run this checklist to verify no regressions.
 [ ] 0 compiler errors, warnings limited to intentionally-kept items
 ```
 
+## Phase 9.4: End-to-End Verification (AHCI + FAT16 + VFS)
+
+```
+Section 1: AHCI Raw Sector I/O
+[ ] T1.1 MBR read + signature 0x55AA
+[ ] T1.2 Partition boot sector + valid BPB
+[ ] T1.3 Four consecutive sector reads (LBA 1-4)
+[ ] T1.4 Scattered LBA reads OK
+[ ] T1.5 Triple read-after-read consistent (LBA 0x3F)
+[ ] T1.6 Out-of-bounds read returns error
+[ ] T1.7 Wrong buffer size returns error
+[ ] T1.8 MBR triple-read consistent + partition table
+[ ] T1.9 FAT boot sector triple-read consistent + valid BPB
+
+Section 2: FAT16 Filesystem
+[ ] T2.0 FAT16 filesystem mounted
+[ ] T2.0b FAT re-mount consistent
+[ ] T2.1 Filesystem variant: FAT16
+[ ] T2.2 Root dir: EFI, NvVars, startup.nsh present
+[ ] T2.2b Root readdir consistent (2 reads)
+[ ] T2.3 EFI/BOOT subdirectory found
+[ ] T2.4 Deep lookup: EFI/BOOT/BOOTX64.EFI
+[ ] T2.5 Read BOOTX64.EFI: MZ + consistent
+[ ] T2.6 Read kernel.elf: ELF header + consistent (CRITICAL — multi-cluster, 446,872 bytes)
+
+Section 3: VFS Integration
+[ ] T3.0 FAT16 mounted at /disk via VFS
+[ ] T3.1 VFS resolve('/disk') -> directory
+[ ] T3.2 VFS resolve('/disk/EFI') -> directory
+[ ] T3.3 VFS read startup.nsh: consistent
+[ ] T3.4 VFS readdir('/disk'): EFI + startup found
+[ ] T3.5 VFS read_file: BOOTX64.EFI consistent + MZ
+[ ] T3.6 open non-existent -> NotFound
+[ ] T3.7 VFS rejects malformed paths
+
+Section 4: Regression Tests
+[ ] Phase 9.1 Block device abstraction: ALL PASSED
+[ ] Phase 9.2 VFS file I/O: ALL PASSED
+[ ] Phase 9.2b FD semantics: ALL PASSED
+[ ] Phase 9.3 AHCI disk read: ALL PASSED
+```
+
 ## How to Run
 
 ```powershell

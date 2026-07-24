@@ -409,6 +409,31 @@ Provides SATA disk access via the AHCI (Advanced Host Controller Interface) spec
 - QEMU's `-drive format=raw,file=fat:rw:DIR` attaches drive to AHCI port 0
 - Verified: HBA reset, IDENTIFY DEVICE (0xFC000 sectors = 504 MB), MBR read (0x55AA)
 
+### AHCI Command Completion (Phase 9.4 — final design)
+
+Command success/failure is determined **solely** by AHCI/ATA hardware status:
+
+1. **PxCI cleared** — HBA finished processing the command slot
+2. **PxIS.TFES == 0** — no Task File Error Status
+3. **PxTFD.ERR == 0** — no ATA error bits
+4. **PxTFD.DF == 0** — no device fault
+
+If all four conditions hold, the command succeeded and the DMA buffer contains valid data. The DMA probe pattern (`[0xDE, 0xAD, 0xBE, 0xEF]`) is written before each read as **diagnostic-only instrumentation** — it is never used as a success/failure condition.
+
+**Why not probe-based completion:** Real disk data can coincidentally contain any byte value, including probe pattern bytes. Requiring all bytes to differ from the sentinel (`&&` check) produces false negatives when real sector data coincidentally matches one or more bytes. On x86-64, DMA is cache-coherent (HBA snoops CPU cache via MESI), so partial DMA does not occur — if the command completed successfully, the entire buffer was written.
+
+### TFES Recovery
+
+After TFES, the HBA's command engine is in a degraded state where PxCI writes are silently accepted but no DMA occurs. Full recovery requires (per AHCI spec §6.2.2):
+
+1. Stop command processing: PxCMD.ST = 0, wait PxCMD.CR = 0
+2. Stop FIS receive: PxCMD.FRE = 0, wait bit 14 = 0
+3. Wait for TFD.BSY/DRQ to clear (drive idle)
+4. Restart FIS receive: PxCMD.FRE = 1, wait bit 14 = 1
+5. Restart command processing: PxCMD.ST = 1, wait PxCMD.CR = 1
+
+Maximum 8 attempts per command. Recovery is bounded and deterministic.
+
 ## Syscall ABI
 
 ### Overview

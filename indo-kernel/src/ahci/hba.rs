@@ -77,6 +77,12 @@ pub const TFD_BSY: u32 = 1 << 7;
 /// Task File Data: DRQ (data request)
 pub const TFD_DRQ: u32 = 1 << 3;
 
+/// Task File Data: ERR (error)
+pub const TFD_ERR: u32 = 1 << 0;
+
+/// Task File Data: DF (device fault)
+pub const TFD_DF: u32 = 1 << 1;
+
 /// Port Signature
 pub const PORT_SIG: u32 = 0x24;
 
