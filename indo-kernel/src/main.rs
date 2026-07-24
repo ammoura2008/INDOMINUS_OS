@@ -22,6 +22,7 @@ mod acpi;
 mod mmio;
 mod pci;
 mod block;
+mod ahci;
 mod debug;
 pub mod sync_cell;
 
@@ -65,7 +66,6 @@ fn phase91_block_test() {
     // 2. Register in global registry
     let dev_id = crate::block::registry::register_device(rd.clone())
         .expect("Failed to register RAM disk");
-    assert_eq!(dev_id, 0, "First device must get ID 0");
     write_str_nl("[TEST]   Registry OK");
 
     // 3. Write known data to sector 3, read back, verify
@@ -127,20 +127,79 @@ fn phase91_block_test() {
     write_str_nl("[TEST]   Buffer size check OK");
 
     // 7. Lookup from registry
-    let dev = crate::block::registry::get_device(0);
-    assert!(dev.is_some(), "Device 0 must exist in registry");
+    let dev = crate::block::registry::get_device(dev_id);
+    assert!(dev.is_some(), "Device must exist in registry");
     let dev = dev.unwrap();
     assert_eq!(dev.name(), "ramdisk");
-    assert!(crate::block::registry::get_device(1).is_none(), "Device 1 must not exist");
     write_str_nl("[TEST]   Registry lookup OK");
 
     // 8. Unregister
-    let removed = crate::block::registry::unregister_device(0);
+    let removed = crate::block::registry::unregister_device(dev_id);
     assert!(removed.is_some(), "Unregister must return device");
-    assert!(crate::block::registry::get_device(0).is_none(), "Device 0 must be gone");
+    assert!(crate::block::registry::get_device(dev_id).is_none(), "Device must be gone");
     write_str_nl("[TEST]   Unregister OK");
 
     write_str_nl("[TEST] Phase 9.1: ALL TESTS PASSED");
+}
+
+/// Phase 9.3 AHCI disk read verification.
+///
+/// Reads sector 0 (MBR) from the AHCI disk and verifies the boot signature
+/// (0x55AA at bytes 510-511). Read-only — does not write to avoid corrupting
+/// the boot disk.
+fn phase93_ahci_test() {
+    use crate::block::{BlockDevice, registry};
+
+    write_str_nl("[TEST] Phase 9.3: AHCI disk read");
+
+    // Look up AHCI disk from registry
+    let disk = match registry::get_device(0) {
+        Some(d) => d,
+        None => {
+            write_str_nl("[TEST] Phase 9.3: SKIPPED (no device 0)");
+            return;
+        }
+    };
+
+    assert!(disk.name().starts_with("ahci"), "device name must start with 'ahci'");
+    write_str("[TEST]   Device: ");
+    write_str(disk.name());
+    write_str(" sectors=");
+    write_hex(disk.total_sectors());
+    write_str(" ssize=");
+    write_hex(disk.sector_size() as u64);
+    write_nl();
+
+    // Read sector 0 (MBR)
+    let mut buf = [0u8; 512];
+    match disk.read_sector(0, &mut buf) {
+        Ok(()) => {
+            write_str_nl("[TEST]   Read sector 0 OK");
+        }
+        Err(e) => {
+            write_str("[TEST]   FAIL: read_sector(0) error=");
+            write_hex(e.to_errno() as u64);
+            write_nl();
+            return;
+        }
+    }
+
+    // Check MBR boot signature: bytes 510=0x55, 511=0xAA
+    assert_eq!(buf[510], 0x55, "MBR byte 510 must be 0x55, got 0x{:02X}", buf[510]);
+    assert_eq!(buf[511], 0xAA, "MBR byte 511 must be 0xAA, got 0x{:02X}", buf[511]);
+    write_str_nl("[TEST]   MBR signature OK (0x55AA)");
+
+    // Out-of-bounds read must fail
+    let mut junk = [0u8; 512];
+    assert!(disk.read_sector(disk.total_sectors(), &mut junk).is_err());
+    write_str_nl("[TEST]   Out-of-bounds check OK");
+
+    // Wrong buffer size must fail
+    let mut small = [0u8; 256];
+    assert!(disk.read_sector(0, &mut small).is_err());
+    write_str_nl("[TEST]   Buffer size check OK");
+
+    write_str_nl("[TEST] Phase 9.3: ALL TESTS PASSED");
 }
 
 /// Phase 9.2 VFS file I/O verification.
@@ -575,10 +634,20 @@ pub extern "sysv64" fn kernel_main(boot_info: *const BootInfo) -> ! {
     crate::pci::enumerate();
     write_str_nl("[MARK] After PCI enumerate");
 
+    // Phase 9.3: Initialize AHCI (after PCI, needs bus mastering + MMIO)
+    write_str_nl("[MARK] Before AHCI init");
+    crate::ahci::init();
+    write_str_nl("[MARK] After AHCI init");
+
     // Phase 9.1: Block device abstraction verification
     write_str_nl("[MARK] Before block device test");
     phase91_block_test();
     write_str_nl("[MARK] After block device test");
+
+    // Phase 9.3: AHCI disk read verification
+    write_str_nl("[MARK] Before AHCI disk test");
+    phase93_ahci_test();
+    write_str_nl("[MARK] After AHCI disk test");
 
     write_str_nl("[MARK] Before interrupts init");
     let (lapic_phys, ioapic_phys, ioapic_gsi_base) = match crate::acpi::madt_info() {

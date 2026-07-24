@@ -309,6 +309,23 @@ Runs with `IF=0` (interrupt gate). No preemption during cleanup.
 
 ---
 
+## 9.3: AHCI Storage Driver
+
+| Issue | Severity | Phase | Resolution |
+|---|---|---|---|
+| Wrong PCI BAR index (`bars[4]` instead of `bars[5]`) | CRITICAL | 9.3 | **Fixed**: AHCI ABAR is at BAR5 (offset 0x24), not BAR4. Changed to `pci.bar_address(5)` |
+| MmioRegion stored physical address, used as virtual | HIGH | 9.3 | **Fixed**: `MmioRegion::new()` now stores the virtual address from `map_mmio_page()` instead of the physical address |
+| AHCI PCI prog_if filter too narrow (0x01 only) | MEDIUM | 9.3 | **Fixed**: Accept prog_if 0x01 (AHCI 1.0) or 0x02 (AHCI 1.3) |
+| Port signature check unreliable after HBA reset | HIGH | 9.3 | **Fixed**: Use SSTS.DET (device detection status) instead of PORT_SIG to find active ports |
+| HbaCmdHeader struct layout wrong (16 bytes, extra `prdta_len` field) | CRITICAL | 9.3 | **Fixed**: Restructured to 32 bytes matching AHCI spec. PRDTL is bits 16-31 of DW0 (`opts`), not a separate field |
+| PRDT byte count off-by-one in IDENTIFY DEVICE | MEDIUM | 9.3 | **Fixed**: Changed `set_byte_count(511)` to `set_byte_count(512)` since `set_byte_count` subtracts 1 internally |
+| DMA page allocation used NO_CACHE flags for RAM | MEDIUM | 9.3 | **Fixed**: DMA buffers from PMM are identity-mapped; removed incorrect NO_CACHE/WRITE_THROUGH page table flags |
+| CAP register read as u64 (includes GHC in high bits) | LOW | 9.3 | **Fixed**: Changed to `read_reg::<u32>()` to read only the 32-bit CAP register |
+| Port init missing FRE/FR/CR wait sequence | MEDIUM | 9.3 | **Fixed**: Added wait for FR (FIS Receive Running) after FRE, and wait for CR (Command List Running) after ST |
+| Block device test assumed ramdisk at ID 0 | MEDIUM | 9.3 | **Fixed**: Test now uses actual `dev_id` from `register_device()` instead of hardcoded 0 |
+
+---
+
 ## 10. Lessons Learned
 
 1. **Never assume `static mut` is safe.** Even single-threaded code has UB with `static mut` references in Rust 1.77+.

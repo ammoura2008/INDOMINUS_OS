@@ -47,7 +47,7 @@ Instead of relying on many external extensions, future versions aim to integrate
 
 **Phase:** Foundation Freeze (Phase 7 complete, Foundation Hardening complete, Phase 9.1-9.2 complete)
 **Stability:** 10/10 regression passes, all critical/high-severity bugs fixed
-**Binary size:** 307 KB kernel, 51 KB bootloader
+**Binary size:** 333 KB kernel, 51 KB bootloader
 
 ### What Works
 
@@ -419,7 +419,7 @@ indominus rex operating system/
 
 ### Phase 10: Device Drivers
 - [ ] VGA/framebuffer text mode
-- [ ] ATA/AHCI disk driver
+- [x] ATA/AHCI disk driver
 - [ ] Keyboard layout (US QWERTY)
 - [ ] Mouse (PS/2)
 

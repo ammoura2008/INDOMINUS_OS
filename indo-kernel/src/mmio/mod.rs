@@ -75,11 +75,11 @@ pub struct MmioRegion {
 
 impl MmioRegion {
     /// Create a new MMIO region from a physical base address.
-    /// Maps the page if not already mapped.
+    /// Maps the page into upper-half virtual space and stores the virtual address.
     pub fn new(phys_base: u64) -> Self {
         let page_phys = phys_base & !0xFFF;
-        unsafe { map_mmio_page(page_phys); }
-        MmioRegion { base: phys_base }
+        let virt = unsafe { map_mmio_page(page_phys) };
+        MmioRegion { base: virt }
     }
 
     /// Create an MMIO region from a pre-computed virtual address.

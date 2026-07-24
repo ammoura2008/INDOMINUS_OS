@@ -345,6 +345,70 @@ ext2           → calls read_sector/write_sector via Arc<dyn BlockDevice>
 procfs/devfs   → filesystem-only, no block device needed
 ```
 
+## AHCI Storage Driver (Phase 9.3)
+
+### Purpose
+
+Provides SATA disk access via the AHCI (Advanced Host Controller Interface) specification. Implements the `BlockDevice` trait, making SATA disks available to the VFS and filesystem layers.
+
+### Architecture
+
+```text
+┌─────────────────────────────────────────────────────────┐
+│ AHCI Driver (ahci/mod.rs)                               │
+│                                                         │
+│  AhciDisk { hba_phys, port: Mutex<AhciPort>, name }    │
+│       ↓ implements                                      │
+│  BlockDevice trait (read_sector, write_sector)          │
+│       ↓ registered in                                   │
+│  BlockDeviceRegistry (global, spin::Mutex)              │
+└─────────────────────────────────────────────────────────┘
+       ↑ MMIO access                 ↑ DMA via identity mapping
+       ↓                             ↓
+┌──────────────────────┐   ┌──────────────────────────────┐
+│ HBA Registers        │   │ DMA Structures (per port)    │
+│ (ahci/hba.rs)        │   │                              │
+│                      │   │ Command List (32×32B headers) │
+│ GHC, CAP, IS, PI, VS │   │ Received FIS (256B)          │
+│ Port: CLB, FB, IS,   │   │ Command Table (CFIS + PRDT)  │
+│ CMD, TFD, SIG, SSTS, │   │ DMA Buffer (4KB sector data) │
+│ SCTL, SERR, SACT, CI │   │                              │
+└──────────────────────┘   └──────────────────────────────┘
+       ↑ MMIO (upper-half mapped)    ↑ Physical (PMM, identity-mapped)
+```
+
+### Initialization Sequence
+
+1. **PCI scan**: Find controller at class=0x01, subclass=0x06, prog_if=0x01|0x02
+2. **Enable bus mastering**: Set PCI command bits 1-2
+3. **Map ABAR**: BAR5 → upper-half MMIO via `MmioRegion::new()`
+4. **HBA reset**: Write GHC.HR=1, wait for clear
+5. **Enable AHCI mode**: Set GHC.AE (bit 31)
+6. **Port detection**: Read SSTS.DET for each port (0x03 = device present)
+7. **Port init**: Stop commands, set CLB/FB, enable FRE, start ST, wait CR
+8. **IDENTIFY DEVICE**: Issue 0xEC command, parse 512-byte response
+9. **Register**: Add to `BlockDeviceRegistry`
+
+### AHCI DMA Model
+
+- DMA buffers allocated from PMM (identity-mapped: phys == virt)
+- Command List, FIS, Command Table: all PMM-allocated, identity-mapped
+- PRDT entries reference physical addresses (for AHCI controller DMA)
+- CPU accesses buffers via the same identity-mapped virtual address
+
+### Key Files
+
+| File | Purpose |
+|---|---|
+| `ahci/mod.rs` | AhciDisk struct, init, port management, command issuing |
+| `ahci/hba.rs` | HBA register definitions, CmdHeader/PrdtEntry structs |
+
+### QEMU Verification
+
+- Q35 machine: ICH9 AHCI at PCI 0:1F.2 (vendor=0x8086, dev=0x2922)
+- QEMU's `-drive format=raw,file=fat:rw:DIR` attaches drive to AHCI port 0
+- Verified: HBA reset, IDENTIFY DEVICE (0xFC000 sectors = 504 MB), MBR read (0x55AA)
+
 ## Syscall ABI
 
 ### Overview
