@@ -10,8 +10,8 @@
 0xFFFF_FFFF_FEE0_0000 ─────────────────────────────────── LAPIC MMIO (1 page)
 0xFFFF_FFFF_FED0_0000                                       (mapped from phys 0xFEE00000)
                     ...
-0xFFFF_FFFF_C000_0000 ─────────────────────────────────── Kernel heap start (4 MiB)
-0xFFFF_FFFF_BFFF_FFFF                                       Kernel heap end
+0xFFFF_FFFF_C000_0000 ─────────────────────────────────── Kernel heap start (16 MiB)
+0xFFFF_FFFF_C0FF_FFFF                                       Kernel heap end
                     ...
 0xFFFF_FFFF_8000_0000 ─────────────────────────────────── Kernel .text start
                     ...                                     Kernel .text, .rodata, .data, .bss
@@ -39,7 +39,7 @@
 |--------|-------|-------------|
 | `KERNEL_VIRT_BASE` | `0xFFFFFFFF80000000` | Kernel virtual base (-2 GiB) |
 | `KERNEL_HEAP_BASE` | `0xFFFFFFFFC0000000` | Kernel heap start |
-| `KERNEL_HEAP_INITIAL_SIZE` | `4 * 1024 * 1024` | 4 MiB initial heap |
+| `KERNEL_HEAP_INITIAL_SIZE` | `16 * 1024 * 1024` | 16 MiB initial heap |
 | `USER_STACK_TOP` | `0x00007FFFFFFF0000` | User stack top |
 | `PAGE_SIZE` | `4096` | 4 KiB page |
 
@@ -50,7 +50,7 @@ Note: Kernel stack, user code base, and per-process kernel stack size are alloca
 Kernel page tables (`vmm::init_kernel_page_tables`) create:
 
 1. **Kernel higher-half mapping:** physical kernel pages → virtual `0xFFFFFFFF80000000+`
-2. **Kernel heap:** physical frames allocated by PMM → virtual `0xFFFFFFFFC0000000..0xFFFFFFFFC0400000`
+2. **Kernel heap:** physical frames allocated by PMM → virtual `0xFFFFFFFFC0000000..0xFFFFFFFFC1000000`
 3. **Identity map:** first 4 GiB (virtual == physical) for safe CR3 transition
 4. **LAPIC MMIO:** physical `0xFEE00000` → virtual `0xFFFFFFFFFEE00000` (1 page, shared via PML4 entries 256–511)
 
@@ -89,7 +89,7 @@ This applies to:
  8. vmm::init_kernel_page_tables()   — Create new PML4 with higher-half + identity map
  9. vmm::switch_page_table()         — Load new PML4 into CR3 (identity map still active)
 10. gdt::switch_gdt_to_virtual()     — Patch GDT/TSS to virtual addresses, reload GDTR+TR
-11. init_heap()                      — Initialize kernel heap allocator (4 MiB)
+11. init_heap()                      — Initialize kernel heap allocator (16 MiB)
 12. idt::init()                      — Build IDT with virtual handler addresses
 13. acpi::init()                     — Parse ACPI tables (RSDP → XSDT → MADT, HPET, etc.)
 14. pci::enumerate()                 — Enumerate PCI devices on all buses
