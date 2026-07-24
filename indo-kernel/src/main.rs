@@ -23,6 +23,7 @@ mod mmio;
 mod pci;
 mod block;
 mod ahci;
+mod fat32;
 mod debug;
 pub mod sync_cell;
 
@@ -200,6 +201,67 @@ fn phase93_ahci_test() {
     write_str_nl("[TEST]   Buffer size check OK");
 
     write_str_nl("[TEST] Phase 9.3: ALL TESTS PASSED");
+}
+
+/// Phase 9.4: Mount FAT from block device 0 and verify root directory listing.
+fn phase94_fat32_init() {
+    use crate::block::registry;
+    use crate::vfs::FileSystem;
+
+    match fat32::Fat32Fs::new(0) {
+        Ok(fs) => {
+            write_str_nl("[FAT] Filesystem mounted");
+
+            // List root directory
+            let root = fs.root();
+            match root.readdir() {
+                Ok(entries) => {
+                    write_str("[FAT] Root directory: ");
+                    write_hex(entries.len() as u64);
+                    write_str(" entries");
+                    write_nl();
+                    for entry in &entries {
+                        write_str("[FAT]   ");
+                        write_str(entry);
+                        write_nl();
+                    }
+                }
+                Err(e) => {
+                    write_str("[FAT] readdir failed: errno=");
+                    write_hex(e.to_errno() as u64);
+                    write_nl();
+                }
+            }
+
+            // Register the filesystem with VFS at /disk
+            crate::vfs::vfs_mut().mount("/disk", alloc::sync::Arc::new(fs));
+            write_str_nl("[FAT] Mounted at /disk");
+
+            // Try reading files via VFS (paths relative to /disk mount)
+            let test_paths = ["/disk/EFI/BOOT/BOOTX64.EFI", "/disk/EFI/INDOMINUS/kernel.elf"];
+            for path in &test_paths {
+                match crate::vfs::vfs().read_file(path) {
+                    Ok(data) => {
+                        write_str("[FAT]   Read ");
+                        write_str(path);
+                        write_str(": ");
+                        write_hex(data.len() as u64);
+                        write_str_nl(" bytes");
+                    }
+                    Err(_) => {
+                        write_str("[FAT]   NOT FOUND: ");
+                        write_str(path);
+                        write_nl();
+                    }
+                }
+            }
+        }
+        Err(e) => {
+            write_str("[FAT] Mount failed: errno=");
+            write_hex(e.to_errno() as u64);
+            write_nl();
+        }
+    }
 }
 
 /// Phase 9.2 VFS file I/O verification.
@@ -685,6 +747,12 @@ pub extern "sysv64" fn kernel_main(boot_info: *const BootInfo) -> ! {
     write_str_nl("[MARK] Before VFS init");
     crate::vfs::init();
     write_str_nl("[MARK] After VFS init");
+
+    // Phase 9.4: Mount FAT16 from AHCI disk (device 0) at /disk
+    // Must be after VFS init since it calls vfs_mut().mount()
+    write_str_nl("[MARK] Before FAT32 init");
+    phase94_fat32_init();
+    write_str_nl("[MARK] After FAT32 init");
 
     // Phase 9.2: VFS file I/O verification
     write_str_nl("[MARK] Before VFS file test");

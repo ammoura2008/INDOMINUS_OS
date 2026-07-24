@@ -2,6 +2,30 @@
 //!
 //! Provides block-level storage access via AHCI/SATA.
 //! Implements the `BlockDevice` trait for integration with the VFS layer.
+//!
+//! ## TFES Error Recovery
+//!
+//! On QEMU's AHCI implementation, Task File Error Status (TFES) leaves the
+//! command engine in a degraded state where subsequent PxCI writes are silently
+//! accepted but no DMA transfer occurs — the HBA reports completion (PxCI
+//! clears) without writing data to the DMA buffer.
+//!
+//! Root cause: After TFES, the HBA's internal command processing state machine
+//! retains stale state. Simply clearing IS/SERR and reissuing CI is
+//! insufficient; the command engine must be fully stopped and restarted.
+//!
+//! Recovery sequence (AHCI spec §6.2.2):
+//!   1. Clear PxIS and PxSERR (acknowledge errors)
+//!   2. Stop command processing: PxCMD.ST = 0, wait PxCMD.CR = 0
+//!   3. Stop FIS receive: PxCMD.FRE = 0, wait bit 14 = 0
+//!   4. Wait for TFD.BSY and TFD.DRQ to clear (drive idle)
+//!   5. Restart FIS receive: PxCMD.FRE = 1, wait bit 14 = 1
+//!   6. Restart command processing: PxCMD.ST = 1, wait PxCMD.CR = 1
+//!
+//! Additionally, each read command writes a known probe pattern (0xA5, 0x5A,
+//! 0xA5, 0x5A) to the DMA buffer before issuing CI. After completion, the
+//! buffer is checked — if the pattern remains unchanged, DMA did not occur and
+//! the command is retried. This prevents silently returning stale/zeroed data.
 
 pub mod hba;
 
@@ -232,8 +256,11 @@ fn init_port(hba: &MmioRegion, hba_phys: u64, port_idx: usize) -> Result<AhciPor
     }
     wait_cmd_stopped(hba, port_idx);
 
-    // Clear interrupt status
-    unsafe { hba.write_reg::<u32>(pr + PORT_IS, 0xFFFF_FFFF); }
+    // Clear interrupt status and error registers
+    unsafe {
+        hba.write_reg::<u32>(pr + PORT_IS, 0xFFFF_FFFF);
+        hba.write_reg::<u32>(pr + PORT_SERR, 0xFFFF_FFFF);
+    }
 
     // Allocate DMA structures (page-aligned from PMM)
     let cmd_list_page = alloc_dma_page().ok_or("alloc cmd list")?;
@@ -304,7 +331,7 @@ fn init_port(hba: &MmioRegion, hba_phys: u64, port_idx: usize) -> Result<AhciPor
     }
 
     // Run IDENTIFY DEVICE to get geometry
-    let (sector_size, total_sectors) = identify_device(hba, port_idx, cmd_table_phys, dma_buf_phys, dma_buf_virt);
+    let (sector_size, total_sectors, max_udma) = identify_device(hba, port_idx, cmd_table_phys, dma_buf_phys, dma_buf_virt);
 
     if total_sectors == 0 {
         return Err("no sectors detected");
@@ -316,7 +343,31 @@ fn init_port(hba: &MmioRegion, hba_phys: u64, port_idx: usize) -> Result<AhciPor
     serial::write_hex(total_sectors);
     serial::write_str(" ssize=");
     serial::write_hex(sector_size as u64);
+    serial::write_str(" udma=");
+    serial::write_hex(max_udma as u64);
     serial::write_nl();
+
+    // NOTE: SET FEATURES (0xEF subcommand 03h = Set Transfer Mode) is deferred.
+    // On QEMU's AHCI, issuing SET FEATURES as a non-data DMA command leaves
+    // stale DRQ=1 in TFD, which poisons subsequent DMA reads. The device
+    // already supports UDMA (confirmed by IDENTIFY word 88), and QEMU's AHCI
+    // defaults to a DMA-capable mode. On real hardware, SET FEATURES can be
+    // added back as a dedicated initialization step after port recovery.
+    if max_udma > 0 {
+        serial::write_str("[AHCI] Device supports UDMA mode ");
+        serial::write_hex(max_udma as u64);
+        serial::write_str_nl(" (SET FEATURES deferred)");
+    }
+
+    // Warm-up read: issue and discard a dummy READ DMA EXT for sector 0.
+    // On QEMU's AHCI, the first DMA command after IDENTIFY DEVICE may fail
+    // (TFES) because the device hasn't fully settled into DMA mode. Subsequent
+    // DMA commands succeed. This warm-up primes the port so the first real
+    // read (from FAT mount) works.
+    //
+    // Update: warm-up alone doesn't work because it shifts the failure by one.
+    // The real fix is a retry in issue_command. This warm-up is kept as a
+    // no-op placeholder — the retry logic handles the priming.
 
     Ok(AhciPort {
         index: port_idx as u8,
@@ -349,17 +400,15 @@ fn wait_cmd_stopped(hba: &MmioRegion, port_idx: usize) {
 // IDENTIFY DEVICE
 // ─────────────────────────────────────────────────────────────────────────────
 
-fn identify_device(hba: &MmioRegion, port_idx: usize, cmd_table_phys: u64, dma_buf_phys: u64, dma_buf_virt: u64) -> (u32, u64) {
+fn identify_device(hba: &MmioRegion, port_idx: usize, cmd_table_phys: u64, dma_buf_phys: u64, dma_buf_virt: u64) -> (u32, u64, u8) {
     let pr = HBA_PORT_REGS + (port_idx as u32) * 0x80;
 
-    // Set up command header 0
     let cmd_list_virt = unsafe {
         let lo = hba.read_reg::<u32>(pr + PORT_CLB) as u64;
         let hi = hba.read_reg::<u32>(pr + PORT_CLBU) as u64;
         lo | (hi << 32)
     };
 
-    // Command header: FIS-based command, 1 PRD, no write
     unsafe {
         let hdr = &mut *(cmd_list_virt as *mut [HbaCmdHeader; 32]);
         hdr[0].set_cfl(5);
@@ -368,19 +417,16 @@ fn identify_device(hba: &MmioRegion, port_idx: usize, cmd_table_phys: u64, dma_b
         hdr[0].set_cmd_table_addr(cmd_table_phys);
     }
 
-    // CFIS for IDENTIFY DEVICE (0xEC)
     unsafe {
-        let cfis = cmd_table_phys as *mut u8;
-        let v = cfis as *mut u8;
+        let v = cmd_table_phys as *mut u8;
         core::ptr::write_bytes(v, 0, 64);
-        v.add(0).write(0x27);  // FIS type: H2D Register
-        v.add(1).write(0x80);  // C=1
-        v.add(2).write(0xEC);  // IDENTIFY DEVICE
-        v.add(7).write(0x40);  // LBA mode
-        v.add(12).write(1);    // Sector count = 1
+        v.add(0).write(0x27);
+        v.add(1).write(0x80);
+        v.add(2).write(0xEC);
+        v.add(7).write(0x40);
+        v.add(12).write(1);
     }
 
-    // PRDT entry
     unsafe {
         let prdt = (cmd_table_phys + 0x80) as *mut HbaPrdtEntry;
         (*prdt).base_addr = dma_buf_phys;
@@ -388,13 +434,12 @@ fn identify_device(hba: &MmioRegion, port_idx: usize, cmd_table_phys: u64, dma_b
         (*prdt).set_interrupt_on_complete(true);
     }
 
-    // Clear interrupt and issue
     unsafe {
         hba.write_reg::<u32>(pr + PORT_IS, 0xFFFF_FFFF);
+        hba.write_reg::<u32>(pr + PORT_SERR, 0xFFFF_FFFF);
         hba.write_reg::<u32>(pr + PORT_CI, 1);
     }
 
-    // Wait
     let mut timeout = ATA_TIMEOUT;
     while timeout > 0 {
         let ci = unsafe { hba.read_reg::<u32>(pr + PORT_CI) };
@@ -402,22 +447,20 @@ fn identify_device(hba: &MmioRegion, port_idx: usize, cmd_table_phys: u64, dma_b
         let is = unsafe { hba.read_reg::<u32>(pr + PORT_IS) };
         if is & PORT_IS_TFES != 0 {
             unsafe { hba.write_reg::<u32>(pr + PORT_IS, 0xFFFF_FFFF); }
-            return (512, 0);
+            return (512, 0, 0);
         }
         timeout -= 1;
         core::hint::spin_loop();
     }
 
-    if timeout == 0 { return (512, 0); }
+    if timeout == 0 { return (512, 0, 0); }
 
     unsafe { hba.write_reg::<u32>(pr + PORT_IS, 0xFFFF_FFFF); }
 
-    // Parse IDENTIFY data
     let data = unsafe { core::slice::from_raw_parts(dma_buf_virt as *const u16, 256) };
 
     let word83 = data[83];
     let total_sectors = if word83 & (1 << 10) != 0 {
-        // LBA48
         (data[100] as u64)
             | ((data[101] as u64) << 16)
             | ((data[102] as u64) << 32)
@@ -433,12 +476,113 @@ fn identify_device(hba: &MmioRegion, port_idx: usize, cmd_table_phys: u64, dma_b
         512
     };
 
-    (sector_size, if total_sectors == 0 { 0xFFFFFFFF } else { total_sectors })
+    let word88 = data[88];
+    let mut max_udma: u8 = 0;
+    for bit in 0..6u8 {
+        if word88 & (1 << bit) != 0 {
+            max_udma = bit;
+        }
+    }
+
+    (sector_size, if total_sectors == 0 { 0xFFFFFFFF } else { total_sectors }, max_udma)
+}
+
+// ─────────────────────────────────────────────────────────────────────────────
+// SET FEATURES (non-data command)
+// ─────────────────────────────────────────────────────────────────────────────
+
+/// Issue SET FEATURES (0xEF) to enable the highest supported UDMA transfer mode.
+/// This is required by the ATA spec after device reset before DMA commands
+/// can be used. Without this, the device remains in PIO mode and rejects
+/// DMA commands with a Task File Error.
+///
+/// Sector Count register encoding for subcommand 03h (Set Transfer Mode):
+///   bits [2:0] = transfer type (000=PIO default, 001=PIO, 100=MWDMA, 101=UDMA)
+///   bits [6:3] = mode number
+fn set_features_udma(hba: &MmioRegion, port_idx: usize, cmd_table_phys: u64, max_udma: u8) -> bool {
+    if max_udma == 0 { return false; }
+    let pr = HBA_PORT_REGS + (port_idx as u32) * 0x80;
+
+    let cmd_list_virt = unsafe {
+        let lo = hba.read_reg::<u32>(pr + PORT_CLB) as u64;
+        let hi = hba.read_reg::<u32>(pr + PORT_CLBU) as u64;
+        lo | (hi << 32)
+    };
+
+    unsafe {
+        let hdr = &mut *(cmd_list_virt as *mut [HbaCmdHeader; 32]);
+        hdr[0].set_cfl(5);
+        hdr[0].set_write(false);
+        hdr[0].set_prdt_len(0);
+        hdr[0].set_cmd_table_addr(cmd_table_phys);
+    }
+
+    // Sector Count = (mode << 3) | type: bits[2:0]=101 for UDMA, bits[6:3]=mode
+    let sector_count = ((max_udma << 3) | 0x05) as u8;
+
+    unsafe {
+        let v = cmd_table_phys as *mut u8;
+        core::ptr::write_bytes(v, 0, 64);
+        v.add(0).write(0x27);       // FIS type: H2D Register
+        v.add(1).write(0x80);       // C=1 (command)
+        v.add(2).write(0xEF);       // SET FEATURES
+        v.add(3).write(0x03);       // Subcommand: Set Transfer Mode
+        v.add(12).write(sector_count);
+    }
+
+    unsafe {
+        hba.write_reg::<u32>(pr + PORT_IS, 0xFFFF_FFFF);
+        hba.write_reg::<u32>(pr + PORT_SERR, 0xFFFF_FFFF);
+        hba.write_reg::<u32>(pr + PORT_CI, 1);
+    }
+
+    let mut success = false;
+    let mut timeout = ATA_TIMEOUT;
+    while timeout > 0 {
+        let ci = unsafe { hba.read_reg::<u32>(pr + PORT_CI) };
+        if ci & 1 == 0 {
+            success = true;
+            break;
+        }
+        let is = unsafe { hba.read_reg::<u32>(pr + PORT_IS) };
+        if is & PORT_IS_TFES != 0 {
+            break;
+        }
+        timeout -= 1;
+        core::hint::spin_loop();
+    }
+
+    if timeout == 0 { success = false; }
+
+    // Always run cleanup: clear error registers and wait for drive ready.
+    // This ensures the port is in a clean state for the next command,
+    // even if SET FEATURES failed (e.g. on QEMU or unsupported drives).
+    unsafe {
+        hba.write_reg::<u32>(pr + PORT_IS, 0xFFFF_FFFF);
+        hba.write_reg::<u32>(pr + PORT_SERR, 0xFFFF_FFFF);
+    }
+
+    let mut ready_timeout = ATA_TIMEOUT;
+    while ready_timeout > 0 {
+        let tfd = unsafe { hba.read_reg::<u32>(pr + PORT_TFD) };
+        if tfd & (TFD_BSY | TFD_DRQ) == 0 { break; }
+        ready_timeout -= 1;
+        core::hint::spin_loop();
+    }
+
+    success
 }
 
 // ─────────────────────────────────────────────────────────────────────────────
 // ATA Command Issuing
 // ─────────────────────────────────────────────────────────────────────────────
+
+/// Maximum number of attempts per command (initial + retries).
+const CMD_MAX_ATTEMPTS: u32 = 8;
+
+/// Known pattern written to DMA buffer before each read command.
+/// Used to verify that DMA actually transferred data.
+const DMA_PROBE_PAT: [u8; 4] = [0xA5, 0x5A, 0xA5, 0x5A];
 
 fn issue_command(
     hba: &MmioRegion,
@@ -499,45 +643,179 @@ fn issue_command(
         (*prdt).set_interrupt_on_complete(true);
     }
 
-    // Clear interrupt and check ready
-    unsafe {
-        hba.write_reg::<u32>(pr + PORT_IS, 0xFFFF_FFFF);
-        let tfd = hba.read_reg::<u32>(pr + PORT_TFD);
-        if tfd & TFD_BSY != 0 {
-            return Err(BlockError::DeviceNotReady);
+    // Retry loop with AHCI-compliant error recovery.
+    // After TFES, we must fully reset the command engine before retrying.
+    let mut last_was_tfes = false;
+    for attempt in 0..CMD_MAX_ATTEMPTS {
+        // ── Step 1: Clear interrupt status and error registers ──────────────
+        unsafe {
+            hba.write_reg::<u32>(pr + PORT_IS, 0xFFFF_FFFF);
+            hba.write_reg::<u32>(pr + PORT_SERR, 0xFFFF_FFFF);
         }
-        hba.write_reg::<u32>(pr + PORT_CI, 1);
-    }
 
-    // Wait for completion
-    let mut timeout = ATA_TIMEOUT;
-    while timeout > 0 {
-        let ci = unsafe { hba.read_reg::<u32>(pr + PORT_CI) };
-        if ci & 1 == 0 { break; }
-        let is = unsafe { hba.read_reg::<u32>(pr + PORT_IS) };
-        if is & PORT_IS_TFES != 0 {
+        // ── Step 2: Wait for drive ready (BSY and DRQ must be clear) ───────
+        let mut ready_wait = ATA_TIMEOUT;
+        while ready_wait > 0 {
+            let tfd = unsafe { hba.read_reg::<u32>(pr + PORT_TFD) };
+            if tfd & (TFD_BSY | TFD_DRQ) == 0 { break; }
+            ready_wait -= 1;
+            core::hint::spin_loop();
+        }
+
+        // ── Step 3: Full command engine recovery after TFES ────────────────
+        // On QEMU's AHCI (and potentially real hardware), TFES leaves the
+        // command engine in a bad state where subsequent PxCI writes are
+        // silently accepted but no DMA transfer occurs. The recovery must:
+        //   a) Stop command processing (PxCMD.ST = 0)
+        //   b) Wait for CR to clear (command list idle)
+        //   c) Stop FIS receive engine (PxCMD.FRE = 0)
+        //   d) Wait for FR to clear (FIS receive idle)
+        //   e) Wait for TFD.BSY/DRQ to clear (drive idle)
+        //   f) Restart FIS receive (PxCMD.FRE = 1)
+        //   g) Wait for FR to set
+        //   h) Restart command processing (PxCMD.ST = 1)
+        //   i) Wait for CR to set
+        if last_was_tfes {
+            // a) Stop command processing — clear ST
+            unsafe {
+                let cmd = hba.read_reg::<u32>(pr + PORT_CMD);
+                hba.write_reg::<u32>(pr + PORT_CMD, cmd & !PORT_CMD_ST);
+            }
+            // b) Wait for CR to clear
+            let mut wait = ATA_TIMEOUT;
+            while wait > 0 {
+                let cmd = unsafe { hba.read_reg::<u32>(pr + PORT_CMD) };
+                if cmd & PORT_CMD_CR == 0 { break; }
+                wait -= 1;
+                core::hint::spin_loop();
+            }
+            // c) Stop FIS receive engine — clear FRE
+            unsafe {
+                let cmd = hba.read_reg::<u32>(pr + PORT_CMD);
+                hba.write_reg::<u32>(pr + PORT_CMD, cmd & !PORT_CMD_FRE);
+            }
+            // d) Wait for FR (bit 14) to clear
+            let mut wait = ATA_TIMEOUT;
+            while wait > 0 {
+                let cmd = unsafe { hba.read_reg::<u32>(pr + PORT_CMD) };
+                if cmd & (1 << 14) == 0 { break; }
+                wait -= 1;
+                core::hint::spin_loop();
+            }
+            // e) Wait for BSY/DRQ to clear (drive idle)
+            let mut wait = ATA_TIMEOUT;
+            while wait > 0 {
+                let tfd = unsafe { hba.read_reg::<u32>(pr + PORT_TFD) };
+                if tfd & (TFD_BSY | TFD_DRQ) == 0 { break; }
+                wait -= 1;
+                core::hint::spin_loop();
+            }
+            // f) Restart FIS receive engine — set FRE
+            unsafe {
+                let cmd = hba.read_reg::<u32>(pr + PORT_CMD);
+                hba.write_reg::<u32>(pr + PORT_CMD, cmd | PORT_CMD_FRE);
+            }
+            // g) Wait for FR (bit 14) to set
+            let mut wait = ATA_TIMEOUT;
+            while wait > 0 {
+                let cmd = unsafe { hba.read_reg::<u32>(pr + PORT_CMD) };
+                if cmd & (1 << 14) != 0 { break; }
+                wait -= 1;
+                core::hint::spin_loop();
+            }
+            // h) Restart command processing — set ST
+            unsafe {
+                let cmd = hba.read_reg::<u32>(pr + PORT_CMD);
+                hba.write_reg::<u32>(pr + PORT_CMD, cmd | PORT_CMD_ST);
+            }
+            // i) Wait for CR to set
+            let mut wait = ATA_TIMEOUT;
+            while wait > 0 {
+                let cmd = unsafe { hba.read_reg::<u32>(pr + PORT_CMD) };
+                if cmd & PORT_CMD_CR != 0 { break; }
+                wait -= 1;
+                core::hint::spin_loop();
+            }
+        }
+
+        // ── Step 4: For reads, stamp the DMA buffer to verify DMA later ────
+        if is_read {
+            unsafe {
+                let dma = port.dma_buf_virt as *mut u8;
+                core::ptr::write_bytes(dma, 0, buf_len.min(4096));
+                dma.add(0).write(DMA_PROBE_PAT[0]);
+                dma.add(1).write(DMA_PROBE_PAT[1]);
+                dma.add(2).write(DMA_PROBE_PAT[2]);
+                dma.add(3).write(DMA_PROBE_PAT[3]);
+            }
+        }
+
+        // ── Step 5: Issue command (write slot 0 to PxCI) ───────────────────
+        unsafe {
+            hba.write_reg::<u32>(pr + PORT_CI, 1);
+        }
+
+        // ── Step 6: Wait for completion ────────────────────────────────────
+        let mut timeout = ATA_TIMEOUT;
+        let mut got_tfes = false;
+        while timeout > 0 {
+            let ci = unsafe { hba.read_reg::<u32>(pr + PORT_CI) };
+            if ci & 1 == 0 { break; }
+            let is = unsafe { hba.read_reg::<u32>(pr + PORT_IS) };
+            if is & PORT_IS_TFES != 0 {
+                got_tfes = true;
+                break;
+            }
+            timeout -= 1;
+            core::hint::spin_loop();
+        }
+
+        // ── Step 7: Handle timeout ─────────────────────────────────────────
+        if timeout == 0 {
             unsafe { hba.write_reg::<u32>(pr + PORT_IS, 0xFFFF_FFFF); }
             return Err(BlockError::IoError);
         }
-        timeout -= 1;
-        core::hint::spin_loop();
-    }
-    if timeout == 0 {
-        return Err(BlockError::IoError);
-    }
 
-    unsafe { hba.write_reg::<u32>(pr + PORT_IS, 0xFFFF_FFFF); }
+        // Acknowledge all pending interrupts
+        unsafe { hba.write_reg::<u32>(pr + PORT_IS, 0xFFFF_FFFF); }
 
-    // If reading, copy from DMA buffer to user buffer
-    if is_read {
-        unsafe {
-            let dma = core::slice::from_raw_parts(port.dma_buf_virt as *const u8, buf_len);
-            let dst = core::slice::from_raw_parts_mut(buf_ptr as *mut u8, buf_len);
-            dst.copy_from_slice(dma);
+        // ── Step 8: If no TFES, verify DMA actually transferred data ───────
+        if !got_tfes {
+            let dma_ok = if is_read {
+                // Check that our probe pattern was overwritten by DMA
+                let dma = unsafe { core::slice::from_raw_parts(port.dma_buf_virt as *const u8, buf_len.min(4)) };
+                dma[0] != DMA_PROBE_PAT[0]
+                    || dma[1] != DMA_PROBE_PAT[1]
+                    || dma[2] != DMA_PROBE_PAT[2]
+                    || dma[3] != DMA_PROBE_PAT[3]
+            } else {
+                true // Writes don't need DMA verification
+            };
+
+            if dma_ok {
+                // Command succeeded and DMA transferred valid data.
+                // Copy from DMA buffer to caller's buffer.
+                if is_read {
+                    unsafe {
+                        let dma = core::slice::from_raw_parts(port.dma_buf_virt as *const u8, buf_len);
+                        let dst = core::slice::from_raw_parts_mut(buf_ptr as *mut u8, buf_len);
+                        dst.copy_from_slice(dma);
+                    }
+                }
+                return Ok(());
+            }
+
+            // DMA didn't happen despite CI clearing — treat as error.
+            // Set last_was_tfes to trigger full recovery on next attempt.
+            last_was_tfes = true;
+            continue;
         }
+
+        // ── Step 9: TFES — log and prepare for recovery ────────────────────
+        last_was_tfes = true;
     }
 
-    Ok(())
+    Err(BlockError::IoError)
 }
 
 // ─────────────────────────────────────────────────────────────────────────────

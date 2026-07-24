@@ -105,21 +105,45 @@ impl Vfs {
         });
     }
 
-    /// Resolve a path to an inode
+    /// Resolve a path to an inode.
+    /// Checks mount points first, then falls back to root fs.
     pub fn resolve(&self, path: &str) -> Result<Arc<dyn Inode>, VfsError> {
-        let fs = self.root_fs()?;
-        let root = fs.root();
         if path == "/" || path.is_empty() {
-            return Ok(root);
+            return Ok(self.root_fs()?.root());
         }
 
         let parts: Vec<&str> = path.split('/').filter(|s| !s.is_empty()).collect();
-        let mut current = root;
+        if parts.is_empty() {
+            return Ok(self.root_fs()?.root());
+        }
 
+        // Check if any mount point matches a prefix of the path
+        for mount in &self.mounts {
+            if mount.path == "/" {
+                continue;
+            }
+            let mount_parts: Vec<&str> = mount.path.split('/').filter(|s| !s.is_empty()).collect();
+            if mount_parts.len() <= parts.len() {
+                let matches = mount_parts.iter().zip(parts.iter()).all(|(mp, p)| mp == p);
+                if matches {
+                    // Resolve remaining path within this mount's root
+                    let root = mount.fs.root();
+                    let remaining = &parts[mount_parts.len()..];
+                    let mut current = root;
+                    for part in remaining {
+                        current = current.lookup(part)?;
+                    }
+                    return Ok(current);
+                }
+            }
+        }
+
+        // Fall back to root filesystem
+        let root = self.root_fs()?.root();
+        let mut current = root;
         for part in parts {
             current = current.lookup(part)?;
         }
-
         Ok(current)
     }
 
