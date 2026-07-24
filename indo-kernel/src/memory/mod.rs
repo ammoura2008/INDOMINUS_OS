@@ -96,8 +96,8 @@ pub unsafe fn phys_to_kernel_virt(phys: u64) -> u64 {
 /// The heap starts here and grows upward (toward higher addresses).
 pub const KERNEL_HEAP_BASE: u64 = 0xFFFF_FFFF_C000_0000;
 
-/// Initial size of the kernel heap (4 MiB).
-pub const KERNEL_HEAP_INITIAL_SIZE: u64 = 4 * 1024 * 1024;
+/// Initial size of the kernel heap (16 MiB).
+pub const KERNEL_HEAP_INITIAL_SIZE: u64 = 16 * 1024 * 1024;
 
 /// Virtual address of user stack top (grows downward).
 /// Placed near the top of the canonical lower half, leaving room for
