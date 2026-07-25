@@ -11,6 +11,7 @@ members = [
     "shell",
     "init",
     "test_gs_stress",
+    "test_robustness",
 ]
 resolver = "2"
 

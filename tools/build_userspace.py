@@ -24,19 +24,26 @@ BUILD_INITRD = os.path.join(WORKSPACE, "tools", "build_initrd.py")
 PACKAGES = [
     ("init", "userspace/init"),
     ("indosh", "userspace/shell"),
+    ("test_robustness", "userspace/test_robustness"),
 ]
 
 
 def run(cmd, cwd=WORKSPACE, env=None):
     """Run a command and return success/failure."""
     print(f"  $ {' '.join(cmd)}")
+    # Ensure RUSTFLAGS includes -Zunstable-options for json target spec
+    run_env = dict(env or os.environ)
+    rustflags = run_env.get("RUSTFLAGS", "")
+    if "-Zunstable-options" not in rustflags:
+        rustflags = (rustflags + " -Zunstable-options").strip()
+    run_env["RUSTFLAGS"] = rustflags
     result = subprocess.run(
         cmd,
         cwd=cwd,
         capture_output=True,
         text=True,
         timeout=120,
-        env=env,
+        env=run_env,
     )
     if result.returncode != 0:
         print(f"  FAILED: {result.stderr[:500]}")
@@ -57,13 +64,16 @@ def build_package(name, crate_path):
 
     cmd = [
         "cargo", "build",
+        "-Zjson-target-spec",
+        "-Zbuild-std=core,alloc",
+        "-Zbuild-std-features=compiler-builtins-mem",
         "--target", target,
         "--target-dir", target_dir,
         "--release",
         "-p", name,
     ]
 
-    if not run(cmd):
+    if not run(cmd, cwd=USERSPACE_DIR):
         return False
 
     # Copy the binary to rootfs/bin/

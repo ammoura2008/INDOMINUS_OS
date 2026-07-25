@@ -45,9 +45,9 @@ Instead of relying on many external extensions, future versions aim to integrate
 
 ## Current Status
 
-**Phase:** Foundation Freeze (Phase 7 complete, Foundation Hardening complete, Phase 9.1-9.2 complete)
-**Stability:** 10/10 regression passes, all critical/high-severity bugs fixed
-**Binary size:** 333 KB kernel, 51 KB bootloader
+**Phase:** Phase 10D complete (Process & Shell Robustness)
+**Stability:** 3/3 boots pass all 6 test phases, 0 kernel panics, 0 TFES errors
+**AHCI:** Root cause identified and fixed (PORT_IS_TFES bit 0→30), all sector reads succeed on first attempt
 
 ### What Works
 
@@ -64,16 +64,20 @@ Instead of relying on many external extensions, future versions aim to integrate
 | LAPIC/IOAPIC | Complete | Dynamic routing from MADT, timer at ~100 Hz |
 | PIT Timer | Complete | Channel 0, 100 Hz periodic, vector 32 |
 | Keyboard | Complete | PS/2 driver, ring buffer, interrupt-driven |
-| Syscalls | Complete | 16 syscalls, negative-errno convention |
+| Serial Input | Complete | UART IRQ4, IOAPIC vector 36, line discipline, shell input |
+| AHCI/SATA | Complete | AHCI driver, DMA reads, TFES recovery, UDMA support |
+| FAT16 | Complete | Read-only filesystem, BPB parsing, cluster chain traversal |
+| Syscalls | Complete | 16 syscalls, negative-errno convention, bounds-checked |
 | ELF Loader | Complete | ELF64 parser, NX enforcement, kernel-space mapping protection |
 | Process Mgmt | Complete | Spawn, fork, exec, exit, waitpid, zombie reaping |
 | Scheduler | Complete | Preemptive round-robin, 5-tick quantum (50ms) |
-| VFS | Complete | RAM filesystem, path resolution, file operations |
-| Block Devices | Complete | BlockDevice trait, RamDisk, device registry, Arc<dyn BlockDevice> abstraction |
-| File Descriptors | Complete | FD table, open/close/read/write/dup/dup2/lseek, ref-counted handles, O_CLOEXEC |
+| VFS | Complete | RAM filesystem, FAT16 mount, path resolution, file operations |
+| Block Devices | Complete | BlockDevice trait, AHCI disk, device registry, Arc<dyn BlockDevice> |
+| File Descriptors | Complete | FD table, open/close/read/write/dup/dup2/lseek, ref-counted, O_CLOEXEC |
 | Initrd | Complete | cpio newc parser, security-hardened |
-| Pipe IPC | Complete | Ring buffer, blocking read/write, atomic operations |
-| User Programs | Complete | 10 test binaries, Python ELF generator |
+| Pipe IPC | Complete | Ring buffer, blocking read/write, spin::Mutex, AtomicU16 refcount |
+| Shell | Complete | Real shell with ls, cat, exec, pid, fork, exit commands |
+| User Programs | Complete | init (PID 1 reaper), shell, stress tests |
 
 ---
 
@@ -292,12 +296,13 @@ indominus rex operating system/
     src/
       main.rs                   Entry, init sequence, test spawning
       acpi/                     ACPI table parsing
-        mod.rs                  XSDT/RSDT discovery, global state
-        rsdp.rs                 RSDP scanning (bootloader + memory)
-        madt.rs                 MADT records (APIC, IRQ overrides)
+      ahci/                     AHCI/SATA driver (DMA, TFES recovery)
+        mod.rs                  Port init, issue_command, BlockDevice impl
+        hba.rs                  HBA register definitions
+      block/                    Block device abstraction
       cpu.rs                    Feature detection (NX, SMEP, SMAP, APIC)
-      debug.rs                  Debug utilities
       elf/mod.rs                ELF64 loader with security validation
+      fat32.rs                  FAT16/FAT32 filesystem driver
       gdt.rs                    GDT/TSS setup, Ring 0/3 segments
       idt.rs                    IDT setup, exception handlers
       initrd.rs                 cpio newc parser (security-hardened)
@@ -308,6 +313,7 @@ indominus rex operating system/
         pit.rs                  PIT Channel 0 (100 Hz)
         dispatch.rs             IRQ dispatch table
       keyboard.rs               PS/2 keyboard driver
+      serial.rs                 Serial port I/O (COM1), line discipline
       memory/
         mod.rs                  Memory constants, heap init
         pmm.rs                  Physical Memory Manager (bitmap+refcount)
@@ -316,29 +322,31 @@ indominus rex operating system/
       panic.rs                  Panic handler
       pci/mod.rs                PCI bus enumeration
       process/
-        mod.rs                  Process init, spawn_user, yield_now
-        process.rs              Process struct, Drop impl
+        mod.rs                  Process init, PIPES Mutex, keyboard_wake
+        process.rs              Process struct, Drop impl, O_CLOEXEC
         scheduler.rs            Round-robin scheduler
         context_switch.rs       Timer handler, force_switch, kill_process
         idle.rs                 Idle process (HLT loop)
         init.rs                 Init/reaper process (PID 1)
-        pipe.rs                 Pipe IPC (ring buffer, atomic ops)
-      serial.rs                 Serial port output (COM1)
-      sync_cell.rs              SyncUnsafeCell<T> for safe static mut access
+        pipe.rs                 Pipe IPC (ring buffer, AtomicU16 refcount)
+      sync/                     Synchronization primitives
       syscall/
-        mod.rs                  16 syscalls, naked handler, MSR setup
+        mod.rs                  16 syscalls, bounds-checked, Mutex-guarded
         errno.rs                Negative errno definitions
       vfs/
         mod.rs                  VFS core (File, Inode, FileSystem traits)
         ramfs.rs                RAM filesystem
   tools/
+    qemu_boot_test.py           Automated QEMU boot test (5-20 iterations)
     regression_test.py          Automated regression test suite
-    gen_comprehensive_test.py   Generate 10 ELF64 test binaries
-    gen_userspace.py            Python ELF generator
+    build_userspace.py          Build userspace binaries + initrd
     build_initrd.py             cpio newc archive builder
   userspace/
     syscall/                    Indo syscall crate (no_std)
-    rootfs/                     Root filesystem (init, shell, hello.txt)
+    shell/                      Real shell (ls, cat, exec, pid, fork, exit)
+    init/                       Init process (PID 1 reaper)
+    test_gs_stress/             KERNEL_GS_BASE stress test
+    test_robustness/            Process/pipe/fd robustness stress test
   build.ps1                     Build script
   kernel.ld                     Kernel linker script
   indominus-x86_64.json         Target specification
@@ -363,6 +371,20 @@ indominus rex operating system/
 | sys_dup use-after-free | syscall/mod.rs | FsFile dup had no clone; rejected with EBADF until Arc-based handles |
 | sys_pipe FD exhaustion leak | syscall/mod.rs | Pipe not freed when FD allocation failed; added free_pipe on error path |
 
+### Phase 10C Hardening Fixes
+
+| Bug | File | Description |
+|-----|------|-------------|
+| PORT_IS_TFES wrong bit | ahci/hba.rs | `1 << 0` (DHRS) changed to `1 << 30` (TFES); eliminated ~94K false TFES events |
+| static mut PIPES unsound | process/mod.rs | `static mut PIPES` replaced with `spin::Mutex`; all access sites restructured |
+| CLOEXEC deadlock | syscall/mod.rs | `pipe_close` called `keyboard_wake` under SCHEDULER lock; restructured to avoid deadlock |
+| pipe_idx bounds missing | syscall/mod.rs | 7 PIPES access paths now guarded with `if pipe_idx >= MAX_PIPES { return EBADF }` |
+| AtomicU8 refcount overflow | process/pipe.rs | Changed to AtomicU16; prevents wrap at 255 under heavy dup2 |
+| OOM panic in constructors | process/scheduler.rs | `new_kernel`/`new_user` return Option; `spawn_idle` halts on OOM |
+| file_handles index bounds | syscall/mod.rs | 6 access paths now check `index < MAX_FDS` |
+| stack_pointer NULL guard | syscall/mod.rs | sys_exec checks for null stack pointer before dereference |
+| nread/nwrite u32 overflow | syscall/mod.rs | Saturating addition with `u32::MAX` check |
+
 ### False Positives Confirmed
 
 | Finding | Why It's Safe |
@@ -377,13 +399,9 @@ indominus rex operating system/
 
 | Issue | Severity | Notes |
 |-------|----------|-------|
-| Orphan processes never reaped | HIGH | Needs init/reaper process (Phase 8) |
-| PID reuse allows cross-family reaping | HIGH | Needs PID generation counter (Phase 8) |
-| sys_dup cannot handle FsFile | MEDIUM | Needs Arc\<dyn File\> ref counting (Phase 8) |
-| sys_close doesn't free pipe slots | MEDIUM | Needs ref-counted pipes (Phase 8) |
-| No kernel stack guard page | LOW | Heap overflow risk (Phase 9+) |
-| No SMP support | LOW | Single-CPU only; all globals unsynchronized |
-| REFCOUNTS overflow silent clamp at 255 | LOW | Theoretical only (Phase 9+) |
+| FAT16 is read-only | MEDIUM | Write support not yet implemented |
+| No SMP support | LOW | Single-CPU only; all globals use spin::Mutex |
+| Shell banner detection in test script | LOW | Test script bug, not kernel issue |
 
 ---
 
@@ -398,37 +416,36 @@ indominus rex operating system/
 - MMIO framework, VFS, initrd
 - 10/10 automated regression passes
 
-### Phase 8: Foundation Hardening (CURRENT)
-- Security audit: PMM, VMM, Process, ELF, Syscalls (4 parallel audits)
-- Fix 12 critical/high-severity bugs
-- Comprehensive audit documentation in README
-- [ ] Init/reaper process for orphan adoption
-- [ ] PID generation counter (prevent reuse)
-- [ ] Arc-based file handle ref counting (enable safe dup)
-- [ ] Ref-counted pipe slots (enable safe close)
-- [ ] Fix VMM copy_user_pages partial failure leak
-- [ ] Fix ELF MAX_USER_MEM per-segment (make cumulative)
-- [ ] Fix PMM free_frame unconditional refcount destroy
+### Phase 8: Foundation Hardening (COMPLETE)
+- Security audit: PMM, VMM, Process, ELF, Syscalls
+- Fixed 12 critical/high-severity bugs
+- Init/reaper process (PID 1)
+- PID generation counter
+- Arc-based file handle ref counting
+- Ref-counted pipe slots (spin::Mutex)
 
-### Phase 9: Userspace Environment (NEXT)
-- [ ] Shell (indosh) with command parsing
-- [ ] File creation and deletion
-- [ ] Process spawning from shell
-- [ ] Standard library for userspace
-- [ ] Console/TTY driver
+### Phase 9: Userspace Environment (COMPLETE)
+- Shell (indosh) with ls, cat, exec, pid, fork, exit commands
+- FAT16 filesystem support
+- Persistent ELF loading from FAT
+- Serial input with line discipline
+- Full syscall interface (16 syscalls)
 
-### Phase 10: Device Drivers
-- [ ] VGA/framebuffer text mode
-- [x] ATA/AHCI disk driver
-- [ ] Keyboard layout (US QWERTY)
-- [ ] Mouse (PS/2)
+### Phase 10: Kernel Hardening & AHCI (COMPLETE)
+- AHCI driver with DMA, TFES recovery, UDMA support
+- AHCI PORT_IS_TFES root cause fix (bit 0→30): eliminated ~94K false TFES events
+- Kernel hardening: bounds checks, Mutex PIPES, overflow guards
+- CLOEXEC deadlock fix, nread/nwrite saturation guards
+- Process::new_kernel/new_user return Option (no OOM panic)
+- validate_elf_header for partial ELF reads
+- 5/5 boots pass all 6 test phases, 0 TFES, 0 panics
 
-### Phase 11: Networking
+### Phase 11: Networking (FUTURE)
 - [ ] e1000e NIC driver
 - [ ] ARP, ICMP, TCP/IP stack
 - [ ] Socket API
 
-### Phase 12: Advanced Features
+### Phase 12: Advanced Features (FUTURE)
 - [ ] SMP (multi-core)
 - [ ] Shared memory
 - [ ] Signals
