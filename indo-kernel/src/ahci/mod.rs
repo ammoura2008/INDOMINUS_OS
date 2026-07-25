@@ -5,16 +5,11 @@
 //!
 //! ## TFES Error Recovery
 //!
-//! On QEMU's AHCI implementation, Task File Error Status (TFES) leaves the
-//! command engine in a degraded state where subsequent PxCI writes are silently
-//! accepted but no DMA transfer occurs — the HBA reports completion (PxCI
-//! clears) without writing data to the DMA buffer.
+//! On QEMU's AHCI implementation, a true Task File Error Status (PxIS bit 30)
+//! leaves the command engine in a degraded state where subsequent PxCI writes
+//! are silently accepted but no DMA transfer occurs. The recovery sequence
+//! fully stops and restarts the command engine (AHCI spec §6.2.2):
 //!
-//! Root cause: After TFES, the HBA's internal command processing state machine
-//! retains stale state. Simply clearing IS/SERR and reissuing CI is
-//! insufficient; the command engine must be fully stopped and restarted.
-//!
-//! Recovery sequence (AHCI spec §6.2.2):
 //!   1. Clear PxIS and PxSERR (acknowledge errors)
 //!   2. Stop command processing: PxCMD.ST = 0, wait PxCMD.CR = 0
 //!   3. Stop FIS receive: PxCMD.FRE = 0, wait bit 14 = 0
@@ -22,10 +17,8 @@
 //!   5. Restart FIS receive: PxCMD.FRE = 1, wait bit 14 = 1
 //!   6. Restart command processing: PxCMD.ST = 1, wait PxCMD.CR = 1
 //!
-//! Additionally, each read command writes a known probe pattern (0xDE, 0xAD,
-//! 0xBE, 0xEF) to the DMA buffer before issuing CI. After completion, the
-//! buffer is checked — if the pattern remains unchanged, DMA did not occur and
-//! the command is retried. This prevents silently returning stale/zeroed data.
+//! Note: PxIS bit 0 (DHRS — D2H Register FIS Received) fires on every
+//! successful command completion and must NOT be confused with bit 30 (TFES).
 
 pub mod hba;
 

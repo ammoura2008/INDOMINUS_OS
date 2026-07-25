@@ -50,8 +50,10 @@ pub const PORT_FBU: u32 = 0x0C;
 /// Port Interrupt Status
 pub const PORT_IS: u32 = 0x10;
 
-/// Port Interrupt Status: Task File Device Error
-pub const PORT_IS_TFES: u32 = 1 << 0;
+/// Port Interrupt Status: Task File Error Status (bit 30)
+/// NOTE: Bit 0 is DHRS (D2H Register FIS Received), NOT TFES.
+/// Must be bit 30 per AHCI spec 1.3.1 §6.1.2.
+pub const PORT_IS_TFES: u32 = 1 << 30;
 
 /// Port Interrupt Enable
 pub const PORT_IE: u32 = 0x14;

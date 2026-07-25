@@ -1265,7 +1265,7 @@ fn phase95_fd_syscall_test() {
 /// T6.7: Non-executable ELF type → NotExecutable
 /// T6.8: Regression (Phase 9.1–9.5)
 fn phase96_elf_persistent_test() {
-    use crate::elf::{validate_elf, ElfError};
+    use crate::elf::{validate_elf, validate_elf_header, ElfError};
     use crate::vfs::VfsError;
 
     let mut tests_passed: u32 = 0;
@@ -1298,17 +1298,17 @@ fn phase96_elf_persistent_test() {
             match file.read(&mut header) {
                 Ok(n) if n >= 64 && header[0..4] == [0x7F, b'E', b'L', b'F'] => {
                     test_pass!("T6.1 Read kernel.elf from FAT: valid ELF64 header");
-                    // Validate the ELF header
-                    match validate_elf(&header) {
-                        Ok((entry, mem)) => {
+                    // Validate the ELF header (header-only since we only read 512 bytes)
+                    match validate_elf_header(&header) {
+                        Ok((entry, phnum)) => {
                             write_str("[T]     entry=0x");
                             write_hex(entry);
-                            write_str(" mem=0x");
-                            write_hex(mem);
+                            write_str(" phnum=0x");
+                            write_hex(phnum as u64);
                             write_nl();
                         }
                         Err(e) => {
-                            write_str("[T]     validate_elf: ");
+                            write_str("[T]     validate_elf_header: ");
                             write_str_nl(e.description());
                         }
                     }
@@ -1388,10 +1388,12 @@ fn phase96_elf_persistent_test() {
             let mut header = [0u8; 512];
             match file.read(&mut header) {
                 Ok(n) if n >= 64 && header[0..4] == [0x7F, b'E', b'L', b'F'] => {
-                    match validate_elf(&header) {
-                        Ok((entry, _)) => {
+                    match validate_elf_header(&header) {
+                        Ok((entry, phnum)) => {
                             write_str("[T]     FAT ELF entry=0x");
                             write_hex(entry);
+                            write_str(" phnum=");
+                            write_hex(phnum as u64);
                             write_nl();
                             if entry >= 0xFFFF_8000_0000_0000 {
                                 test_pass!("T6.3 FAT→VFS→validate pipeline: kernel.elf valid (kernel binary)");

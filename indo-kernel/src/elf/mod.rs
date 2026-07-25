@@ -395,3 +395,19 @@ pub fn validate_elf(elf_data: &[u8]) -> Result<(u64, u64), ElfError> {
 
     Ok((entry, total_mem))
 }
+
+/// Validate ELF header and program headers without checking segment data bounds.
+///
+/// Use this when you only have a partial read (e.g. first 512 bytes) and cannot
+/// verify that segment data fits within the buffer. Returns Ok((entry, phnum))
+/// if the header structure is valid.
+pub fn validate_elf_header(elf_data: &[u8]) -> Result<(u64, u16), ElfError> {
+    let (entry, phoff, phentsize, phnum, _type) = parse_ehdr(elf_data)?;
+
+    for i in 0..phnum {
+        let _phdr = parse_phdr(elf_data, phoff, phentsize, i)
+            .ok_or(ElfError::SegmentOutOfBounds)?;
+    }
+
+    Ok((entry, phnum))
+}
