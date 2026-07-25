@@ -676,6 +676,23 @@ fn issue_command(
         //   h) Restart command processing (PxCMD.ST = 1)
         //   i) Wait for CR to set
         if last_was_tfes {
+            // Capture pre-recovery state
+            let pre_cmd = unsafe { hba.read_reg::<u32>(pr + PORT_CMD) };
+            let pre_ci = unsafe { hba.read_reg::<u32>(pr + PORT_CI) };
+            let pre_tfd = unsafe { hba.read_reg::<u32>(pr + PORT_TFD) };
+            let pre_is = unsafe { hba.read_reg::<u32>(pr + PORT_IS) };
+            serial::write_str("[AHCI] RECOVERY p=");
+            serial::write_hex(port.index as u64);
+            serial::write_str(" PRE: cmd=");
+            serial::write_hex(pre_cmd as u64);
+            serial::write_str(" ci=");
+            serial::write_hex(pre_ci as u64);
+            serial::write_str(" tfd=");
+            serial::write_hex(pre_tfd as u64);
+            serial::write_str(" is=");
+            serial::write_hex(pre_is as u64);
+            serial::write_nl();
+
             // a) Stop command processing — clear ST
             unsafe {
                 let cmd = hba.read_reg::<u32>(pr + PORT_CMD);
@@ -736,6 +753,29 @@ fn issue_command(
                 wait -= 1;
                 core::hint::spin_loop();
             }
+            // Capture post-recovery state
+            let post_cmd = unsafe { hba.read_reg::<u32>(pr + PORT_CMD) };
+            let post_ci = unsafe { hba.read_reg::<u32>(pr + PORT_CI) };
+            let post_tfd = unsafe { hba.read_reg::<u32>(pr + PORT_TFD) };
+            let post_is = unsafe { hba.read_reg::<u32>(pr + PORT_IS) };
+            let post_serr = unsafe { hba.read_reg::<u32>(pr + PORT_SERR) };
+            serial::write_str("[AHCI] RECOVERY p=");
+            serial::write_hex(port.index as u64);
+            serial::write_str(" POST: cmd=");
+            serial::write_hex(post_cmd as u64);
+            serial::write_str(" ci=");
+            serial::write_hex(post_ci as u64);
+            serial::write_str(" tfd=");
+            serial::write_hex(post_tfd as u64);
+            serial::write_str(" is=");
+            serial::write_hex(post_is as u64);
+            serial::write_str(" serr=");
+            serial::write_hex(post_serr as u64);
+            serial::write_str(" ST=");
+            serial::write_str(if post_cmd & PORT_CMD_ST != 0 { "1" } else { "0" });
+            serial::write_str(" CR=");
+            serial::write_str(if post_cmd & PORT_CMD_CR != 0 { "1" } else { "0" });
+            serial::write_str_nl("");
         }
 
         // ── Step 4: For reads, stamp the DMA buffer to verify DMA later ────
@@ -758,12 +798,17 @@ fn issue_command(
         // ── Step 6: Wait for completion ────────────────────────────────────
         let mut timeout = ATA_TIMEOUT;
         let mut got_tfes = false;
+        let mut tfes_serr: u32 = 0;
+        let mut tfes_sact: u32 = 0;
         while timeout > 0 {
             let ci = unsafe { hba.read_reg::<u32>(pr + PORT_CI) };
             if ci & 1 == 0 { break; }
             let is = unsafe { hba.read_reg::<u32>(pr + PORT_IS) };
             if is & PORT_IS_TFES != 0 {
                 got_tfes = true;
+                // Capture SERR and SACT IMMEDIATELY — they may be cleared by error handling
+                tfes_serr = unsafe { hba.read_reg::<u32>(pr + PORT_SERR) };
+                tfes_sact = unsafe { hba.read_reg::<u32>(pr + PORT_SACT) };
                 break;
             }
             timeout -= 1;
@@ -818,7 +863,12 @@ fn issue_command(
                 // ATA error bits set — treat as failure
                 let ci_now = unsafe { hba.read_reg::<u32>(pr + PORT_CI) };
                 let is_now = unsafe { hba.read_reg::<u32>(pr + PORT_IS) };
-                serial::write_str("[AHCI] ATA_ERR lba=");
+                let serr_now = unsafe { hba.read_reg::<u32>(pr + PORT_SERR) };
+                let sact_now = unsafe { hba.read_reg::<u32>(pr + PORT_SACT) };
+                let cmd_now = unsafe { hba.read_reg::<u32>(pr + PORT_CMD) };
+                serial::write_str("[AHCI] ATA_ERR p=");
+                serial::write_hex(port.index as u64);
+                serial::write_str(" lba=");
                 serial::write_hex(lba);
                 serial::write_str(" att=");
                 serial::write_hex(attempt as u64);
@@ -828,6 +878,12 @@ fn issue_command(
                 serial::write_hex(ci_now as u64);
                 serial::write_str(" is=");
                 serial::write_hex(is_now as u64);
+                serial::write_str(" serr=");
+                serial::write_hex(serr_now as u64);
+                serial::write_str(" sact=");
+                serial::write_hex(sact_now as u64);
+                serial::write_str(" cmd_ST=");
+                serial::write_str(if cmd_now & PORT_CMD_ST != 0 { "1" } else { "0" });
                 serial::write_nl();
                 last_was_tfes = true;
                 continue;
@@ -835,6 +891,16 @@ fn issue_command(
 
             // Command succeeded: CI cleared, no TFES, no ATA error bits.
             // Trust the DMA buffer contents.
+            // Log success after previous TFES recovery
+            if is_read && attempt > 0 {
+                serial::write_str("[AHCI] READ_OK p=");
+                serial::write_hex(port.index as u64);
+                serial::write_str(" lba=");
+                serial::write_hex(lba);
+                serial::write_str(" att=");
+                serial::write_hex(attempt as u64);
+                serial::write_nl();
+            }
             if is_read {
                 unsafe {
                     let dma = core::slice::from_raw_parts(port.dma_buf_virt as *const u8, buf_len);
@@ -845,26 +911,54 @@ fn issue_command(
             return Ok(());
         }
 
-        // ── Step 9: TFES — log and prepare for recovery ────────────────────
+        // ── Step 9: TFES — full hardware state capture ─────────────────────
         {
             let ci_now = unsafe { hba.read_reg::<u32>(pr + PORT_CI) };
             let is_now = unsafe { hba.read_reg::<u32>(pr + PORT_IS) };
             let tfd_now = unsafe { hba.read_reg::<u32>(pr + PORT_TFD) };
-            serial::write_str("[AHCI] TFES lba=");
+            let cmd_now = unsafe { hba.read_reg::<u32>(pr + PORT_CMD) };
+            let st_bit = cmd_now & PORT_CMD_ST != 0;
+            let fre_bit = cmd_now & PORT_CMD_FRE != 0;
+            let cr_bit = cmd_now & PORT_CMD_CR != 0;
+            let fr_bit = cmd_now & (1 << 14) != 0;
+            serial::write_str("[AHCI] TFES p=");
+            serial::write_hex(port.index as u64);
+            serial::write_str(" lba=");
             serial::write_hex(lba);
             serial::write_str(" att=");
             serial::write_hex(attempt as u64);
+            serial::write_str("/");
+            serial::write_hex(CMD_MAX_ATTEMPTS as u64);
             serial::write_str(" ci=");
             serial::write_hex(ci_now as u64);
             serial::write_str(" is=");
             serial::write_hex(is_now as u64);
             serial::write_str(" tfd=");
             serial::write_hex(tfd_now as u64);
-            serial::write_nl();
+            serial::write_str(" serr=");
+            serial::write_hex(tfes_serr as u64);
+            serial::write_str(" sact=");
+            serial::write_hex(tfes_sact as u64);
+            serial::write_str(" cmd=[ST=");
+            serial::write_str(if st_bit { "1" } else { "0" });
+            serial::write_str(" FRE=");
+            serial::write_str(if fre_bit { "1" } else { "0" });
+            serial::write_str(" CR=");
+            serial::write_str(if cr_bit { "1" } else { "0" });
+            serial::write_str(" FR=");
+            serial::write_str(if fr_bit { "1" } else { "0" });
+            serial::write_str_nl("]");
         }
         last_was_tfes = true;
     }
 
+    serial::write_str("[AHCI] FAILED p=");
+    serial::write_hex(port.index as u64);
+    serial::write_str(" lba=");
+    serial::write_hex(lba);
+    serial::write_str(" after ");
+    serial::write_hex(CMD_MAX_ATTEMPTS as u64);
+    serial::write_str_nl(" attempts");
     Err(BlockError::IoError)
 }
 

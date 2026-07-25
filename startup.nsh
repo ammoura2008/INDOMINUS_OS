@@ -1,0 +1,3 @@
+echo -off
+FS0:
+\EFI\BOOT\BOOTX64.EFI

@@ -1,15 +1,8 @@
 #![no_std]
-#![no_main]
 
 use indo_syscall as sys;
 
-#[panic_handler]
-fn panic(_info: &core::panic::PanicInfo) -> ! {
-    sys::exit(1);
-}
-
-#[no_mangle]
-pub extern "C" fn _start() -> ! {
+pub fn init_main() -> ! {
     sys::write(1, b"[INIT] Indominus OS init started\n");
 
     // Main loop: reap orphaned children

@@ -1,2 +1,16 @@
+# Userspace build configuration
+#
+# This OVERRIDES the root .cargo/config.toml for userspace crates.
+# The root sets build.target = "x86_64-unknown-none" (for the kernel).
+# This config sets build.target = "x86_64-indominus" (for userspace).
+
+[build]
+target = "x86_64-indominus"
+
 [target.x86_64-indominus]
 linker = "rust-lld"
+
+[unstable]
+json-target-spec = true
+build-std = ["core", "alloc"]
+build-std-features = ["compiler-builtins-mem"]

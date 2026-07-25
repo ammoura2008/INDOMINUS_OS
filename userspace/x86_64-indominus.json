@@ -10,7 +10,6 @@
   "linker-flavor": "ld.lld",
   "panic-strategy": "abort",
   "disable-redzone": true,
-  "features": "-mmx,-sse,-soft-float",
   "pre-link-args": {
     "ld.lld": ["--gc-sections", "--strip-all", "-z", "max-page-size=4096", "-z", "execstack"]
   },

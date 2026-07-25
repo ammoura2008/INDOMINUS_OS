@@ -1,0 +1,7 @@
+[package]
+name = "test_gs_stress"
+version = "0.1.0"
+edition = "2021"
+
+[dependencies]
+indo-syscall = { path = "../syscall" }

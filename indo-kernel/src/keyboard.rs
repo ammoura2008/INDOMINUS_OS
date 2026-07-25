@@ -100,7 +100,7 @@ pub fn has_data() -> bool {
 /// - Backspace (0x08): remove last character from edit buffer, echo `\b \b`
 /// - Enter (0x0A): commit line (advance w to e), wake blocked readers
 /// - Other: ignore
-fn line_discipline_input(byte: u8) {
+pub fn line_discipline_input(byte: u8) {
     match byte {
         b'\n' => {
             // Enter — commit the line
@@ -139,51 +139,62 @@ fn line_discipline_input(byte: u8) {
 }
 
 /// Read bytes from the line buffer into the provided slice.
-/// Returns the number of bytes read. Blocks if no complete line is available.
+/// Returns the number of bytes read.
 ///
-/// Called by sys_read for stdin. Reads from committed lines (r..w).
+/// If no complete line is available, sets force_switch and returns 0.
+/// The caller (sys_read) returns 0 to userspace. The shell must re-invoke
+/// sys_read. When the process is later woken by keyboard_wake() and
+/// rescheduled, it resumes in user mode at the instruction after `syscall`.
+///
+/// # Why not block in a loop?
+///
+/// yield_now() must NOT use `sti; hlt` (that corrupts KERNEL_GS_BASE).
+/// Without hlt, there's no way to suspend the CPU inside the syscall handler
+/// and resume later within the same function. So we return 0 and let the
+/// force_switch path context-switch. The process resumes in user mode and
+/// retries the syscall.
 pub fn read_line(buf: &mut [u8]) -> usize {
-    loop {
-        let r = LINE_R.load(Ordering::Relaxed);
-        let w = LINE_W.load(Ordering::Relaxed);
+    let r = LINE_R.load(Ordering::Relaxed);
+    let w = LINE_W.load(Ordering::Relaxed);
 
-        if r < w {
-            // Data available — copy from line buffer to user buffer
-            let available = w - r;
-            let to_read = core::cmp::min(buf.len(), available);
-            unsafe {
-                core::ptr::copy_nonoverlapping(
-                    (*LINE_BUF.get()).as_mut_ptr().add(r),
-                    buf.as_mut_ptr(),
-                    to_read,
-                );
-            }
-            LINE_R.store(r + to_read, Ordering::Relaxed);
+    if r < w {
+        // Data available — copy from line buffer to user buffer
+        let available = w - r;
+        let to_read = core::cmp::min(buf.len(), available);
+        unsafe {
+            core::ptr::copy_nonoverlapping(
+                (*LINE_BUF.get()).as_mut_ptr().add(r),
+                buf.as_mut_ptr(),
+                to_read,
+            );
+        }
+        LINE_R.store(r + to_read, Ordering::Relaxed);
 
-            // If we've consumed all committed data, reset the buffer (circular)
-            if LINE_R.load(Ordering::Relaxed) == LINE_W.load(Ordering::Relaxed) {
-                LINE_R.store(0, Ordering::Relaxed);
-                LINE_W.store(0, Ordering::Relaxed);
-                LINE_E.store(0, Ordering::Relaxed);
-            }
-
-            return to_read;
+        // If we've consumed all committed data, reset the buffer (circular)
+        if LINE_R.load(Ordering::Relaxed) == LINE_W.load(Ordering::Relaxed) {
+            LINE_R.store(0, Ordering::Relaxed);
+            LINE_W.store(0, Ordering::Relaxed);
+            LINE_E.store(0, Ordering::Relaxed);
         }
 
-        // No committed data — block this process until a line is committed.
-        // keyboard_wake() (called by line_discipline_input on Enter) will
-        // transition us back to Ready.
-        {
-            let mut sched = crate::process::scheduler::SCHEDULER.lock();
-            if let Some(pid) = sched.current_pid() {
-                if let Some(ref mut proc) = sched.processes_mut()[pid as usize] {
-                    proc.state = crate::process::ProcessState::Blocked;
-                    proc.wake_reason = crate::process::WakeReason::Keyboard;
-                }
-            }
-        }
-        crate::process::yield_now();
+        return to_read;
     }
+
+    // No committed data — block this process and request context switch.
+    // keyboard_wake() (called by line_discipline_input on Enter) will
+    // transition us back to Ready. When rescheduled, the process resumes
+    // in user mode and the shell re-invokes sys_read.
+    {
+        let mut sched = crate::process::scheduler::SCHEDULER.lock();
+        if let Some(pid) = sched.current_pid() {
+            if let Some(ref mut proc) = sched.processes_mut()[pid as usize] {
+                proc.state = crate::process::ProcessState::Blocked;
+                proc.wake_reason = crate::process::WakeReason::Keyboard;
+            }
+        }
+    }
+    crate::process::yield_now();
+    0
 }
 
 /// PS/2 keyboard IRQ1 handler.

@@ -1,0 +1,1 @@
+C:\Users\USER\Documents\indominux\ rex\ operating\ system\userspace\target\x86_64-indominus\release\init: C:\Users\USER\Documents\indominux\ rex\ operating\ system\userspace\init\src\lib.rs C:\Users\USER\Documents\indominux\ rex\ operating\ system\userspace\init\src\main.rs C:\Users\USER\Documents\indominux\ rex\ operating\ system\userspace\syscall\src\lib.rs

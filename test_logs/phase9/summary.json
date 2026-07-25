@@ -1,0 +1,68 @@
+{
+  "iterations": 10,
+  "passed": 10,
+  "failed": 0,
+  "pass_rate": 100.0,
+  "results": [
+    {
+      "iteration": 1,
+      "passed": true,
+      "duration": 35.0562481880188,
+      "failure_reason": ""
+    },
+    {
+      "iteration": 2,
+      "passed": true,
+      "duration": 35.054338216781616,
+      "failure_reason": ""
+    },
+    {
+      "iteration": 3,
+      "passed": true,
+      "duration": 35.05373978614807,
+      "failure_reason": ""
+    },
+    {
+      "iteration": 4,
+      "passed": true,
+      "duration": 35.04610872268677,
+      "failure_reason": ""
+    },
+    {
+      "iteration": 5,
+      "passed": true,
+      "duration": 35.04629945755005,
+      "failure_reason": ""
+    },
+    {
+      "iteration": 6,
+      "passed": true,
+      "duration": 35.04605197906494,
+      "failure_reason": ""
+    },
+    {
+      "iteration": 7,
+      "passed": true,
+      "duration": 35.04875707626343,
+      "failure_reason": ""
+    },
+    {
+      "iteration": 8,
+      "passed": true,
+      "duration": 35.04516577720642,
+      "failure_reason": ""
+    },
+    {
+      "iteration": 9,
+      "passed": true,
+      "duration": 35.05077242851257,
+      "failure_reason": ""
+    },
+    {
+      "iteration": 10,
+      "passed": true,
+      "duration": 35.05829381942749,
+      "failure_reason": ""
+    }
+  ]
+}

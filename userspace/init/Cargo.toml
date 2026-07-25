@@ -9,3 +9,7 @@ indo-syscall = { path = "../syscall" }
 [lib]
 name = "init_lib"
 path = "src/lib.rs"
+
+[[bin]]
+name = "init"
+path = "src/main.rs"

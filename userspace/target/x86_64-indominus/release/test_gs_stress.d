@@ -1,0 +1,1 @@
+C:\Users\USER\Documents\indominux\ rex\ operating\ system\userspace\target\x86_64-indominus\release\test_gs_stress: C:\Users\USER\Documents\indominux\ rex\ operating\ system\userspace\syscall\src\lib.rs C:\Users\USER\Documents\indominux\ rex\ operating\ system\userspace\test_gs_stress\src\main.rs

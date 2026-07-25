@@ -139,14 +139,11 @@ pub fn features() -> &'static CpuFeatures {
     unsafe { &*CPU_FEATURES.get() }
 }
 
-/// Enable SMEP (CR4 bit 20) and SMAP (CR4 bit 21) if supported.
+/// Enable SMEP (CR4 bit 20), SMAP (CR4 bit 21), and SSE/FPU for user-mode.
 ///
 /// SMEP: Prevents kernel from executing code in user-mode pages.
 /// SMAP: Prevents kernel from accessing user-mode data (unless EFLAGS.AC=1).
-///
-/// Only sets bits for features the CPU actually supports (detected via CPUID).
-/// Calling this on a CPU without SMEP/SMAP support is safe — the bits are
-/// simply not set.
+/// SSE:  CR4.OSFXSR/OSXMMEXCPT for user-mode SIMD, CR0.EM=0, CR0.TS=0.
 pub fn enable_smep_smap() {
     let f = features();
     let mut cr4: u64;
@@ -160,6 +157,10 @@ pub fn enable_smep_smap() {
     }
     if f.smap {
         cr4 |= 1 << 21; // CR4.SMAP
+    }
+    if f.sse {
+        cr4 |= 1 << 9;  // CR4.OSFXSR — enable FXSAVE/FXRSTOR and SSE
+        cr4 |= 1 << 10; // CR4.OSXMMEXCPT — enable SIMD FP exceptions
     }
 
     unsafe {

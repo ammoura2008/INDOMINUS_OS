@@ -1,0 +1,21 @@
+# INDOMINUS OS — Userspace Workspace
+#
+# This is a SEPARATE workspace from the root. It builds userspace binaries
+# (shell, init) for the x86_64-indominus target. The root .cargo/config.toml
+# sets build.target = "x86_64-unknown-none" for the kernel — this workspace
+# overrides that with its own .cargo/config.toml.
+
+[workspace]
+members = [
+    "syscall",
+    "shell",
+    "init",
+    "test_gs_stress",
+]
+resolver = "2"
+
+[profile.release]
+opt-level    = 2
+lto          = "thin"
+codegen-units = 1
+panic        = "abort"

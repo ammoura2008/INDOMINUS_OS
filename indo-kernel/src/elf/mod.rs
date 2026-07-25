@@ -306,7 +306,7 @@ pub fn load_elf(elf_data: &[u8], pml4_phys: memory::PhysAddr) -> Result<ElfImage
                 flags,
             );
 
-            let frame_ptr = unsafe {
+            let frame_ptr: *mut u8 = unsafe {
                 vmm::phys_to_virt(frame.start_address().as_u64()).as_mut_ptr()
             };
 
@@ -333,18 +333,25 @@ pub fn load_elf(elf_data: &[u8], pml4_phys: memory::PhysAddr) -> Result<ElfImage
                 0
             };
 
+            let page_offset = if phdr.p_vaddr > page_virt_addr {
+                (phdr.p_vaddr - page_virt_addr) as usize
+            } else {
+                0
+            };
+            let dest = unsafe { frame_ptr.add(page_offset) };
+
             if data_in_page > 0 {
                 let src_offset = phdr.p_offset + seg_data_start;
                 let src = &elf_data[src_offset as usize..(src_offset + data_in_page) as usize];
                 unsafe {
-                    core::ptr::copy_nonoverlapping(src.as_ptr(), frame_ptr, data_in_page as usize);
+                    core::ptr::copy_nonoverlapping(src.as_ptr(), dest, data_in_page as usize);
                 }
             }
 
             if bss_in_page > 0 {
                 unsafe {
                     core::ptr::write_bytes(
-                        frame_ptr.add((data_in_page) as usize),
+                        dest.add(data_in_page as usize),
                         0,
                         bss_in_page as usize,
                     );

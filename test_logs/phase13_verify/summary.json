@@ -1,0 +1,14 @@
+{
+  "iterations": 1,
+  "passed": 1,
+  "failed": 0,
+  "pass_rate": 100.0,
+  "results": [
+    {
+      "iteration": 1,
+      "passed": true,
+      "duration": 40.05608534812927,
+      "failure_reason": ""
+    }
+  ]
+}

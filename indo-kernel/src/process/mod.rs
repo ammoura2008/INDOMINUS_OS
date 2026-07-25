@@ -135,7 +135,7 @@ pub fn spawn_user(elf_data: &[u8], parent: Option<Pid>) -> Option<Pid> {
     }
 
     // User RSP starts at the top of the stack region
-    let user_rsp = USER_STACK_TOP;
+    let user_rsp = USER_STACK_TOP - 8; // ABI: RSP must be 16-byte aligned before CALL
 
     crate::serial::write_str("[PROC] ELF loaded: entry=");
     crate::serial::write_hex(elf_image.entry);
@@ -232,11 +232,21 @@ pub fn keyboard_wake() {
 
 /// Yield the CPU to the next process.
 ///
-/// Used by pipe read/write to block while waiting for data/space.
+/// Sets the force_switch flag so the syscall_entry handler performs a context
+/// switch via the force_switch path (which correctly does swapgs before iretq).
+///
+/// # IMPORTANT: Do NOT use `sti; hlt` here!
+///
+/// yield_now() is called from INSIDE a syscall handler, after swapgs has set
+/// KERNEL_GS_BASE = 0. If we do `sti; hlt`, the timer interrupt fires while
+/// KERNEL_GS_BASE is 0. The timer handler does NOT do swapgs, so when it
+/// context-switches to a new process via iretq, KERNEL_GS_BASE remains 0.
+/// The new process then does `syscall` → `swapgs` → GS_BASE = 0 → gs:0
+/// faults at address 0 (CR2=0x0).
+///
+/// Instead, we just set force_switch and return. The caller MUST break out of
+/// any loop and return from syscall_dispatch. The force_switch path in
+/// syscall_entry will then do the proper context switch with swapgs.
 pub fn yield_now() {
     unsafe { crate::syscall::set_force_switch(); }
-    // After force_switch, we need to re-enable interrupts since syscall clears IF
-    unsafe { core::arch::asm!("sti", options(nostack, nomem)); }
-    // HLT until next timer interrupt reschedules us
-    unsafe { core::arch::asm!("hlt", options(nostack, nomem)); }
 }

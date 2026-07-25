@@ -1,0 +1,128 @@
+{
+  "iterations": 20,
+  "passed": 20,
+  "failed": 0,
+  "pass_rate": 100.0,
+  "results": [
+    {
+      "iteration": 1,
+      "passed": true,
+      "duration": 35.05815243721008,
+      "failure_reason": ""
+    },
+    {
+      "iteration": 2,
+      "passed": true,
+      "duration": 35.054200649261475,
+      "failure_reason": ""
+    },
+    {
+      "iteration": 3,
+      "passed": true,
+      "duration": 35.05101251602173,
+      "failure_reason": ""
+    },
+    {
+      "iteration": 4,
+      "passed": true,
+      "duration": 35.05814814567566,
+      "failure_reason": ""
+    },
+    {
+      "iteration": 5,
+      "passed": true,
+      "duration": 35.05756163597107,
+      "failure_reason": ""
+    },
+    {
+      "iteration": 6,
+      "passed": true,
+      "duration": 35.04344320297241,
+      "failure_reason": ""
+    },
+    {
+      "iteration": 7,
+      "passed": true,
+      "duration": 35.04050159454346,
+      "failure_reason": ""
+    },
+    {
+      "iteration": 8,
+      "passed": true,
+      "duration": 35.03733944892883,
+      "failure_reason": ""
+    },
+    {
+      "iteration": 9,
+      "passed": true,
+      "duration": 35.049458503723145,
+      "failure_reason": ""
+    },
+    {
+      "iteration": 10,
+      "passed": true,
+      "duration": 35.047569036483765,
+      "failure_reason": ""
+    },
+    {
+      "iteration": 11,
+      "passed": true,
+      "duration": 35.04440760612488,
+      "failure_reason": ""
+    },
+    {
+      "iteration": 12,
+      "passed": true,
+      "duration": 35.05190992355347,
+      "failure_reason": ""
+    },
+    {
+      "iteration": 13,
+      "passed": true,
+      "duration": 35.04868769645691,
+      "failure_reason": ""
+    },
+    {
+      "iteration": 14,
+      "passed": true,
+      "duration": 35.03713512420654,
+      "failure_reason": ""
+    },
+    {
+      "iteration": 15,
+      "passed": true,
+      "duration": 35.032938957214355,
+      "failure_reason": ""
+    },
+    {
+      "iteration": 16,
+      "passed": true,
+      "duration": 35.04458832740784,
+      "failure_reason": ""
+    },
+    {
+      "iteration": 17,
+      "passed": true,
+      "duration": 35.03584170341492,
+      "failure_reason": ""
+    },
+    {
+      "iteration": 18,
+      "passed": true,
+      "duration": 35.04374170303345,
+      "failure_reason": ""
+    },
+    {
+      "iteration": 19,
+      "passed": true,
+      "duration": 35.044607639312744,
+      "failure_reason": ""
+    },
+    {
+      "iteration": 20,
+      "passed": true,
+      "duration": 35.04814696311951,
+      "failure_reason": ""
+    }
+  ]
+}

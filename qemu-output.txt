@@ -1,0 +1,178 @@
+﻿[2J[01;01H[=3h[2J[01;01H[2J[01;01H[=3h[2J[01;01H[2J[01;01H[=3h[2J[01;01HBdsDxe: loading Boot0001 "UEFI QEMU HARDDISK QM00001 " from PciRoot(0x0)/Pci(0x1F,0x2)/Sata(0x0,0xFFFF,0x0)
+BdsDxe: starting Boot0001 "UEFI QEMU HARDDISK QM00001 " from PciRoot(0x0)/Pci(0x1F,0x2)/Sata(0x0,0xFFFF,0x0)
+[KERNEL] INDOMINUS OS -- scheduler test
+[KERNEL] Kernel phys: 0x000000000D7FE000 .. 0x000000000DCD8348
+[CPU] Detected features:
+  NX (No Execute):      YES
+  SMEP:                  NO
+  SMAP:                  NO
+  PAT:                   YES
+  APIC:                  YES
+  Syscall/Sysret:        YES
+  FSGSBASE:              NO
+  SSE:                   YES
+  SSE2:                  YES
+  AVX:                   NO
+  AVX2:                  NO
+  TSC Deadline Timer:    NO
+  Invariant TSC:         NO
+  Max PHY addr bits:     0x0000000000000028
+[MARK] Before switch_gdt_to_virtual
+[TSS] phys=0x000000000D84C8C0 virt=0xFFFFFFFF8004E8C0
+[TSS] patched entry5=0x80008904E8C00067 entry6=0x00000000FFFFFFFF
+[GDTR] limit=0x0000000000000057 base=0xFFFFFFFF80056018
+[TSS] verified base=0xFFFFFFFF8004E8C0
+[MARK] After switch_gdt_to_virtual
+[MARK] After init_heap
+[MARK] Before IDT init
+[MARK] idt::init start
+[IDT] RFLAGS=0x0x0000000000000046 IF=0 (DISABLED)
+[MARK] idt::init creating IDT
+[MARK] idt::init new() done
+[MARK] idt::init setting handlers
+[MARK] idt::init exception handlers done
+[MARK] idt::init handlers done
+[MARK] idt::init idt_phys=0x0x000000000D854080 idt_virt=0x0xFFFFFFFF80056080
+[IDTR] limit=0x0000000000000FFF base=0xFFFFFFFF80056080
+[MARK] idt::init done
+[MARK] After IDT init
+[MARK] Before ACPI init
+[ACPI] Searching for RSDP...
+[ACPI] Using RSDP from bootloader
+[ACPI] RSDP at 0x000000000F77E014
+[ACPI] XSDT=0x000000000F77D0E8 RSDT=0x000000000F77D074
+[ACPI] Found 0x0000000000000006 tables
+[ACPI]   FACP (rev=0x0000000000000003 len=0x00000000000000F4
+[ACPI]   APIC (rev=0x0000000000000003 len=0x0000000000000078
+[ACPI]   HPET (rev=0x0000000000000001 len=0x0000000000000038
+[ACPI]   MCFG (rev=0x0000000000000001 len=0x000000000000003C
+[ACPI]   WAET (rev=0x0000000000000001 len=0x0000000000000028
+[ACPI]   BGRT (rev=0x0000000000000001 len=0x0000000000000038
+[MARK] After ACPI init
+[MARK] Before PCI enumerate
+[PCI] Enumerating PCI bus...
+[PCI] Found 0x0000000000000006 devices
+[PCI]   0x0000000000000000:0x0000000000000000.0x0000000000000000 [Bridge Device] vendor=0x0x0000000000008086 dev=0x0x00000000000029C0
+[PCI]   0x0000000000000000:0x0000000000000001.0x0000000000000000 [Display Controller] vendor=0x0x0000000000001234 dev=0x0x0000000000001111
+[PCI]   0x0000000000000000:0x0000000000000002.0x0000000000000000 [Network Controller] vendor=0x0x0000000000008086 dev=0x0x00000000000010D3 irq=0x000000000000000B
+[PCI]   0x0000000000000000:0x000000000000001F.0x0000000000000002 [Mass Storage Controller] vendor=0x0x0000000000008086 dev=0x0x0000000000002922 irq=0x000000000000000A
+[PCI]   0x0000000000000000:0x000000000000001F.0x0000000000000003 [Serial Bus Controller] vendor=0x0x0000000000008086 dev=0x0x0000000000002930 irq=0x000000000000000A
+[PCI]   0x0000000000000000:0x000000000000001F.0x0000000000000000 [Bridge Device] vendor=0x0x0000000000008086 dev=0x0x0000000000002918
+[MARK] After PCI enumerate
+[MARK] Before AHCI init
+[AHCI] Initializing...
+[AHCI] Searching for AHCI controller...
+[AHCI] Found controller at PCI 0x0000000000000000:0x000000000000001F.0x0000000000000002
+[AHCI] ABAR=0x0x0000000081084000
+[AHCI] Bus mastering enabled
+[AHCI] ABAR mapped
+[AHCI] CAP=0x0x00000000C0141F05 ports=0x0000000000000006
+[AHCI] HBA reset OK
+[AHCI] Port 0x0000000000000000 ssts=0x0x0000000000000113 det=0x0000000000000003
+[AHCI] Port 0x0000000000000000 device detected, initializing...
+[AHCI] Port 0x0000000000000000 sectors=0x00000000000FC000 ssize=0x0000000000000200
+[AHCI] Port 0x0000000000000000 initialized OK
+[BLOCK] Registered device id=0x0000000000000000 name=ahci0
+[AHCI] Registered as device id=0x0000000000000000 sectors=0x00000000000FC000 ssize=0x0000000000000200
+[MARK] After AHCI init
+[MARK] Before FAT32 init
+[FAT] Invalid BPB (bps or spc is zero)
+[FAT] Mount failed: errno=0xFFFFFFFFFFFFFFFB
+[MARK] After FAT32 init
+[MARK] Before block device test
+[TEST] Phase 9.1: Block device abstraction
+[BLOCK] RamDisk created: sectors=0x0000000000000008 sector_size=0x0000000000000200 total=0x0000000000001000
+[TEST]   Device properties OK
+[BLOCK] Registered device id=0x0000000000000001 name=ramdisk
+[TEST]   Registry OK
+[TEST]   Read/write verify OK
+[TEST]   Multi-sector OK
+[TEST]   Out-of-bounds check OK
+[TEST]   Buffer size check OK
+[TEST]   Registry lookup OK
+[TEST]   Unregister OK
+[TEST] Phase 9.1: ALL TESTS PASSED
+[MARK] After block device test
+[MARK] Before AHCI disk test
+[TEST] Phase 9.3: AHCI disk read
+[TEST]   Device: ahci0 sectors=0x00000000000FC000 ssize=0x0000000000000200
+[AHCI] TFES: IS=0x0x0000000000000001 TFD=0x0x0000000000000050 LBA=0x0x0000000000000000
+[TEST]   FAIL: read_sector(0) error=0xFFFFFFFFFFFFFFFB
+[MARK] After AHCI disk test
+[MARK] Before interrupts init
+[INT] Initializing interrupt subsystem...
+[LAPIC] Mapped at phys=0x00000000FEE00000
+[LAPIC] ID: 0x0x0000000000000000
+[LAPIC] Enabled, spurious vector: 39
+[LAPIC] Timer configured: ~100 Hz periodic, vector 32
+[IOAPIC] Mapped at phys=0x00000000FEC00000
+[IOAPIC] ID: 0x0x0000000000000000
+[IOAPIC] Version: 32, max redirection entries: 24
+[IOAPIC] All IRQs masked
+[PIT] Channel 0 configured: 11931 divisor, ~100 Hz, vector 32 (IRQ0)
+[INT] PIT IRQ0 -> GSI 0x0000000000000000 -> IOAPIC entry 0x0000000000000000
+[IOAPIC] IRQ 0 -> vector 32
+[INT] KBD IRQ1 -> GSI 0x0000000000000001 -> IOAPIC entry 0x0000000000000001
+[IOAPIC] IRQ 1 -> vector 33
+[INT] Interrupt subsystem initialized
+[MARK] After interrupts init
+[MARK] Before keyboard init
+[KBD] Initializing PS/2 keyboard driver
+[KBD] Keyboard driver initialized
+[MARK] After keyboard init
+[MARK] Before syscall init
+[SYSCALL] Setting up MSRs...
+[SYSCALL] LSTAR entry phys=0x000000000D8016FC virt=0xFFFFFFFF800036FC
+[SYSCALL] MSRs configured
+[MARK] After syscall init
+[MARK] Before harden_identity_map
+[MARK] After harden_identity_map
+[MARK] Before process init
+[PROC] Initializing process subsystem...
+[PROC] stack frame: entry_phys=0x000000000D81BC20 virt=0xFFFFFFFF8001DC20 sp=0xFFFFFFFFC0002360
+[SCHED] Idle process at PID 0
+[PROC] stack frame: entry_phys=0x000000000D81BC70 virt=0xFFFFFFFF8001DC70 sp=0xFFFFFFFFC0004360
+[SCHED] Spawned kernel process PID=1
+[PROC] Process subsystem initialized
+[MARK] After process init
+[MARK] Before VFS init
+[MARK] After VFS init
+[MARK] Before VFS file test
+[TEST] Phase 9.2: VFS file I/O
+[TEST]   Write OK
+[TEST]   Open OK
+[TEST]   Read & verify OK
+[TEST]   Readdir OK
+[TEST]   NotFound error OK
+[TEST] Phase 9.2: ALL TESTS PASSED
+[TEST] Phase 9.2b: FD semantics
+[TEST]   T1 dup2 shared offset OK
+[TEST]   T2 independent offsets OK
+[TEST]   T3 fork shared offset OK
+[TEST]   T5 no-CLOEXEC flag clear OK
+[TEST]   T4 CLOEXEC flag set OK
+[TEST]   T6 dup2 clears CLOEXEC OK
+[TEST] Phase 9.2b: ALL TESTS PASSED
+[MARK] After VFS file test
+[MARK] Before initrd load
+[INITRD] Loading initrd: 0x0000000000002330 bytes
+[INITRD] Creating file: 'hello.txt'
+[INITRD]   -> OK
+[INITRD] Creating dir: 'bin'
+[INITRD]   -> OK
+[INITRD] Creating dir: 'bin'
+[INITRD]   -> Err 0xFFFFFFFFFFFFFFEF
+[INITRD] Creating file: 'bin/indosh'
+[INITRD]   -> OK
+[INITRD] Creating file: 'bin/init'
+[INITRD]   -> OK
+[INITRD] Loaded 0x0000000000000003 files, 0x0000000000000002 dirs
+[MARK] After initrd load
+[KERNEL] All init done.
+[KERNEL] Shell binary found: 0x0000000000001000 bytes
+[PROC] ELF loaded: entry=0x0000000000400078, stack_top=0x00007FFFFFFF0000, stack_guard=0x00007FFFFFFEB000, pml4=0x0000000001BEE000
+[SCHED] Spawned user process 2
+[KERNEL] Shell spawned as PID=0x0000000000000002
+[PROC] Starting scheduler — first tick will dispatch
+[INIT] Init process (PID 1) running — reaper active
+Indominus OS Shell v0.2

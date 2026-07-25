@@ -1,0 +1,1 @@
+C:\Users\USER\Documents\indominux\ rex\ operating\ system\userspace\target\x86_64-indominus\release\libindosh_lib.rlib: C:\Users\USER\Documents\indominux\ rex\ operating\ system\userspace\shell\src\lib.rs C:\Users\USER\Documents\indominux\ rex\ operating\ system\userspace\syscall\src\lib.rs

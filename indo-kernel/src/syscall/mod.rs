@@ -208,6 +208,15 @@ pub unsafe fn set_force_switch() {
     PER_CPU.force_switch = 1;
 }
 
+/// Return the kernel virtual address of the per-CPU data structure.
+///
+/// This is the value stored in KERNEL_GS_BASE MSR, used by the regression
+/// test to verify KERNEL_GS_BASE matches.
+pub fn per_cpu_base_addr() -> u64 {
+    let raw = &raw const PER_CPU as u64;
+    unsafe { crate::memory::phys_to_kernel_virt(raw) }
+}
+
 // ─────────────────────────────────────────────────────────────────────────────
 // MSR setup
 // ─────────────────────────────────────────────────────────────────────────────
@@ -269,19 +278,29 @@ pub fn init() {
         Efer::write(efer);
     }
 
-    // Set KERNEL_GS_BASE to point to our per-CPU data using the kernel virtual address.
+    // Set KERNEL_GS_BASE to point to our per-CPU data.
     // The syscall_entry handler does `swapgs` which swaps GS_BASE and KERNEL_GS_BASE.
     // After swapgs, the kernel uses KERNEL_GS_BASE for GS-relative accesses.
     // So KERNEL_GS_BASE must point to PER_CPU, while GS_BASE (used in user mode) can be 0.
-    // The user PML4 does NOT have the identity map, so we must use the higher-half
-    // virtual address which IS mapped in all PML4s.
+    // &raw const PER_CPU gives the kernel virtual address directly (it's a static in .bss,
+    // already mapped in all PML4s via the higher-half mapping). No phys→virt conversion needed.
     unsafe {
-        let gs_phys = &raw const PER_CPU as u64;
-        let gs_virt = crate::memory::phys_to_kernel_virt(gs_phys);
+        let raw_addr = &raw const PER_CPU as u64;
+        let gs_virt = crate::memory::phys_to_kernel_virt(raw_addr);
+        crate::serial::write_str("[SYSCALL] PER_CPU raw=0x");
+        crate::serial::write_hex(raw_addr);
+        crate::serial::write_str(" virt=0x");
+        crate::serial::write_hex(gs_virt);
+        crate::serial::write_nl();
         // KERNEL_GS_BASE (MSR 0xC0000102) — used in kernel mode after swapgs
         Msr::new(0xC000_0102).write(gs_virt);
         // GS_BASE (MSR 0xC0000101) — not used, but clear it for sanity
         Msr::new(0xC000_0101).write(0u64);
+        // Verify
+        let readback: u64 = Msr::new(0xC000_0102).read();
+        crate::serial::write_str("[SYSCALL] KERNEL_GS_BASE readback=0x");
+        crate::serial::write_hex(readback);
+        crate::serial::write_nl();
     }
 
     crate::serial::write_str("[SYSCALL] MSRs configured\n");
@@ -956,18 +975,20 @@ fn sys_write(fd: u64, buf_ptr: u64, count: u64) -> u64 {
                 if let Some(ref mut p) = crate::process::PIPES[pipe_idx] {
                     let mut written = 0u64;
                     for &byte in buf {
-                        loop {
-                            let nwrite = p.nwrite.load(core::sync::atomic::Ordering::Relaxed);
-                            let nread = p.nread.load(core::sync::atomic::Ordering::Relaxed);
-                            if nwrite < nread + crate::process::pipe::PIPE_SIZE as u32 {
-                                break;
-                            }
+                        let nwrite = p.nwrite.load(core::sync::atomic::Ordering::Relaxed);
+                        let nread = p.nread.load(core::sync::atomic::Ordering::Relaxed);
+                        if nwrite >= nread + crate::process::pipe::PIPE_SIZE as u32 {
+                            // Pipe full — return partial bytes written.
+                            // force_switch will context-switch; shell re-invokes sys_write.
                             if !p.read_open.load(core::sync::atomic::Ordering::Relaxed) {
                                 return written;
                             }
-                            crate::process::yield_now();
+                            unsafe { crate::syscall::set_force_switch(); }
+                            if written > 0 {
+                                crate::process::keyboard_wake();
+                            }
+                            return written;
                         }
-                        let nwrite = p.nwrite.load(core::sync::atomic::Ordering::Relaxed);
                         let idx = (nwrite as usize) % crate::process::pipe::PIPE_SIZE;
                         p.data[idx] = byte;
                         p.nwrite.store(nwrite + 1, core::sync::atomic::Ordering::Relaxed);

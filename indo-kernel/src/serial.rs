@@ -6,9 +6,22 @@
 const COM1_BASE: u16 = 0x3F8;
 
 const UART_DATA:        u16 = COM1_BASE + 0;
+const UART_INT_ENABLE:  u16 = COM1_BASE + 1;
 const UART_LINE_STATUS: u16 = COM1_BASE + 5;
 
 const LSR_THRE: u8 = 1 << 5;
+const LSR_DATA_READY: u8 = 1 << 0;
+
+/// Enable UART RX interrupts (IRQ4).
+///
+/// Sets bit 0 of the Interrupt Enable Register (IER) on COM1.
+/// This causes the UART to fire IRQ4 whenever a byte is received.
+pub fn enable_rx_interrupt() {
+    unsafe {
+        outb(UART_INT_ENABLE, 0x01); // Bit 0: RX data ready interrupt
+    }
+    crate::serial::write_str("[UART] RX interrupts enabled\n");
+}
 
 #[inline]
 unsafe fn outb(port: u16, value: u8) {
@@ -135,6 +148,26 @@ pub fn ddbg(marker: u8) {
 #[cfg(not(DEBUG_KERNEL))]
 #[inline(always)]
 pub fn ddbg(_marker: u8) {}
+
+/// COM1 IRQ4 handler — reads received bytes and feeds them into the
+/// keyboard line discipline so they appear on stdin (sys_read).
+pub fn serial_rx_handler() {
+    unsafe {
+        let lsr = inb(UART_LINE_STATUS);
+        if lsr & LSR_DATA_READY != 0 {
+            let byte = inb(UART_DATA);
+            crate::keyboard::line_discipline_input(byte);
+        }
+    }
+}
+
+/// Initialize COM1 serial input: enable RX interrupt and register IRQ4 handler.
+pub fn init_rx() {
+    crate::serial::write_str("[UART] Initializing serial RX (IRQ4)\n");
+    enable_rx_interrupt();
+    crate::interrupts::dispatch::register(4, serial_rx_handler);
+    crate::serial::write_str("[UART] Serial RX handler registered on IRQ4\n");
+}
 
 /// Diagnostic: print [X RAX=0x...] to serial. Called from naked handlers.
 /// `label` = 'I' for iretq path, 'S' for syscall entry path.

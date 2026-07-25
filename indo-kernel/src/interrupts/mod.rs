@@ -111,6 +111,17 @@ pub fn init(lapic_phys: u64, ioapic_phys: u64, ioapic_gsi_base: u32) {
         ioapic::set_irq(kbd_entry as u16, 33, 0);
         ioapic::unmask_irq(kbd_entry as u16);
 
+        // Route COM1 serial: find which GSI IRQ4 maps to
+        let serial_gsi = gsi_for_irq[4];
+        let serial_entry = serial_gsi.wrapping_sub(ioapic_gsi_base);
+        crate::serial::write_str("[INT] COM1 IRQ4 -> GSI ");
+        crate::serial::write_hex(serial_gsi as u64);
+        crate::serial::write_str(" -> IOAPIC entry ");
+        crate::serial::write_hex(serial_entry as u64);
+        crate::serial::write_nl();
+        ioapic::set_irq(serial_entry as u16, 36, 0);
+        ioapic::unmask_irq(serial_entry as u16);
+
         // Mask all other IOAPIC entries (already masked from ioapic::init)
     }
 

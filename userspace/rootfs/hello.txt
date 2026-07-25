@@ -1,2 +1,1 @@
-Hello from Indominus OS rootfs!
-This file was loaded from the initrd (cpio newc archive).
+Hello from INDOMINUS OS! 
