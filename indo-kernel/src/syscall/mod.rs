@@ -840,28 +840,42 @@ fn sys_read(fd: u64, buf_ptr: u64, count: u64) -> u64 {
                 return errno::EBADF as u64; // Can't read from write end
             }
             let pipe_idx = pipe_idx as usize;
+            if pipe_idx >= crate::process::MAX_PIPES {
+                return errno::EBADF as u64;
+            }
             let buf = buf_ptr as *mut u8;
                     let mut total_read = 0u64;
 
             // Read available data from pipe (non-blocking check first)
-            unsafe {
-                if let Some(ref mut p) = crate::process::PIPES[pipe_idx] {
+            let pipe_result = {
+                let pipes = crate::process::PIPES.lock();
+                if let Some(ref p) = pipes[pipe_idx] {
                     let nread = p.nread.load(core::sync::atomic::Ordering::Relaxed) as u64;
                     let nwrite = p.nwrite.load(core::sync::atomic::Ordering::Relaxed) as u64;
                     while total_read < count && nread + total_read < nwrite {
                         let idx = ((nread + total_read) as usize) % crate::process::pipe::PIPE_SIZE;
-                        *buf.add(total_read as usize) = p.data[idx];
+                        unsafe { *buf.add(total_read as usize) = p.data[idx]; }
                         total_read += 1;
                     }
                     if total_read > 0 {
-                        p.nread.store((nread + total_read) as u32, core::sync::atomic::Ordering::Relaxed);
-                        return total_read;
+                        p.nread.store(((nread + total_read) & 0xFFFF_FFFF) as u32, core::sync::atomic::Ordering::Relaxed);
+                        Some(total_read)
+                    } else if !p.write_open.load(core::sync::atomic::Ordering::Relaxed) {
+                        Some(0u64) // EOF
+                    } else {
+                        None // Need to block
                     }
-                    // Check if writer is closed (EOF)
-                    if !p.write_open.load(core::sync::atomic::Ordering::Relaxed) {
-                        return 0; // EOF
-                    }
+                } else {
+                    Some(errno::EBADF as u64) // Pipe gone
                 }
+                // pipes Mutex dropped here
+            };
+            match pipe_result {
+                Some(n) => {
+                    if n > 0 { crate::process::keyboard_wake(); }
+                    return n;
+                }
+                None => {} // Fall through to block
             }
 
             // Buffer empty — block until data arrives
@@ -879,6 +893,9 @@ fn sys_read(fd: u64, buf_ptr: u64, count: u64) -> u64 {
         }
         crate::process::FdType::FsFile { index } => {
             let index = index as usize;
+            if index >= crate::process::process::MAX_FILE_HANDLES {
+                return errno::EBADF as u64;
+            }
             let sched = crate::process::scheduler::SCHEDULER.lock();            if let Some(pid) = sched.current_pid() {
                 if let Some(ref proc) = sched.processes()[pid as usize] {
                     if let Some(ref file_handle) = proc.file_handles[index] {
@@ -969,39 +986,48 @@ fn sys_write(fd: u64, buf_ptr: u64, count: u64) -> u64 {
                 return errno::EBADF as u64; // Can't write to read end
             }
             let pipe_idx = pipe_idx as usize;
+            if pipe_idx >= crate::process::MAX_PIPES {
+                return errno::EBADF as u64;
+            }
             let buf = unsafe { core::slice::from_raw_parts(buf_ptr as *const u8, count as usize) };
 
-            unsafe {
-                if let Some(ref mut p) = crate::process::PIPES[pipe_idx] {
+            let write_result = {
+                let mut pipes = crate::process::PIPES.lock();
+                if let Some(ref mut p) = pipes[pipe_idx] {
                     let mut written = 0u64;
                     for &byte in buf {
                         let nwrite = p.nwrite.load(core::sync::atomic::Ordering::Relaxed);
                         let nread = p.nread.load(core::sync::atomic::Ordering::Relaxed);
-                        if nwrite >= nread + crate::process::pipe::PIPE_SIZE as u32 {
+                        if nwrite == u32::MAX || nwrite >= nread.wrapping_add(crate::process::pipe::PIPE_SIZE as u32) {
                             // Pipe full — return partial bytes written.
-                            // force_switch will context-switch; shell re-invokes sys_write.
                             if !p.read_open.load(core::sync::atomic::Ordering::Relaxed) {
                                 return written;
                             }
-                            unsafe { crate::syscall::set_force_switch(); }
                             if written > 0 {
+                                drop(pipes);
                                 crate::process::keyboard_wake();
                             }
+                            unsafe { crate::syscall::set_force_switch(); }
                             return written;
                         }
                         let idx = (nwrite as usize) % crate::process::pipe::PIPE_SIZE;
                         p.data[idx] = byte;
-                        p.nwrite.store(nwrite + 1, core::sync::atomic::Ordering::Relaxed);
+                        p.nwrite.store(nwrite.wrapping_add(1), core::sync::atomic::Ordering::Relaxed);
                         written += 1;
                     }
-                    crate::process::keyboard_wake();
-                    return written;
+                    written
+                } else {
+                    return errno::EBADF as u64;
                 }
-            }
-            errno::EBADF as u64
+            };
+            crate::process::keyboard_wake();
+            return write_result;
         }
         crate::process::FdType::FsFile { index } => {
             let index = index as usize;
+            if index >= crate::process::process::MAX_FILE_HANDLES {
+                return errno::EBADF as u64;
+            }
             let sched = crate::process::scheduler::SCHEDULER.lock();            if let Some(pid) = sched.current_pid() {
                 if let Some(ref proc) = sched.processes()[pid as usize] {
                     if let Some(ref file_handle) = proc.file_handles[index] {
@@ -1143,7 +1169,10 @@ fn sys_fork() -> u64 {
 
         match pid {
             Some(pid) => {
-                let mut child = Process::new_kernel(pid, 0);
+                let mut child = match Process::new_kernel(pid, 0) {
+                    Some(c) => c,
+                    None => return errno::ENOMEM as u64,
+                };
                 child.state = crate::process::ProcessState::Ready;
                 child.stack_pointer = child_sp;
                 child.kernel_stack_base = stack_base;
@@ -1230,6 +1259,9 @@ fn sys_exec(path_ptr: u64) -> u64 {
     // Close FDs marked close-on-exec before loading.
     // POSIX: only FDs with FD_CLOEXEC flag are closed on exec.
     // FDs 0, 1, 2 are never closed by exec (stdin/stdout/stderr).
+    // Collect pipe close operations first, then execute after releasing SCHEDULER
+    // to avoid lock ordering issues (SCHEDULER → PIPES).
+    let mut cloexec_pipes: alloc::vec::Vec<(usize, bool)> = alloc::vec::Vec::new();
     {
         let mut sched = crate::process::scheduler::SCHEDULER.lock();
         if let Some(pid) = sched.current_pid() {
@@ -1237,7 +1269,7 @@ fn sys_exec(path_ptr: u64) -> u64 {
                 const CLOEXEC_BIT: u8 = 1;
                 for i in 3..crate::process::MAX_FDS {
                     if proc.fd_flags[i] & CLOEXEC_BIT == 0 {
-                        continue; // Not marked close-on-exec — inherit it
+                        continue;
                     }
                     let fd_type = proc.fd_types[i];
                     if fd_type == crate::process::FdType::None {
@@ -1246,19 +1278,15 @@ fn sys_exec(path_ptr: u64) -> u64 {
                     match fd_type {
                         crate::process::FdType::Pipe { pipe_idx, writable } => {
                             let pipe_idx = pipe_idx as usize;
-                            unsafe {
-                                if let Some(ref mut p) = crate::process::PIPES[pipe_idx] {
-                                    crate::process::pipe::pipe_close(p, writable);
-                                    let old = p.refcount.fetch_sub(1, core::sync::atomic::Ordering::AcqRel);
-                                    if old == 1 {
-                                        crate::process::free_pipe(pipe_idx);
-                                    }
-                                }
+                            if pipe_idx < crate::process::MAX_PIPES {
+                                cloexec_pipes.push((pipe_idx, writable));
                             }
                         }
                         crate::process::FdType::FsFile { index } => {
                             let index = index as usize;
-                            // Check if any other FD shares this handle
+                            if index >= crate::process::process::MAX_FILE_HANDLES {
+                                continue;
+                            }
                             let still_referenced = proc.fd_types.iter().enumerate().any(|(j, f)| {
                                 j != i && matches!(f, crate::process::FdType::FsFile { index: idx } if *idx as usize == index)
                             });
@@ -1269,6 +1297,19 @@ fn sys_exec(path_ptr: u64) -> u64 {
                         _ => {}
                     }
                     proc.fd_types[i] = crate::process::FdType::None;
+                }
+            }
+        }
+    }
+    // Execute pipe closes after SCHEDULER is dropped
+    if !cloexec_pipes.is_empty() {
+        let mut pipes = crate::process::PIPES.lock();
+        for (pipe_idx, writable) in cloexec_pipes {
+            if let Some(ref mut p) = pipes[pipe_idx] {
+                crate::process::pipe::pipe_close(p, writable);
+                let old = p.refcount.fetch_sub(1, core::sync::atomic::Ordering::AcqRel);
+                if old == 1 {
+                    pipes[pipe_idx] = None;
                 }
             }
         }
@@ -1382,6 +1423,9 @@ fn sys_exec(path_ptr: u64) -> u64 {
             // We need to modify the saved RSP on the kernel stack to point to
             // a new user-mode IRET frame that will return to the new entry point.
             let sp = proc.stack_pointer as *mut u64;
+            if sp.is_null() {
+                return errno::EINVAL as u64;
+            }
             unsafe {
                 // [rsp+2] = RCX = user RIP (for IRET)
                 sp.add(2).write(user_rip);
@@ -1420,44 +1464,57 @@ fn sys_close(fd: u64) -> u64 {
         return errno::EBADF as u64;
     }
 
-    let mut sched = crate::process::scheduler::SCHEDULER.lock();
-    if let Some(pid) = sched.current_pid() {
-        if let Some(ref mut proc) = sched.processes_mut()[pid as usize] {
-            let fd_type = proc.fd_types[fd as usize];
-            match fd_type {
-                crate::process::FdType::Pipe { pipe_idx, writable } => {
-                    let pipe_idx = pipe_idx as usize;
-                    unsafe {
-                        if let Some(ref mut p) = crate::process::PIPES[pipe_idx] {
-                            crate::process::pipe::pipe_close(p, writable);
-                            // Decrement refcount. If last reference, free the pipe slot.
-                            let old = p.refcount.fetch_sub(1, core::sync::atomic::Ordering::AcqRel);
-                            if old == 1 {
-                                crate::process::free_pipe(pipe_idx);
-                            }
+    let mut pipe_ops: alloc::vec::Vec<(usize, bool)> = alloc::vec::Vec::new();
+    let mut fs_close_indices: alloc::vec::Vec<usize> = alloc::vec::Vec::new();
+    {
+        let mut sched = crate::process::scheduler::SCHEDULER.lock();
+        if let Some(pid) = sched.current_pid() {
+            if let Some(ref mut proc) = sched.processes_mut()[pid as usize] {
+                let fd_type = proc.fd_types[fd as usize];
+                match fd_type {
+                    crate::process::FdType::Pipe { pipe_idx, writable } => {
+                        let pipe_idx = pipe_idx as usize;
+                        if pipe_idx < crate::process::MAX_PIPES {
+                            pipe_ops.push((pipe_idx, writable));
                         }
                     }
-                }
-                crate::process::FdType::FsFile { index } => {
-                    let index = index as usize;
-                    // Only clear the file handle slot if no other FDs share it.
-                    // After dup, multiple FDs may reference the same handle slot.
-                    let still_referenced = proc.fd_types.iter().enumerate().any(|(i, f)| {
-                        i != fd as usize
-                            && matches!(f, crate::process::FdType::FsFile { index: idx } if *idx as usize == index)
-                    });
-                    if !still_referenced {
-                        proc.file_handles[index] = None;
+                    crate::process::FdType::FsFile { index } => {
+                        let index = index as usize;
+                        let still_referenced = proc.fd_types.iter().enumerate().any(|(i, f)| {
+                            i != fd as usize
+                                && matches!(f, crate::process::FdType::FsFile { index: idx } if *idx as usize == index)
+                        });
+                        if !still_referenced {
+                            fs_close_indices.push(index);
+                        }
                     }
+                    _ => {}
                 }
-                _ => {}
+                proc.fd_types[fd as usize] = crate::process::FdType::None;
+                proc.fd_flags[fd as usize] = 0;
+            } else {
+                return errno::ESRCH as u64;
             }
-            proc.fd_types[fd as usize] = crate::process::FdType::None;
-            proc.fd_flags[fd as usize] = 0;
-            return 0;
+        } else {
+            return errno::ESRCH as u64;
         }
     }
-    errno::EBADF as u64
+    // Execute pipe closes after SCHEDULER is dropped
+    for &(pipe_idx, writable) in &pipe_ops {
+        let mut pipes = crate::process::PIPES.lock();
+        if let Some(ref mut p) = pipes[pipe_idx] {
+            crate::process::pipe::pipe_close(p, writable);
+            let old = p.refcount.fetch_sub(1, core::sync::atomic::Ordering::AcqRel);
+            if old == 1 {
+                pipes[pipe_idx] = None;
+            }
+        }
+    }
+    // Wake blocked processes
+    if !pipe_ops.is_empty() {
+        crate::process::keyboard_wake();
+    }
+    0
 }
 
 /// SYS_DUP (11) — Duplicate a file descriptor to the lowest available slot.
@@ -1481,6 +1538,9 @@ fn sys_dup(fd: u64) -> u64 {
             // No new handle slot needed — multiple FDs point to the same index.
             if let crate::process::FdType::FsFile { index } = fd_type {
                 let index = index as usize;
+                if index >= crate::process::process::MAX_FILE_HANDLES {
+                    return errno::EBADF as u64;
+                }
                 if proc.file_handles[index].is_none() {
                     return errno::EBADF as u64;
                 }
@@ -1499,8 +1559,9 @@ fn sys_dup(fd: u64) -> u64 {
             // the original FD is closed.
             if let crate::process::FdType::Pipe { pipe_idx, writable: _ } = fd_type {
                 let pipe_idx = pipe_idx as usize;
-                unsafe {
-                    if let Some(ref mut p) = crate::process::PIPES[pipe_idx] {
+                if pipe_idx < crate::process::MAX_PIPES {
+                    let mut pipes = crate::process::PIPES.lock();
+                    if let Some(ref mut p) = pipes[pipe_idx] {
                         p.refcount.fetch_add(1, core::sync::atomic::Ordering::AcqRel);
                     }
                 }
@@ -1538,68 +1599,82 @@ fn sys_dup2(oldfd: u64, newfd: u64) -> u64 {
         return errno::EBADF as u64;
     }
 
-    let mut sched = crate::process::scheduler::SCHEDULER.lock();
-    if let Some(pid) = sched.current_pid() {
-        if let Some(ref mut proc) = sched.processes_mut()[pid as usize] {
-            // Validate oldfd is open
-            let old_type = proc.fd_types[oldfd as usize];
-            if old_type == crate::process::FdType::None {
-                return errno::EBADF as u64;
-            }
-
-            // If oldfd == newfd, return newfd (POSIX no-op)
-            if oldfd == newfd {
-                return newfd;
-            }
-
-            // Close newfd if open (inline close logic to avoid double-locking scheduler)
-            let new_type = proc.fd_types[newfd as usize];
-            if new_type != crate::process::FdType::None {
-                match new_type {
-                    crate::process::FdType::Pipe { pipe_idx, writable } => {
-                        let pipe_idx = pipe_idx as usize;
-                        unsafe {
-                            if let Some(ref mut p) = crate::process::PIPES[pipe_idx] {
-                                crate::process::pipe::pipe_close(p, writable);
-                                let old_ref = p.refcount.fetch_sub(1, core::sync::atomic::Ordering::AcqRel);
-                                if old_ref == 1 {
-                                    crate::process::free_pipe(pipe_idx);
+    let mut dup2_close_pipes: alloc::vec::Vec<(usize, bool)> = alloc::vec::Vec::new();
+    let mut dup2_inc_pipes: alloc::vec::Vec<usize> = alloc::vec::Vec::new();
+    let result = {
+        let mut sched = crate::process::scheduler::SCHEDULER.lock();
+        if let Some(pid) = sched.current_pid() {
+            if let Some(ref mut proc) = sched.processes_mut()[pid as usize] {
+                let old_type = proc.fd_types[oldfd as usize];
+                if old_type == crate::process::FdType::None {
+                    return errno::EBADF as u64;
+                }
+                if oldfd == newfd {
+                    return newfd;
+                }
+                let new_type = proc.fd_types[newfd as usize];
+                if new_type != crate::process::FdType::None {
+                    match new_type {
+                        crate::process::FdType::Pipe { pipe_idx, writable } => {
+                            let pipe_idx = pipe_idx as usize;
+                            if pipe_idx < crate::process::MAX_PIPES {
+                                dup2_close_pipes.push((pipe_idx, writable));
+                            }
+                        }
+                        crate::process::FdType::FsFile { index } => {
+                            let index = index as usize;
+                            if index < crate::process::process::MAX_FILE_HANDLES {
+                                let still_referenced = proc.fd_types.iter().enumerate().any(|(i, f)| {
+                                    i != newfd as usize
+                                        && matches!(f, crate::process::FdType::FsFile { index: idx } if *idx as usize == index)
+                                });
+                                if !still_referenced {
+                                    proc.file_handles[index] = None;
                                 }
                             }
                         }
-                    }
-                    crate::process::FdType::FsFile { index } => {
-                        let index = index as usize;
-                        // Only clear the handle slot if no other FDs share it
-                        let still_referenced = proc.fd_types.iter().enumerate().any(|(i, f)| {
-                            i != newfd as usize
-                                && matches!(f, crate::process::FdType::FsFile { index: idx } if *idx as usize == index)
-                        });
-                        if !still_referenced {
-                            proc.file_handles[index] = None;
-                        }
-                    }
-                    _ => {}
-                }
-            }
-
-            // Copy oldfd type to newfd
-            // For Pipe, increment refcount
-            if let crate::process::FdType::Pipe { pipe_idx, writable: _ } = old_type {
-                let pipe_idx = pipe_idx as usize;
-                unsafe {
-                    if let Some(ref mut p) = crate::process::PIPES[pipe_idx] {
-                        p.refcount.fetch_add(1, core::sync::atomic::Ordering::AcqRel);
+                        _ => {}
                     }
                 }
+                if let crate::process::FdType::Pipe { pipe_idx, writable: _ } = old_type {
+                    let pipe_idx = pipe_idx as usize;
+                    if pipe_idx < crate::process::MAX_PIPES {
+                        dup2_inc_pipes.push(pipe_idx);
+                    }
+                }
+                proc.fd_types[newfd as usize] = old_type;
+                proc.fd_flags[newfd as usize] = 0;
+                newfd
+            } else {
+                errno::ESRCH as u64
             }
-            proc.fd_types[newfd as usize] = old_type;
-            // POSIX: dup2 clears close-on-exec on the new FD
-            proc.fd_flags[newfd as usize] = 0;
-            return newfd;
+        } else {
+            errno::ESRCH as u64
+        }
+    };
+    if (result as i64) < 0 {
+        return result;
+    }
+    for &(pipe_idx, writable) in &dup2_close_pipes {
+        let mut pipes = crate::process::PIPES.lock();
+        if let Some(ref mut p) = pipes[pipe_idx] {
+            crate::process::pipe::pipe_close(p, writable);
+            let old_ref = p.refcount.fetch_sub(1, core::sync::atomic::Ordering::AcqRel);
+            if old_ref == 1 {
+                pipes[pipe_idx] = None;
+            }
         }
     }
-    errno::EBADF as u64
+    for &pipe_idx in &dup2_inc_pipes {
+        let mut pipes = crate::process::PIPES.lock();
+        if let Some(ref mut p) = pipes[pipe_idx] {
+            p.refcount.fetch_add(1, core::sync::atomic::Ordering::AcqRel);
+        }
+    }
+    if !dup2_close_pipes.is_empty() {
+        crate::process::keyboard_wake();
+    }
+    result
 }
 
 /// SYS_READDIR (15) — Read directory entries into a buffer.
@@ -1791,6 +1866,9 @@ fn sys_lseek(fd: u64, offset: u64) -> u64 {
             match fd_type {
                 crate::process::FdType::FsFile { index } => {
                     let index = index as usize;
+                    if index >= crate::process::process::MAX_FILE_HANDLES {
+                        return errno::EBADF as u64;
+                    }
                     if let Some(ref file_handle) = proc.file_handles[index] {
                         let mut file = file_handle.lock();
                         match file.seek(offset) {

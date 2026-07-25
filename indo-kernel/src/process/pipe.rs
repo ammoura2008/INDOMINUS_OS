@@ -3,7 +3,7 @@
 //! Inter-process communication via pipe pairs.
 //! Uses a 512-byte ring buffer with blocking read/write.
 
-use core::sync::atomic::{AtomicBool, AtomicU32, AtomicU8, Ordering};
+use core::sync::atomic::{AtomicBool, AtomicU32, AtomicU16, Ordering};
 
 /// Size of the pipe ring buffer.
 pub const PIPE_SIZE: usize = 512;
@@ -27,7 +27,8 @@ pub struct Pipe {
     /// Reference count — number of FDs (read + write) referencing this pipe.
     /// Starts at 2 (one read + one write). Decremented on each sys_close.
     /// When refcount reaches 0, the pipe slot is freed.
-    pub refcount: AtomicU8,
+    /// Uses AtomicU16 to prevent wrap at 255 (AtomicU8 was too small for dup2 scenarios).
+    pub refcount: AtomicU16,
 }
 
 impl Pipe {
@@ -39,7 +40,7 @@ impl Pipe {
             nwrite: AtomicU32::new(0),
             read_open: AtomicBool::new(true),
             write_open: AtomicBool::new(true),
-            refcount: AtomicU8::new(2), // One read end + one write end
+            refcount: AtomicU16::new(2), // One read end + one write end
         }
     }
 }
@@ -47,15 +48,13 @@ impl Pipe {
 /// Close one end of a pipe.
 ///
 /// `writable` indicates which end is being closed.
-/// Wakes the other end so it can detect the close.
+/// Does NOT call keyboard_wake — the caller is responsible for waking
+/// blocked processes (to avoid lock-ordering issues when called while
+/// holding the SCHEDULER lock).
 pub fn pipe_close(pipe: &mut Pipe, writable: bool) {
     if writable {
         pipe.write_open.store(false, Ordering::Relaxed);
-        // Wake readers so they can detect EOF
-        crate::process::keyboard_wake();
     } else {
         pipe.read_open.store(false, Ordering::Relaxed);
-        // Wake writers so they can detect broken pipe
-        crate::process::keyboard_wake();
     }
 }

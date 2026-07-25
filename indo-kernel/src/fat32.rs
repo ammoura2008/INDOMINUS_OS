@@ -757,7 +757,10 @@ impl Fat32Fs {
         }
 
         if let Some(part_lba) = mbr_partition_lba {
-            let ptype = mbr_partition_type.unwrap();
+            let ptype = match mbr_partition_type {
+                Some(t) => t,
+                None => return Err(VfsError::IoError),
+            };
             serial::write_str("[FAT] MBR partition type=0x");
             serial::write_hex(ptype as u64);
             serial::write_str(" at LBA=0x");

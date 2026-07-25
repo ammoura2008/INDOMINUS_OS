@@ -136,8 +136,9 @@ impl Process {
     ///
     /// `entry_phys` is the physical address of the entry function
     /// (obtained by casting the fn pointer to u64).
-    pub fn new_kernel(pid: Pid, entry_phys: u64) -> Self {
-        let stack_base = alloc_kernel_stack();
+    /// Returns None if kernel stack allocation fails (OOM).
+    pub fn new_kernel(pid: Pid, entry_phys: u64) -> Option<Self> {
+        let stack_base = alloc_kernel_stack()?;
         let stack_top = stack_base + KERNEL_STACK_SIZE as u64;
         let sp = setup_initial_stack_frame_kernel(stack_top, entry_phys);
 
@@ -147,7 +148,7 @@ impl Process {
             frame.start_address().as_u64()
         };
 
-        Process {
+        Some(Process {
             pid,
             state: ProcessState::Ready,
             stack_pointer: sp,
@@ -164,7 +165,7 @@ impl Process {
             fd_types: [FdType::None; MAX_FDS],
             fd_flags: [0; MAX_FDS],
             file_handles: Default::default(),
-        }
+        })
     }
 
     /// Create a new user-mode process (Ring 3).
@@ -174,8 +175,9 @@ impl Process {
     /// - `pml4`: per-process page table (from `create_user_pml4`)
     /// - `parent_pid`: PID of the parent process (the spawner)
     /// - `parent_generation`: generation of the parent at spawn time
-    pub fn new_user(pid: Pid, user_rip: u64, user_rsp: u64, pml4: u64, parent_pid: Option<Pid>, parent_generation: u32) -> Self {
-        let stack_base = alloc_kernel_stack();
+    /// Returns None if kernel stack allocation fails (OOM).
+    pub fn new_user(pid: Pid, user_rip: u64, user_rsp: u64, pml4: u64, parent_pid: Option<Pid>, parent_generation: u32) -> Option<Self> {
+        let stack_base = alloc_kernel_stack()?;
         let stack_top = stack_base + KERNEL_STACK_SIZE as u64;
         let sp = setup_initial_stack_frame_user(stack_top, user_rip, user_rsp);
 
@@ -184,7 +186,7 @@ impl Process {
         fd_types[1] = FdType::Stdout;
         fd_types[2] = FdType::Stderr;
 
-        Process {
+        Some(Process {
             pid,
             state: ProcessState::Ready,
             stack_pointer: sp,
@@ -201,7 +203,7 @@ impl Process {
             fd_types,
             fd_flags: [0; MAX_FDS],
             file_handles: Default::default(),
-        }
+        })
     }
 }
 
@@ -214,20 +216,28 @@ impl Drop for Process {
 
         // Close any pipe FDs — decrement refcounts so pipes aren't leaked.
         // This runs when a process is reaped (waitpid) or killed (exception handler).
+        let mut pipes_to_close: alloc::vec::Vec<(usize, bool)> = alloc::vec::Vec::new();
         for i in 0..MAX_FDS {
             if let FdType::Pipe { pipe_idx, writable } = self.fd_types[i] {
                 let pipe_idx = pipe_idx as usize;
-                unsafe {
-                    if let Some(ref mut p) = crate::process::PIPES[pipe_idx] {
-                        crate::process::pipe::pipe_close(p, writable);
-                        let old = p.refcount.fetch_sub(1, core::sync::atomic::Ordering::AcqRel);
-                        if old == 1 {
-                            crate::process::free_pipe(pipe_idx);
-                        }
-                    }
+                if pipe_idx < crate::process::MAX_PIPES {
+                    pipes_to_close.push((pipe_idx, writable));
                 }
             }
             self.fd_types[i] = FdType::None;
+        }
+        if !pipes_to_close.is_empty() {
+            let mut pipes = crate::process::PIPES.lock();
+            for (pipe_idx, writable) in &pipes_to_close {
+                let pipe_idx = *pipe_idx;
+                if let Some(ref mut p) = pipes[pipe_idx] {
+                    crate::process::pipe::pipe_close(p, *writable);
+                    let old = p.refcount.fetch_sub(1, core::sync::atomic::Ordering::AcqRel);
+                    if old == 1 {
+                        pipes[pipe_idx] = None;
+                    }
+                }
+            }
         }
 
         // Free user address space if this was a user process with a valid PML4.
@@ -257,16 +267,17 @@ impl Drop for Process {
 }
 
 /// Allocate a kernel stack from the heap and zero it.
-fn alloc_kernel_stack() -> u64 {
+/// Returns None if the heap is exhausted (instead of panicking).
+fn alloc_kernel_stack() -> Option<u64> {
     let layout = core::alloc::Layout::from_size_align(KERNEL_STACK_SIZE, 16)
         .expect("Invalid kernel stack layout");
     unsafe {
         let ptr = alloc::alloc::alloc(layout);
         if ptr.is_null() {
-            panic!("Process: out of memory for kernel stack");
+            return None;
         }
         core::ptr::write_bytes(ptr, 0, KERNEL_STACK_SIZE);
-        ptr as u64
+        Some(ptr as u64)
     }
 }
 

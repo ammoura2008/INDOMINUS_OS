@@ -64,7 +64,13 @@ impl Scheduler {
 
     pub fn spawn_idle(&mut self, entry_phys: u64) -> Pid {
         let pid = 0;
-        let mut process = Process::new_kernel(pid, entry_phys);
+        let mut process = match Process::new_kernel(pid, entry_phys) {
+            Some(p) => p,
+            None => {
+                crate::serial::write_str("[SCHED] FATAL: OOM for idle process\n");
+                crate::halt();
+            }
+        };
         process.state = ProcessState::Ready;
         process.generation = 1; // PID 0 always has generation 1
         self.processes[pid as usize] = Some(process);
@@ -75,12 +81,12 @@ impl Scheduler {
     }
 
     /// Spawn a kernel-mode process at the first free PID (skipping 0=idle).
-    /// Returns the PID on success, or None if the process table is full.
+    /// Returns the PID on success, or None if the process table is full or OOM.
     pub fn spawn_kernel(&mut self, entry_phys: u64) -> Option<Pid> {
         let pid = (1..MAX_PROCESSES as u64).find(|&i| self.processes[i as usize].is_none())?;
         let slot = pid as usize;
         self.generations[slot] += 1;
-        let mut process = Process::new_kernel(pid, entry_phys);
+        let mut process = Process::new_kernel(pid, entry_phys)?;
         process.state = ProcessState::Ready;
         process.generation = self.generations[slot];
         self.processes[slot] = Some(process);
@@ -107,7 +113,7 @@ impl Scheduler {
         self.generations[slot] += 1;
         let gen = self.generations[slot];
 
-        let mut process = Process::new_user(pid, user_rip, user_rsp, pml4, parent, parent_gen);
+        let mut process = Process::new_user(pid, user_rip, user_rsp, pml4, parent, parent_gen)?;
         process.generation = gen;
         self.processes[slot] = Some(process);
 

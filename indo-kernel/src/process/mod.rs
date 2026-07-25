@@ -28,31 +28,29 @@ pub use scheduler::SCHEDULER;
 pub const MAX_PIPES: usize = 16;
 
 /// Global pipe table. Allocated on demand by sys_pipe.
-pub static mut PIPES: [Option<pipe::Pipe>; MAX_PIPES] = {
+/// Protected by `spin::Mutex` to eliminate `static mut` unsoundness.
+/// Lock ordering: SCHEDULER → PIPES (never reversed).
+pub static PIPES: spin::Mutex<[Option<pipe::Pipe>; MAX_PIPES]> = spin::Mutex::new({
     const NONE: Option<pipe::Pipe> = None;
     [NONE; MAX_PIPES]
-};
+});
 
 /// Allocate a pipe from the global table. Returns its index.
 pub fn alloc_pipe() -> Option<usize> {
-    unsafe {
-        for i in 0..MAX_PIPES {
-            if PIPES[i].is_none() {
-                PIPES[i] = Some(pipe::Pipe::new());
-                return Some(i);
-            }
+    let mut pipes = PIPES.lock();
+    for i in 0..MAX_PIPES {
+        if pipes[i].is_none() {
+            pipes[i] = Some(pipe::Pipe::new());
+            return Some(i);
         }
     }
     None
 }
 
 /// Free a pipe from the global table.
-///
-/// # Safety
-/// `idx` must be a valid pipe index returned by `alloc_pipe` that hasn't been freed yet.
-pub unsafe fn free_pipe(idx: usize) {
+pub fn free_pipe(idx: usize) {
     if idx < MAX_PIPES {
-        PIPES[idx] = None;
+        PIPES.lock()[idx] = None;
     }
 }
 
@@ -189,6 +187,7 @@ pub fn start_scheduler() -> ! {
 /// Called by the keyboard IRQ handler and pipe write/read operations.
 pub fn keyboard_wake() {
     let mut sched = SCHEDULER.lock();
+    let pipes = PIPES.lock();
     for i in 0..process::MAX_PROCESSES as u64 {
         if let Some(Some(ref mut proc)) = sched.processes_mut().get_mut(i as usize) {
             if proc.state == process::ProcessState::Blocked {
@@ -198,9 +197,9 @@ pub fn keyboard_wake() {
                         proc.wake_reason = process::WakeReason::None;
                     }
                     process::WakeReason::PipeRead { pipe_idx } => {
-                        // Check if pipe has data
-                        unsafe {
-                            if let Some(ref p) = PIPES[pipe_idx as usize] {
+                        let idx = pipe_idx as usize;
+                        if idx < MAX_PIPES {
+                            if let Some(ref p) = pipes[idx] {
                                 let nread = p.nread.load(core::sync::atomic::Ordering::Relaxed);
                                 let nwrite = p.nwrite.load(core::sync::atomic::Ordering::Relaxed);
                                 if nread < nwrite || !p.write_open.load(core::sync::atomic::Ordering::Relaxed) {
@@ -211,12 +210,12 @@ pub fn keyboard_wake() {
                         }
                     }
                     process::WakeReason::PipeWrite { pipe_idx } => {
-                        // Check if pipe has space
-                        unsafe {
-                            if let Some(ref p) = PIPES[pipe_idx as usize] {
+                        let idx = pipe_idx as usize;
+                        if idx < MAX_PIPES {
+                            if let Some(ref p) = pipes[idx] {
                                 let nread = p.nread.load(core::sync::atomic::Ordering::Relaxed);
                                 let nwrite = p.nwrite.load(core::sync::atomic::Ordering::Relaxed);
-                                if nwrite < nread + pipe::PIPE_SIZE as u32 {
+                                if nwrite < nread.wrapping_add(pipe::PIPE_SIZE as u32) {
                                     proc.state = process::ProcessState::Ready;
                                     proc.wake_reason = process::WakeReason::None;
                                 }
