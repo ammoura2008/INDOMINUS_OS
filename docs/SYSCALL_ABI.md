@@ -70,11 +70,15 @@ libraries work unmodified.
 | 4 | SYS_WAITPID | child_pid | exit_code, 0 (running), or -errno |
 | 5 | SYS_SLEEP | ticks (10ms) | 0 |
 | 6 | SYS_READ | fd, buf_ptr, count | bytes read or -errno |
-| 7 | SYS_PIPE | — | (read_fd << 32) | write_fd, or -errno |
+| 7 | SYS_PIPE | — | (read_fd << 32) \| write_fd, or -errno |
 | 8 | SYS_FORK | — | child PID (parent), 0 (child), or -errno |
-| 9 | SYS_EXEC | path_ptr | -ENOSYS (not yet implemented) |
+| 9 | SYS_EXEC | path_ptr | 0 or -errno |
 | 10 | SYS_CLOSE | fd | 0 or -errno |
 | 11 | SYS_DUP | fd | new fd or -errno |
+| 12 | SYS_OPEN | path_ptr, flags | fd or -errno |
+| 13 | SYS_LSEEK | fd, offset | 0 or -errno |
+| 14 | SYS_DUP2 | oldfd, newfd | newfd or -errno |
+| 15 | SYS_READDIR | fd, buf_ptr, count | bytes written, 0 (end of dir), or -errno |
 
 ## Error Codes
 

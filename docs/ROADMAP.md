@@ -16,6 +16,37 @@
 
 ---
 
+## Current Status (as of Phase 10D)
+
+**Completed through:** Phase 10D (Hardening + Comprehensive Testing)
+
+| Actual Phase | Roadmap Phase | Status | Key Deliverable |
+|-------------|--------------|--------|-----------------|
+| 0 | Phase 0 | ✅ DONE | UEFI boot, serial, GDT, IDT |
+| 1 | Phase 1 | ✅ DONE | PMM, VMM, kernel heap (16 MiB) |
+| 2 | Phase 2 | ✅ DONE | LAPIC, IO-APIC, PIT, IRQ dispatch |
+| 3 | Phase 3 | ✅ DONE | Process struct, context switch, round-robin scheduler |
+| 4 | Phase 4 | ✅ DONE | `syscall`/`sysret`, 16 syscalls, user mode |
+| 5 | Phase 5 | ✅ DONE | PCI enumeration, ACPI, MMIO |
+| 5.3 | Phase 6 | ✅ DONE | AHCI storage driver, block device abstraction |
+| 5.4 | Phase 9 | ✅ DONE | Page fault classification, user process kill |
+| 7 | Phase 7 | ✅ DONE | UB fix pass (`static_mut_refs`, `SyncUnsafeCell`) |
+| 8 | Phase 8 | ✅ DONE | Foundation hardening (10 security fixes) |
+| 9.1-9.2 | Phase 7-8 | ✅ DONE | FAT16 VFS, file I/O, open/read/seek/dup2 |
+| 9.3 | Phase 6 | ✅ DONE | AHCI end-to-end (DMA, IDENTIFY, FAT read) |
+| 9.4 | Phase 7 | ✅ DONE | FAT16 persistence, FAT read-only limitation |
+| 9.5 | Phase 4 | ✅ DONE | FD + syscall integration (14/14 tests) |
+| 9.6 | Phase 8 | ✅ DONE | ELF loading from persistent filesystem |
+| 9.7 | Phase 8 | ✅ DONE | User-space shell infrastructure |
+| 9.8 | Phase 8 | ✅ DONE | Init process PID 1 |
+| 9.9 | Phase 7 | ✅ DONE | FAT persistence + regression test matrix |
+| 10A | — | ✅ DONE | CLOEXEC restructured, overflow guards, doc updates |
+| 10B | — | ✅ DONE | Process lifecycle fixes (drop, exit, waitpid) |
+| 10C | — | ✅ DONE | AHCI TFES fix (bit 30), validate_elf_header |
+| 10D | — | ✅ DONE | Comprehensive code audit + doc fixes |
+
+**Total tests:** 65/65 passing (50 integration + 15 robustness stress tests)
+
 ## Phase Overview
 
 | Phase | Name | Key Deliverable | Dependencies |

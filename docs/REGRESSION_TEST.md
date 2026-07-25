@@ -116,6 +116,37 @@ After any kernel change, run this checklist to verify no regressions.
 [ ] 0 compiler errors, warnings limited to intentionally-kept items
 ```
 
+## Phase 9.5-9.9: Integration Test Phases
+
+```
+Phase 9.5: FD + Syscall Integration (14/14 pass)
+Phase 9.6: ELF Loading from Persistent Filesystem (7/7 pass)
+Phase 9.7: User-Space Shell Infrastructure (6/6 pass)
+Phase 9.8: Init Process PID 1 (7/7 pass)
+Phase 9.9: FAT Persistence + Regression Test Matrix (6/6 pass)
+```
+
+## Phase 10: Hardening + Testing
+
+```
+Phase 10A: CLOEXEC restructured, overflow guards, doc updates
+Phase 10B: Process lifecycle fixes (drop, exit, waitpid)
+Phase 10C: AHCI TFES fix (bit 30), validate_elf_header
+Phase 10D: Comprehensive code audit + doc fixes
+```
+
+## Automated Boot Test (qemu_boot_test.py)
+
+```powershell
+# Run 10 boot tests
+python tools\qemu_boot_test.py --count 10 --timeout 60 --send-input
+
+# Run 3 boot tests with input
+python tools\qemu_boot_test.py --count 3 --timeout 60 --send-input
+```
+
+Expected: All boots pass all 6 phases (9.4-9.9), 0 TFES, 0 panics.
+
 ## Phase 9.4: End-to-End Verification (AHCI + FAT16 + VFS)
 
 ```

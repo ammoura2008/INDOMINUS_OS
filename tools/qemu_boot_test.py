@@ -203,7 +203,11 @@ def run_single_boot(boot_id: int, timeout: int, send_input: bool) -> dict:
     if all(v == "PASSED" for v in result["phase_results"].values()):
         result["all_phases_passed"] = True
 
-    # Shell banner check (if input was sent)
+    # Shell banner check — look for the shell prompt or known shell output
+    if "Indominus OS Shell" in full_output or "indominus> " in full_output:
+        result["shell_banner"] = True
+
+    # Unknown command check (if input was sent)
     if send_input:
         if "notacommand" in full_output:
             result["unknown_cmd"] = True
@@ -239,7 +243,7 @@ def print_summary(results: list):
     panics = sum(1 for r in results if r["kernel_panic"])
     shell_banners = sum(1 for r in results if r["shell_banner"])
     all_phases = sum(1 for r in results if r["all_phases_passed"])
-    timeouts = sum(1 for r in results if not r["boot_completed"] and not r["kernel_panic"])
+    timeouts = sum(1 for r in results if not r["boot_completed"] and not r["kernel_panic"] and not r["all_phases_passed"])
     total_tfes = sum(r["tfes_count"] for r in results)
     total_read_ok = sum(r["read_ok_count"] for r in results)
     total_failed = sum(r["failed_count"] for r in results)

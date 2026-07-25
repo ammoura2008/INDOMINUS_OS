@@ -4,7 +4,57 @@ This document records every error, bug, gap, and problem encountered during INDO
 
 ---
 
-## 1. `static_mut_refs` Undefined Behavior (Phase 7.6 — UB Fix Pass)
+## 14. AHCI PORT_IS_TFES Bit Position Fix (Phase 10C)
+
+### Problem
+The AHCI `PORT_IS` (Port Interrupt Status) register used `TFES = 1 << 0` for the Task File Error Status bit. However, bit 0 of PORT_IS is `DHRS` (Device-to-Hregister FIS Received), which fires on **every** command completion. `TFES` is actually bit 30.
+
+This caused **every** AHCI command completion to trigger TFES error handling, producing ~94,000 false TFES events per boot. The recovery mechanism would retry commands unnecessarily, and sector reads sometimes failed on the first attempt but succeeded on retry.
+
+### Root Cause
+The original AHCI HBA register definition had the wrong bit position. Bit 0 = DHRS (D2H Register FIS), bit 30 = TFES (Task File Error Status).
+
+### Fix
+Changed `PORT_IS_TFES` from `1 << 0` to `1 << 30` in `ahci/hba.rs`.
+
+### Impact
+- Eliminated all false TFES errors (0 TFES per boot, down from ~94K)
+- All sector reads succeed on first attempt
+- All 6 test phases (9.4-9.9) pass reliably
+- 5/5 consecutive boot tests pass with 0 panics
+
+### Detection
+Found during code audit of `ahci/hba.rs` — the bit position constant was checked against the AHCI 1.0 specification.
+
+---
+
+## 15. validate_elf_header for Partial Reads (Phase 10C)
+
+### Problem
+Tests T6.1 and T6.3 performed ELF validation on partial 512-byte reads of kernel/init ELF files. The existing `validate_elf()` checks that all segment data fits within the provided buffer. For a 512-byte buffer reading a 400KB+ kernel ELF, the segment data check always fails ("segment data out of ELF bounds").
+
+### Fix
+Added `validate_elf_header()` in `elf/mod.rs` — validates ELF magic, class, data encoding, type, machine, and program header structure without checking segment data bounds. Used by T6.1 and T6.3 for partial header reads.
+
+---
+
+## 16. Comprehensive Code Audit (Phase 10D)
+
+### Findings
+Full audit of 21+ source files. Many reported issues (pipe TOCTOU, exec address space destruction, pipe EOF, keyboard backspace) were already handled correctly in the current code:
+
+- **Pipe EOF**: `sys_read` already returns 0 (EOF) when `!p.write_open` and buffer is empty (line 863-864)
+- **Exec safety**: `sys_exec` already creates new PML4 first, loads ELF, only frees old PML4 on success (line 1342-1408)
+- **Stdin/stdout**: `sys_write` to stdin returns EBADF; `sys_read` from stdout returns EBADF
+- **Keyboard backspace**: Already guarded by `if e > r` check
+
+### Documentation Drift Fixed
+- `SYSCALL_ABI.md`: Updated syscall table from 12 to 16 syscalls, corrected exec return value
+- `qemu_boot_test.py`: Fixed shell_banner detection (never set to True)
+
+---
+
+## 17. `static_mut_refs` Undefined Behavior (Phase 7.6 — UB Fix Pass)
 
 ### Problem
 Rust 1.77+ emits `static_mut_refs` warnings for any code that takes a reference (`&` or `&mut`) to a `static mut` variable. These references are **undefined behavior** because:
