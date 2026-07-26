@@ -47,3 +47,10 @@ version = "0.1.0"
 dependencies = [
  "indo-syscall",
 ]
+
+[[package]]
+name = "test_stress"
+version = "1.0.0"
+dependencies = [
+ "indo-syscall",
+]

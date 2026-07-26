@@ -1046,16 +1046,36 @@ fn sys_write(fd: u64, buf_ptr: u64, count: u64) -> u64 {
                         let nwrite = p.nwrite.load(core::sync::atomic::Ordering::Relaxed);
                         let nread = p.nread.load(core::sync::atomic::Ordering::Relaxed);
                         if nwrite == u32::MAX || nwrite >= nread.wrapping_add(crate::process::pipe::PIPE_SIZE as u32) {
-                            // Pipe full — return partial bytes written.
+                            // Pipe full — if no reader, return EPIPE
                             if !p.read_open.load(core::sync::atomic::Ordering::Relaxed) {
-                                return written;
+                                if written > 0 {
+                                    drop(pipes);
+                                    crate::process::keyboard_wake();
+                                }
+                                return written; // partial write, or 0 for EPIPE
                             }
+                            // If we wrote some bytes, return them
                             if written > 0 {
                                 drop(pipes);
                                 crate::process::keyboard_wake();
+                                return written;
+                            }
+                            // No bytes written yet — block the process properly
+                            // instead of busy-spinning
+                            drop(pipes);
+                            {
+                                let mut sched = crate::process::scheduler::SCHEDULER.lock();
+                                if let Some(pid) = sched.current_pid() {
+                                    if let Some(ref mut proc) = sched.processes_mut()[pid as usize] {
+                                        proc.state = crate::process::ProcessState::Blocked;
+                                        proc.wake_reason = crate::process::WakeReason::PipeWrite {
+                                            pipe_idx: pipe_idx as u8,
+                                        };
+                                    }
+                                }
                             }
                             unsafe { crate::syscall::set_force_switch(); }
-                            return written;
+                            return 0;
                         }
                         let idx = (nwrite as usize) % crate::process::pipe::PIPE_SIZE;
                         p.data[idx] = byte;
@@ -1231,6 +1251,23 @@ fn sys_fork() -> u64 {
                     child.fd_types = parent_proc.fd_types;
                     child.file_handles = parent_proc.file_handles.clone();
                     child.parent_generation = parent_proc.generation;
+
+                    // CRITICAL: Increment pipe refcounts for inherited pipe FDs.
+                    // Without this, when the child closes its pipe FDs, the refcount
+                    // underflows or the pipe is freed while the parent still holds a reference.
+                    {
+                        let mut pipes = crate::process::PIPES.lock();
+                        for fd in child.fd_types.iter() {
+                            if let crate::process::FdType::Pipe { pipe_idx, .. } = fd {
+                                let idx = *pipe_idx as usize;
+                                if idx < crate::process::MAX_PIPES {
+                                    if let Some(ref mut p) = pipes[idx] {
+                                        p.refcount.fetch_add(1, core::sync::atomic::Ordering::Relaxed);
+                                    }
+                                }
+                            }
+                        }
+                    }
                 }
 
                 sched.processes_mut()[pid as usize] = Some(child);
@@ -1519,6 +1556,9 @@ fn sys_close(fd: u64) -> u64 {
             if let Some(ref mut proc) = sched.processes_mut()[pid as usize] {
                 let fd_type = proc.fd_types[fd as usize];
                 match fd_type {
+                    crate::process::FdType::None => {
+                        return errno::EBADF as u64; // Double-close
+                    }
                     crate::process::FdType::Pipe { pipe_idx, writable } => {
                         let pipe_idx = pipe_idx as usize;
                         if pipe_idx < crate::process::MAX_PIPES {
@@ -1846,6 +1886,17 @@ fn sys_open(path_ptr: u64, flags: u64) -> u64 {
         return errno::EINVAL as u64;
     }
 
+    // Validate flags: must have exactly one of O_RDONLY, O_WRONLY, O_RDWR
+    let access_mode = flags & 0x3; // Lower 2 bits
+    if access_mode == 0x3 || access_mode == 0 {
+        return errno::EINVAL as u64; // Invalid or missing access mode
+    }
+    // Reject unknown high bits
+    const VALID_FLAGS: u64 = 0x0000_00FF; // O_RDONLY|O_WRONLY|O_RDWR|O_CREAT|O_TRUNC|O_APPEND|O_CLOEXEC
+    if flags & !VALID_FLAGS != 0 {
+        return errno::EINVAL as u64;
+    }
+
     // Open the file via VFS, creating if O_CREAT is set
     let vfs = crate::vfs::vfs();
     let mut file = if flags & crate::process::process::O_CREAT != 0 {
@@ -1950,7 +2001,7 @@ fn sys_lseek(fd: u64, offset: u64) -> u64 {
                     if let Some(ref file_handle) = proc.file_handles[index] {
                         let mut file = file_handle.lock();
                         match file.seek(offset) {
-                            Ok(()) => 0,
+                            Ok(()) => offset, // Return new position
                             Err(e) => e.to_errno() as u64,
                         }
                     } else {
@@ -2259,6 +2310,13 @@ fn sys_execve(path_ptr: u64, argc: u64, argv_ptr: u64) -> u64 {
     let mut string_offsets: Vec<u64> = Vec::new();
     let string_data_start = sp - 4096; // Use the page below RSP for string data
     let mut string_pos = string_data_start;
+
+    // Safety check: total argv string data must not exceed 3072 bytes (75% of page)
+    // to leave room for argv pointers, argc, and alignment
+    let total_string_bytes: usize = argv_strings.iter().map(|s| s.len() + 1).sum();
+    if total_string_bytes > 3072 {
+        return errno::E2BIG as u64;
+    }
 
     for s in &argv_strings {
         string_offsets.push(string_pos);

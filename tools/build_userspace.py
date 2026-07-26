@@ -27,6 +27,7 @@ PACKAGES = [
     ("test_robustness", "userspace/test_robustness"),
     ("test_fat_write", "userspace/test_fat_write"),
     ("indominus-utils", "userspace/utils"),
+    ("test_stress", "userspace/test_stress"),
 ]
 
 # Additional binaries from the utils crate to copy

@@ -37,6 +37,8 @@ pub const ENOTDIR: i64 = -20;
 pub const EEXIST: i64 = -17;
 /// Not a terminal
 pub const ENOTTY: i64 = -25;
+/// Argument list too long
+pub const E2BIG: i64 = -7;
 
 /// Maximum errno value (absolute). Used by userspace to detect errors:
 /// if result > -4096 as unsigned, it's an error.
