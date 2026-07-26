@@ -27,6 +27,8 @@ pub const SYS_OPEN: u64 = 12;
 pub const SYS_LSEEK: u64 = 13;
 pub const SYS_DUP2: u64 = 14;
 pub const SYS_READDIR: u64 = 15;
+pub const SYS_UNLINK: u64 = 16;
+pub const SYS_BRK: u64 = 17;
 
 /// Open flags (POSIX-compatible).
 pub const O_RDONLY: u64 = 0x0000;
@@ -191,6 +193,18 @@ pub fn dup2(oldfd: u64, newfd: u64) -> i64 {
 /// Returns bytes written, or negative errno on error.
 pub fn readdir(fd: u64, buf: &mut [u8]) -> i64 {
     unsafe { syscall3(SYS_READDIR, fd, buf.as_mut_ptr() as u64, buf.len() as u64) }
+}
+
+/// Delete a file by path.
+/// Returns 0 on success, or negative errno on error.
+pub fn unlink(path_ptr: u64) -> i64 {
+    unsafe { syscall1(SYS_UNLINK, path_ptr) }
+}
+
+/// Change the data segment size (heap).
+/// Returns new break address, or negative errno on error.
+pub fn brk(new_brk: u64) -> i64 {
+    unsafe { syscall1(SYS_BRK, new_brk) }
 }
 
 // ─── Convenience Functions ──────────────────────────────────────────────────

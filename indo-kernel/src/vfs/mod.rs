@@ -62,6 +62,9 @@ pub trait Inode: Send + Sync {
     fn create_child_dir(&self, _name: &str) -> Result<(), VfsError> {
         Err(VfsError::NotDirectory)
     }
+    fn delete_child_file(&self, _name: &str) -> Result<(), VfsError> {
+        Err(VfsError::PermissionDenied)
+    }
 }
 
 /// Filesystem trait (supports creation)
@@ -162,35 +165,29 @@ impl Vfs {
             return Err(VfsError::BadPath);
         }
 
-        let fs = self.root_fs()?;
-
-        // Single part: create at root
+        // Resolve parent directory (handles mount points)
         if parts.len() == 1 {
-            if let Ok(inode) = self.resolve(path) {
-                if inode.is_file() {
-                    return inode.open();
+            // Single component — check root fs first, then mount points
+            for mount in &self.mounts {
+                if mount.path == "/" { continue; }
+                let mount_parts: Vec<&str> = mount.path.split('/').filter(|s| !s.is_empty()).collect();
+                if mount_parts.len() == 1 && mount_parts[0] == parts[0] {
+                    // This is a mount point — can't create on a mount point itself
+                    return Err(VfsError::PermissionDenied);
                 }
             }
+            // Create in root fs
+            let fs = self.root_fs()?;
             return fs.create_file(parts[0]);
         }
 
-        // Multi-part: resolve parent directory, creating intermediates as needed
+        // Multi-part path — resolve parent
         let parent = self.resolve_or_create_parents(&parts[..parts.len() - 1])?;
-
         if !parent.is_dir() {
             return Err(VfsError::NotDirectory);
         }
 
         let file_name = parts[parts.len() - 1];
-
-        // Try to open existing file
-        if let Ok(child) = parent.lookup(file_name) {
-            if child.is_file() {
-                return child.open();
-            }
-        }
-
-        // Create new file in parent directory
         parent.create_child_file(file_name)
     }
 
@@ -263,6 +260,25 @@ impl Vfs {
             }
         }
         Ok(buf)
+    }
+
+    /// Delete a file by path (ramfs only).
+    pub fn delete_file(&self, path: &str) -> Result<(), VfsError> {
+        let parts: Vec<&str> = path.split('/').filter(|s| !s.is_empty()).collect();
+        if parts.is_empty() {
+            return Err(VfsError::BadPath);
+        }
+        let fs = self.root_fs()?;
+        let root = fs.root();
+        if parts.len() == 1 {
+            return root.delete_child_file(parts[0]);
+        }
+        // Resolve parent
+        let mut current = root;
+        for &part in &parts[..parts.len() - 1] {
+            current = current.lookup(part)?;
+        }
+        current.delete_child_file(parts[parts.len() - 1])
     }
 
     fn root_fs(&self) -> Result<Arc<dyn FileSystem>, VfsError> {

@@ -440,12 +440,36 @@ Tests T9.1-T9.6: FAT16 mountable and consistent, startup.nsh readable ASCII, BOO
 
 ---
 
-## 13. Known Limitations (Phase 9.x)
+## 13. Known Limitations (Phase 9.x → Phase 11 updated)
 
 | Limitation | Severity | Notes |
 |---|---|---|
-| FAT filesystem is READ-ONLY | HIGH | `FatFileHandle::write()` returns `VfsError::IoError`. No write/alloc/delete support. |
-| OOM on full phase sequence without 16 MiB heap | MEDIUM | Resolved by increasing heap to 16 MiB. Individual phases work with 4 MiB. |
-| Userspace shell binary is v0.1 | LOW | Shell v0.3 source exists but Windows toolchain cannot compile it (compiler_builtins build script issue with .cargo/config.toml target override). Pre-built binary is v0.1 with basic commands only. |
-| AHCI TFES errors are intermittent | LOW | Certain LBA reads produce TFES. Recovery mechanism handles this. Tolerance added in test code. |
-| Shell boots to v0.2 prompt | LOW | Shell ELF on FAT disk is the pre-built v0.1 binary. Version displayed is from the ELF, not the source. |
+| ~~FAT filesystem is READ-ONLY~~ | ~~HIGH~~ | ✅ RESOLVED — Phase 11 adds full write support: create, write, truncate, delete files/directories. |
+| LFN write support | MEDIUM | Writes limited to 8.3 filenames only. Long filenames return `VfsError::BadPath`. |
+| FAT16 root directory fixed size | LOW | Cannot grow FAT16 root directory beyond allocated sectors. Returns NoSpace when full. |
+| OOM on full phase sequence without 16 MiB heap | MEDIUM | Resolved by increasing heap to 16 MiB. |
+| Userspace shell binary is v0.1 | LOW | Shell v0.3 source exists but Windows toolchain cannot compile it. |
+| AHCI TFES errors are intermittent | LOW | Certain LBA reads produce TFES. Recovery mechanism handles this. |
+| Shell boots to v0.2 prompt | LOW | Shell ELF on FAT disk is the pre-built v0.1 binary. |
+
+---
+
+## 14. Phase 11: FAT Write Support
+
+### Overview
+Full read/write support for FAT16/FAT32 filesystems. Enables userspace processes to create, write, and delete files.
+
+### Key Design Decisions
+- **Crash-safe flush ordering**: Data sectors written first, directory entry size updated last (minimizes corruption window)
+- **Lazy allocation**: Clusters allocated on `close()`, not on each `write()` call (reduces metadata thrashing)
+- **Drop impl on FileHandle**: Auto-flushes dirty data on process exit (prevents data loss)
+- **FAT entry mirroring**: All FAT copies updated for consistency
+- **Sector read-modify-write**: Required for sub-sector-sized writes
+
+### Files Modified
+- `fat32.rs`: Rewrite from read-only to read/write (~1750 lines)
+- `syscall/mod.rs`: Added `sys_unlink(16)`, `sys_brk(17)`, O_TRUNC support
+- `process/process.rs`: Added `heap_start`, `heap_end` fields
+- `vfs/mod.rs`: `create_file()` resolves through mount points
+- `userspace/syscall/src/lib.rs`: Added `unlink()`, `brk()` wrappers
+- `userspace/test_fat_write/`: New test binary (8 tests)

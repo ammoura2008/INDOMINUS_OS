@@ -16,9 +16,9 @@
 
 ---
 
-## Current Status (as of Phase 10D)
+## Current Status (as of Phase 11)
 
-**Completed through:** Phase 10D (Hardening + Comprehensive Testing)
+**Completed through:** Phase 11 (FAT Write Support)
 
 | Actual Phase | Roadmap Phase | Status | Key Deliverable |
 |-------------|--------------|--------|-----------------|
@@ -26,7 +26,7 @@
 | 1 | Phase 1 | ✅ DONE | PMM, VMM, kernel heap (16 MiB) |
 | 2 | Phase 2 | ✅ DONE | LAPIC, IO-APIC, PIT, IRQ dispatch |
 | 3 | Phase 3 | ✅ DONE | Process struct, context switch, round-robin scheduler |
-| 4 | Phase 4 | ✅ DONE | `syscall`/`sysret`, 16 syscalls, user mode |
+| 4 | Phase 4 | ✅ DONE | `syscall`/`sysret`, 18 syscalls, user mode |
 | 5 | Phase 5 | ✅ DONE | PCI enumeration, ACPI, MMIO |
 | 5.3 | Phase 6 | ✅ DONE | AHCI storage driver, block device abstraction |
 | 5.4 | Phase 9 | ✅ DONE | Page fault classification, user process kill |

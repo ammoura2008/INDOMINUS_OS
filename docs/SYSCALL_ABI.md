@@ -79,6 +79,8 @@ libraries work unmodified.
 | 13 | SYS_LSEEK | fd, offset | 0 or -errno |
 | 14 | SYS_DUP2 | oldfd, newfd | newfd or -errno |
 | 15 | SYS_READDIR | fd, buf_ptr, count | bytes written, 0 (end of dir), or -errno |
+| 16 | SYS_UNLINK | path_ptr | 0 or -errno |
+| 17 | SYS_BRK | new_brk | new break address or -errno |
 
 ## Error Codes
 

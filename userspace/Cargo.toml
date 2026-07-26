@@ -12,6 +12,7 @@ members = [
     "init",
     "test_gs_stress",
     "test_robustness",
+    "test_fat_write",
 ]
 resolver = "2"
 

@@ -606,6 +606,8 @@ pub unsafe extern "C" fn syscall_dispatch(regs: *mut u64) -> u64 {
         13 => sys_lseek(arg0, arg1),
         14 => sys_dup2(arg0, arg1),
         15 => sys_readdir(arg0, arg1, arg2),
+        16 => sys_unlink(arg0),
+        17 => sys_brk(arg0),
         _ => {
             crate::serial::write_str("[SYSCALL] Unknown syscall: ");
             crate::serial::write_u64(syscall_num);
@@ -1802,9 +1804,20 @@ fn sys_open(path_ptr: u64, flags: u64) -> u64 {
     // Open the file via VFS, creating if O_CREAT is set
     let vfs = crate::vfs::vfs();
     let file = if flags & crate::process::process::O_CREAT != 0 {
-        // Try to open existing file first
+        // O_CREAT: create file if it doesn't exist
         match vfs.open(&path) {
-            Ok(f) => f,
+            Ok(f) => {
+                if flags & crate::process::process::O_TRUNC != 0 {
+                    // O_TRUNC: truncate existing file — create new empty file
+                    drop(f);
+                    match vfs.create_file(&path) {
+                        Ok(f) => f,
+                        Err(e) => return e.to_errno() as u64,
+                    }
+                } else {
+                    f
+                }
+            }
             Err(_) => {
                 // File doesn't exist — create it
                 match vfs.create_file(&path) {
@@ -1815,7 +1828,18 @@ fn sys_open(path_ptr: u64, flags: u64) -> u64 {
         }
     } else {
         match vfs.open(&path) {
-            Ok(f) => f,
+            Ok(f) => {
+                if flags & crate::process::process::O_TRUNC != 0 {
+                    // O_TRUNC on existing file — truncate
+                    drop(f);
+                    match vfs.create_file(&path) {
+                        Ok(f) => f,
+                        Err(e) => return e.to_errno() as u64,
+                    }
+                } else {
+                    f
+                }
+            }
             Err(e) => return e.to_errno() as u64,
         }
     };
@@ -1887,4 +1911,80 @@ fn sys_lseek(fd: u64, offset: u64) -> u64 {
     } else {
         errno::ESRCH as u64
     }
+}
+
+/// SYS_UNLINK (16) — Delete a file by path.
+///
+/// Arguments: path_ptr (user pointer to null-terminated path string)
+/// Returns: 0 on success, or negative errno on error.
+///
+/// Currently limited to ramfs files. FAT filesystem is read-only.
+fn sys_unlink(path_ptr: u64) -> u64 {
+    use alloc::string::String;
+
+    if path_ptr == 0 {
+        return errno::EFAULT as u64;
+    }
+
+    let path = {
+        let mut buf = Vec::new();
+        let user_ptr = path_ptr as *const u8;
+        let pml4 = {
+            let sched = crate::process::scheduler::SCHEDULER.lock();
+            if let Some(pid) = sched.current_pid() {
+                if let Some(ref proc) = sched.processes()[pid as usize] {
+                    proc.pml4_phys
+                } else {
+                    return errno::ESRCH as u64;
+                }
+            } else {
+                return errno::ESRCH as u64;
+            }
+        };
+
+        for i in 0..4096u64 {
+            if !is_valid_user_range(user_ptr as u64 + i, 1) {
+                return errno::EFAULT as u64;
+            }
+            if !is_user_buffer_mapped(pml4, user_ptr as u64 + i, 1) {
+                return errno::EFAULT as u64;
+            }
+            let byte = unsafe { *user_ptr.add(i as usize) };
+            if byte == 0 {
+                break;
+            }
+            buf.push(byte);
+        }
+        String::from_utf8(buf).unwrap_or_default()
+    };
+
+    if path.is_empty() {
+        return errno::EINVAL as u64;
+    }
+
+    match crate::vfs::vfs().delete_file(&path) {
+        Ok(()) => 0,
+        Err(e) => e.to_errno() as u64,
+    }
+}
+
+/// SYS_BRK (17) — Change the data segment size (heap).
+///
+/// Arguments: new_brk (0 = query current, >0 = set new break)
+/// Returns: new break address on success, or negative errno on error.
+fn sys_brk(new_brk: u64) -> u64 {
+    let mut sched = crate::process::scheduler::SCHEDULER.lock();
+    if let Some(pid) = sched.current_pid() {
+        if let Some(ref mut proc) = sched.processes_mut()[pid as usize] {
+            if new_brk == 0 {
+                return proc.heap_end;
+            }
+            if new_brk >= proc.heap_start {
+                proc.heap_end = new_brk;
+                return new_brk;
+            }
+            return proc.heap_end;
+        }
+    }
+    errno::ESRCH as u64
 }

@@ -107,6 +107,18 @@ impl Inode for RamDirInode {
         dir.entries.insert(String::from(name), RamNode::Dir(subdir));
         Ok(())
     }
+
+    fn delete_child_file(&self, name: &str) -> Result<(), VfsError> {
+        let mut dir = self.inner.lock();
+        match dir.entries.get(name) {
+            Some(RamNode::File(_)) => {
+                dir.entries.remove(name);
+                Ok(())
+            }
+            Some(RamNode::Dir(_)) => Err(VfsError::NotDirectory),
+            None => Err(VfsError::NotFound),
+        }
+    }
 }
 
 /// File node wrapped as an Inode

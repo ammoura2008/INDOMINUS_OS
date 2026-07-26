@@ -2079,12 +2079,13 @@ fn phase99_persistence_test() {
         }
     }
 
-    // T9.6: Document FAT read-only limitation
+    // T9.6: Document FAT write support
     write_str_nl("[T] -- Section 5: Limitations --");
-    write_str_nl("[T]     FAT filesystem is READ-ONLY in this implementation.");
-    write_str_nl("[T]     No write/create/delete operations supported.");
-    write_str_nl("[T]     Full persistence (write-on-close) requires FAT write support.");
-    test_pass!("T9.6 FAT read-only limitation documented");
+    write_str_nl("[T]     FAT filesystem: FULL WRITE SUPPORT (Phase 11)");
+    write_str_nl("[T]     Supports: create, write, truncate, delete on FAT16/FAT32");
+    write_str_nl("[T]     Limitation: 8.3 filenames only for writes (no LFN write)");
+    write_str_nl("[T]     Limitation: FAT16 root directory has fixed max entries");
+    test_pass!("T9.6 FAT write support documented");
 
     // Regression: Phase 9.1 only (lightweight)
     write_str_nl("[T] -- Section 6: Regression --");
@@ -2103,6 +2104,62 @@ fn phase99_persistence_test() {
     } else {
         write_str_nl("[T] === PHASE 9.9 HAS FAILURES ===");
     }
+    write_str_nl("[T] ==================================================");
+}
+
+/// Phase 11: FAT Write Tests.
+///
+/// Spawns the test_fat_write user-space binary which exercises:
+/// T1: Write + read round-trip (small file)
+/// T2: Overwrite existing file
+/// T3: 512-byte write (1 sector)
+/// T4: 1024-byte write (2 sectors)
+/// T5: Multiple files
+/// T6: Delete file
+/// T7: O_TRUNC
+/// T8: Empty file
+fn phase11_fat_write_test() {
+    write_str_nl("[T] ==================================================");
+    write_str_nl("[T] Phase 11: FAT Write Tests");
+    write_str_nl("[T] ==================================================");
+
+    // Read the test binary from initrd (loaded to /bin/)
+    let test_elf = match crate::vfs::vfs().read_file("/bin/test_fat_write") {
+        Ok(data) => data,
+        Err(e) => {
+            write_str("[T]   SKIP: /bin/test_fat_write not found, errno=");
+            write_hex(e.to_errno() as u64);
+            write_nl();
+            return;
+        }
+    };
+
+    write_str("[T]   test_fat_write binary size: ");
+    write_hex(test_elf.len() as u64);
+    write_nl();
+
+    // Spawn the test binary (parent=PID 1 for reaping)
+    match crate::process::spawn_user(&test_elf, Some(1)) {
+        Some(pid) => {
+            write_str("[T]   Spawned test_fat_write PID=");
+            write_hex(pid);
+            write_nl();
+            write_str_nl("[T]   PASS: test_fat_write spawned successfully");
+        }
+        None => {
+            write_str_nl("[T]   FAIL: spawn_user returned None for test_fat_write");
+        }
+    }
+
+    // Yield to let the test run
+    for _ in 0..50 {
+        unsafe { crate::syscall::set_force_switch(); }
+        core::hint::spin_loop();
+    }
+
+    write_str_nl("[T] ==================================================");
+    write_str_nl("[T] Phase 11: FAT Write Tests — test running in userspace");
+    write_str_nl("[T] Check serial output for [FATW] PASS/FAIL results");
     write_str_nl("[T] ==================================================");
 }
 
@@ -2758,6 +2815,11 @@ pub extern "sysv64" fn kernel_main(boot_info: *const BootInfo) -> ! {
     write_str_nl("[MARK] Before persistence test");
     phase99_persistence_test();
     write_str_nl("[MARK] After persistence test");
+
+    // Phase 11: FAT Write Tests — run after initrd loads test_fat_write binary
+    write_str_nl("[MARK] Before FAT write test");
+    phase11_fat_write_test();
+    write_str_nl("[MARK] After FAT write test");
 
     write_str_nl("[KERNEL] All init done.");
 

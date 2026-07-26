@@ -21,6 +21,13 @@ dependencies = [
 ]
 
 [[package]]
+name = "test_fat_write"
+version = "0.1.0"
+dependencies = [
+ "indo-syscall",
+]
+
+[[package]]
 name = "test_gs_stress"
 version = "0.1.0"
 dependencies = [

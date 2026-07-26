@@ -129,6 +129,10 @@ pub struct Process {
     /// (e.g. after dup). The inner Box<dyn File> is wrapped in spin::Mutex for
     /// interior mutability (File trait requires &mut self for read/write/seek).
     pub file_handles: [Option<Arc<spin::Mutex<Box<dyn File>>>>; MAX_FILE_HANDLES],
+    /// Heap start address (set by exec). brk(0) returns heap_end.
+    pub heap_start: u64,
+    /// Current heap end address (grows upward via brk).
+    pub heap_end: u64,
 }
 
 impl Process {
@@ -165,6 +169,8 @@ impl Process {
             fd_types: [FdType::None; MAX_FDS],
             fd_flags: [0; MAX_FDS],
             file_handles: Default::default(),
+            heap_start: 0,
+            heap_end: 0,
         })
     }
 
@@ -203,6 +209,8 @@ impl Process {
             fd_types,
             fd_flags: [0; MAX_FDS],
             file_handles: Default::default(),
+            heap_start: 0,
+            heap_end: 0,
         })
     }
 }

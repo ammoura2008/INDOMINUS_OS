@@ -25,6 +25,7 @@ PACKAGES = [
     ("init", "userspace/init"),
     ("indosh", "userspace/shell"),
     ("test_robustness", "userspace/test_robustness"),
+    ("test_fat_write", "userspace/test_fat_write"),
 ]
 
 
