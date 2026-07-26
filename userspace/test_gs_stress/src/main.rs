@@ -18,7 +18,7 @@ fn panic(_info: &core::panic::PanicInfo) -> ! {
 ///
 /// Both processes must complete without crashing.
 #[no_mangle]
-pub extern "C" fn _start() -> ! {
+pub extern "C" fn _start(_argc: u64, _argv: u64) -> ! {
     let iterations: u64 = 2000;
     let mut ok = true;
 

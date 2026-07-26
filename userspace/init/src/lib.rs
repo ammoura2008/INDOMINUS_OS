@@ -8,7 +8,7 @@ pub fn init_main() -> ! {
     // Main loop: reap orphaned children
     loop {
         // Try to reap any zombie children (non-blocking)
-        let result = sys::waitpid(0);
+        let result = sys::waitpid(0, 1); // WNOHANG - reap any zombie
         if sys::is_error(result) {
             // No children to reap — yield and try again
             sys::yield_now();

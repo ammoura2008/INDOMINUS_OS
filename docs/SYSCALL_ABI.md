@@ -67,7 +67,7 @@ libraries work unmodified.
 | 1 | SYS_EXIT | exit_code | never (context switch) |
 | 2 | SYS_YIELD | — | 0 |
 | 3 | SYS_GETPID | — | current PID |
-| 4 | SYS_WAITPID | child_pid | exit_code, 0 (running), or -errno |
+| 4 | SYS_WAITPID | child_pid, flags | exit_code, 0 (running), or -errno |
 | 5 | SYS_SLEEP | ticks (10ms) | 0 |
 | 6 | SYS_READ | fd, buf_ptr, count | bytes read or -errno |
 | 7 | SYS_PIPE | — | (read_fd << 32) \| write_fd, or -errno |
@@ -81,6 +81,10 @@ libraries work unmodified.
 | 15 | SYS_READDIR | fd, buf_ptr, count | bytes written, 0 (end of dir), or -errno |
 | 16 | SYS_UNLINK | path_ptr | 0 or -errno |
 | 17 | SYS_BRK | new_brk | new break address or -errno |
+| 18 | SYS_EXECVE | path_ptr, argc, argv_ptr | 0 or -errno |
+| 19 | SYS_CHDIR | path_ptr | 0 or -errno |
+| 20 | SYS_GETCWD | buf_ptr, buf_size | bytes written or -errno |
+| 21 | SYS_MKDIR | path_ptr | 0 or -errno |
 
 ## Error Codes
 

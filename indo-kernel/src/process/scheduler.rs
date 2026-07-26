@@ -314,6 +314,10 @@ impl Scheduler {
                             crate::serial::write_u64(pipe_idx as u64);
                         }
                         WakeReason::None => crate::serial::write_str("none"),
+                        WakeReason::WaitForChild { child_pid } => {
+                            crate::serial::write_str("waitchild=");
+                            crate::serial::write_u64(child_pid);
+                        }
                     }
                     crate::serial::write_str(")");
                 }

@@ -594,7 +594,7 @@ pub unsafe extern "C" fn syscall_dispatch(regs: *mut u64) -> u64 {
         1 => sys_exit(arg0),
         2 => sys_yield(),
         3 => sys_getpid(),
-        4 => sys_waitpid(arg0),
+        4 => sys_waitpid(arg0, arg1),
         5 => sys_sleep(arg0),
         6 => sys_read(arg0, arg1, arg2),
         7 => sys_pipe(),
@@ -608,6 +608,10 @@ pub unsafe extern "C" fn syscall_dispatch(regs: *mut u64) -> u64 {
         15 => sys_readdir(arg0, arg1, arg2),
         16 => sys_unlink(arg0),
         17 => sys_brk(arg0),
+        18 => sys_execve(arg0, arg1, arg2),
+        19 => sys_chdir(arg0),
+        20 => sys_getcwd(arg0, arg1),
+        21 => sys_mkdir(arg0),
         _ => {
             crate::serial::write_str("[SYSCALL] Unknown syscall: ");
             crate::serial::write_u64(syscall_num);
@@ -639,18 +643,26 @@ fn sys_exit(exit_code: u64) -> u64 {
     crate::serial::write_str(")\n");
 
     // Mark current process as Zombie
-    {
+    let current_pid = {
         let mut sched = crate::process::scheduler::SCHEDULER.lock();
         if let Some(pid) = sched.current_pid() {
             // Re-parent all live children to PID 1 (init/reaper) before becoming zombie.
-            // This prevents orphaned processes from being lost when this process is reaped.
             sched.reparent_orphans_to_init(pid);
             if let Some(ref mut proc) = sched.processes_mut()[pid as usize] {
                 proc.state = crate::process::ProcessState::Zombie;
                 proc.exit_code = exit_code;
             }
+            Some(pid)
+        } else {
+            None
         }
-    }
+    };
+
+    // Wake parent processes blocked in waitpid for this child.
+    // Must drop SCHEDULER before calling keyboard_wake (lock ordering).
+    // keyboard_wake already handles WaitForChild wake reasons.
+    drop(current_pid); // just drop the Option, not a lock
+    crate::process::keyboard_wake();
 
     // Request context switch — the naked handler will call schedule() and
     // switch to the next process instead of doing sysretq back to user mode.
@@ -681,17 +693,14 @@ fn sys_getpid() -> u64 {
 
 /// SYS_WAITPID (4) — Wait for a child process to exit.
 ///
-/// Non-blocking implementation (WNOHANG):
-/// - If `child_pid == 0`: wait for any child
-/// - If `child_pid > 0`: wait for that specific child
-/// - If child is Zombie: reap it (free slot) and return its exit_code
-/// - If child is still running: return 0 (WNOHANG)
-/// - If no matching child found: return -1 (u64::MAX)
+/// flags & 1 = WNOHANG (non-blocking). If clear, blocks until child exits.
 ///
-/// Arguments: child_pid
-/// Returns: exit_code of reaped child, 0 if still running, -1 on error
-fn sys_waitpid(child_pid: u64) -> u64 {
+/// Arguments: child_pid, flags
+/// Returns: exit_code of reaped child, 0 if still running (WNOHANG), or -errno.
+fn sys_waitpid(child_pid: u64, flags: u64) -> u64 {
     use crate::process::ProcessState;
+
+    const WNOHANG: u64 = 1;
 
     let mut sched = crate::process::scheduler::SCHEDULER.lock();
     let parent_pid = match sched.current_pid() {
@@ -705,7 +714,33 @@ fn sys_waitpid(child_pid: u64) -> u64 {
         // Wait for any child
         match sched.find_any_zombie_child() {
             Some((c_pid, _, exit)) => (c_pid, true, exit),
-            None => return errno::ESRCH as u64, // No children at all
+            None => {
+                if flags & WNOHANG != 0 {
+                    return 0; // WNOHANG: no zombie yet
+                }
+                // Check if we have any children at all
+                let has_children = sched.processes().iter().enumerate().any(|(i, p)| {
+                    i > 0 && i < crate::process::MAX_PROCESSES
+                        && p.as_ref().map_or(false, |proc| {
+                            proc.parent_pid == Some(parent_pid)
+                                && proc.parent_generation == parent_gen
+                        })
+                });
+                if !has_children {
+                    return errno::ESRCH as u64;
+                }
+                // Block: set wake reason and context switch
+                {
+                    let pid = parent_pid;
+                    if let Some(ref mut proc) = sched.processes_mut()[pid as usize] {
+                        proc.state = ProcessState::Blocked;
+                        proc.wake_reason = crate::process::WakeReason::WaitForChild { child_pid: 0 };
+                    }
+                }
+                drop(sched);
+                unsafe { set_force_switch(); }
+                return 0;
+            }
         }
     } else {
         // Wait for specific child
@@ -727,8 +762,18 @@ fn sys_waitpid(child_pid: u64) -> u64 {
         // Found a zombie — reap it (free slot)
         sched.reap_zombie(found_pid);
         exit_code
+    } else if flags & WNOHANG != 0 {
+        0 // WNOHANG: child still running
     } else {
-        // Child still running (WNOHANG)
+        // Block until child exits
+        {
+            if let Some(ref mut proc) = sched.processes_mut()[parent_pid as usize] {
+                proc.state = ProcessState::Blocked;
+                proc.wake_reason = crate::process::WakeReason::WaitForChild { child_pid: found_pid };
+            }
+        }
+        drop(sched);
+        unsafe { set_force_switch(); }
         0
     }
 }
@@ -1803,7 +1848,7 @@ fn sys_open(path_ptr: u64, flags: u64) -> u64 {
 
     // Open the file via VFS, creating if O_CREAT is set
     let vfs = crate::vfs::vfs();
-    let file = if flags & crate::process::process::O_CREAT != 0 {
+    let mut file = if flags & crate::process::process::O_CREAT != 0 {
         // O_CREAT: create file if it doesn't exist
         match vfs.open(&path) {
             Ok(f) => {
@@ -1843,6 +1888,15 @@ fn sys_open(path_ptr: u64, flags: u64) -> u64 {
             Err(e) => return e.to_errno() as u64,
         }
     };
+
+    // O_APPEND: seek to end of file so writes append
+    if flags & crate::process::process::O_APPEND != 0 {
+        // Get file size from VFS inode
+        if let Ok(inode) = vfs.resolve(&path) {
+            let size = inode.size();
+            let _ = file.seek(size);
+        }
+    }
 
     // Find a free FD slot and file handle slot
     let mut sched = crate::process::scheduler::SCHEDULER.lock();
@@ -1987,4 +2041,541 @@ fn sys_brk(new_brk: u64) -> u64 {
         }
     }
     errno::ESRCH as u64
+}
+
+/// SYS_EXECVE (18) — Replace process with new ELF, passing argc/argv.
+///
+/// Arguments: path_ptr, argc, argv_ptr
+/// Returns: 0 on success, or negative errno on error.
+///
+/// argv_ptr points to an array of `argc` u64 user pointers, each pointing
+/// to a null-terminated string. After exec, the new process receives
+/// argc in RDI and a pointer to the argv array in RSI.
+fn sys_execve(path_ptr: u64, argc: u64, argv_ptr: u64) -> u64 {
+    use alloc::string::String;
+    use alloc::vec::Vec;
+    use crate::memory::{self, vmm, PhysAddr};
+
+    if path_ptr == 0 {
+        return errno::EFAULT as u64;
+    }
+
+    let pml4 = {
+        let sched = crate::process::scheduler::SCHEDULER.lock();
+        if let Some(pid) = sched.current_pid() {
+            if let Some(ref proc) = sched.processes()[pid as usize] {
+                proc.pml4_phys
+            } else {
+                return errno::ESRCH as u64;
+            }
+        } else {
+            return errno::ESRCH as u64;
+        }
+    };
+
+    // Read the path string from user space
+    let path = {
+        let mut buf = Vec::new();
+        let user_ptr = path_ptr as *const u8;
+        for i in 0..4096u64 {
+            if !is_valid_user_range(user_ptr as u64 + i, 1) {
+                return errno::EFAULT as u64;
+            }
+            if !is_user_buffer_mapped(pml4, user_ptr as u64 + i, 1) {
+                return errno::EFAULT as u64;
+            }
+            let byte = unsafe { *user_ptr.add(i as usize) };
+            if byte == 0 { break; }
+            buf.push(byte);
+        }
+        String::from_utf8(buf).unwrap_or_default()
+    };
+
+    if path.is_empty() {
+        return errno::EINVAL as u64;
+    }
+
+    // Read argv strings from user space (before replacing address space)
+    let argv_strings: Vec<String> = if argc > 0 && argv_ptr != 0 {
+        let mut strings = Vec::new();
+        let argv_array = argv_ptr as *const u64;
+        for i in 0..argc.min(64) {
+            if !is_valid_user_range(argv_ptr + i * 8, 8) {
+                break;
+            }
+            if !is_user_buffer_mapped(pml4, argv_ptr + i * 8, 8) {
+                break;
+            }
+            let str_ptr = unsafe { *argv_array.add(i as usize) };
+            if str_ptr == 0 {
+                strings.push(String::new());
+                continue;
+            }
+            let mut sbuf = Vec::new();
+            for j in 0..4096u64 {
+                if !is_valid_user_range(str_ptr + j, 1) { break; }
+                if !is_user_buffer_mapped(pml4, str_ptr + j, 1) { break; }
+                let byte = unsafe { *((str_ptr + j) as *const u8) };
+                if byte == 0 { break; }
+                sbuf.push(byte);
+            }
+            strings.push(String::from_utf8(sbuf).unwrap_or_default());
+        }
+        strings
+    } else {
+        Vec::new()
+    };
+
+    crate::serial::write_str("[SYSCALL] execve: ");
+    crate::serial::write_str(&path);
+    crate::serial::write_str(" argc=");
+    crate::serial::write_u64(argc);
+    crate::serial::write_nl();
+
+    // Close FDs marked close-on-exec
+    let mut cloexec_pipes: alloc::vec::Vec<(usize, bool)> = alloc::vec::Vec::new();
+    {
+        let mut sched = crate::process::scheduler::SCHEDULER.lock();
+        if let Some(pid) = sched.current_pid() {
+            if let Some(ref mut proc) = sched.processes_mut()[pid as usize] {
+                const CLOEXEC_BIT: u8 = 1;
+                for i in 3..crate::process::MAX_FDS {
+                    if proc.fd_flags[i] & CLOEXEC_BIT == 0 { continue; }
+                    let fd_type = proc.fd_types[i];
+                    if fd_type == crate::process::FdType::None { continue; }
+                    match fd_type {
+                        crate::process::FdType::Pipe { pipe_idx, writable } => {
+                            let pipe_idx = pipe_idx as usize;
+                            if pipe_idx < crate::process::MAX_PIPES {
+                                cloexec_pipes.push((pipe_idx, writable));
+                            }
+                        }
+                        crate::process::FdType::FsFile { index } => {
+                            let index = index as usize;
+                            if index >= crate::process::process::MAX_FILE_HANDLES { continue; }
+                            let still_referenced = proc.fd_types.iter().enumerate().any(|(j, f)| {
+                                j != i && matches!(f, crate::process::FdType::FsFile { index: idx } if *idx as usize == index)
+                            });
+                            if !still_referenced {
+                                proc.file_handles[index] = None;
+                            }
+                        }
+                        _ => {}
+                    }
+                    proc.fd_types[i] = crate::process::FdType::None;
+                }
+            }
+        }
+    }
+    if !cloexec_pipes.is_empty() {
+        let mut pipes = crate::process::PIPES.lock();
+        for (pipe_idx, writable) in cloexec_pipes {
+            if let Some(ref mut p) = pipes[pipe_idx] {
+                crate::process::pipe::pipe_close(p, writable);
+                let old = p.refcount.fetch_sub(1, core::sync::atomic::Ordering::AcqRel);
+                if old == 1 { pipes[pipe_idx] = None; }
+            }
+        }
+    }
+
+    // Read the ELF from VFS
+    let elf_data = match crate::vfs::vfs().read_file(&path) {
+        Ok(data) => data,
+        Err(e) => return e.to_errno() as u64,
+    };
+    if elf_data.is_empty() {
+        return errno::ENOENT as u64;
+    }
+
+    let (current_pid, old_pml4_phys) = {
+        let sched = crate::process::scheduler::SCHEDULER.lock();
+        if let Some(pid) = sched.current_pid() {
+            if let Some(ref proc) = sched.processes()[pid as usize] {
+                (pid, proc.pml4_phys)
+            } else {
+                return errno::ESRCH as u64;
+            }
+        } else {
+            return errno::ESRCH as u64;
+        }
+    };
+
+    let kernel_pml4 = memory::kernel_pml4_phys();
+    let new_pml4 = vmm::create_user_pml4(PhysAddr::new(kernel_pml4));
+
+    let elf_image = match crate::elf::load_elf(&elf_data, new_pml4) {
+        Ok(img) => img,
+        Err(e) => {
+            crate::serial::write_str("[SYSCALL] execve: ELF load failed: ");
+            crate::serial::write_str(e.description());
+            crate::serial::write_nl();
+            unsafe { vmm::free_user_address_space(new_pml4); }
+            return errno::ENOEXEC as u64;
+        }
+    };
+
+    let user_stack_top = crate::memory::USER_STACK_TOP;
+    let user_stack_bottom = user_stack_top - 4 * crate::memory::PAGE_SIZE;
+
+    // Map stack pages
+    for i in 0..4u64 {
+        let page_virt = x86_64::VirtAddr::new(user_stack_bottom + i * crate::memory::PAGE_SIZE);
+        let frame = match vmm::PmmFrameAllocator.allocate_frame() {
+            Some(f) => f,
+            None => { unsafe { vmm::free_user_address_space(new_pml4); } return errno::ENOMEM as u64; }
+        };
+        vmm::map_page(new_pml4, page_virt, PhysAddr::new(frame.start_address().as_u64()),
+            x86_64::structures::paging::PageTableFlags::PRESENT
+                | x86_64::structures::paging::PageTableFlags::WRITABLE
+                | x86_64::structures::paging::PageTableFlags::USER_ACCESSIBLE);
+        let frame_ptr = unsafe { vmm::phys_to_virt(frame.start_address().as_u64()).as_mut_ptr::<u8>() };
+        unsafe { core::ptr::write_bytes(frame_ptr, 0, 4096); }
+    }
+
+    // Map guard page
+    let guard_virt = x86_64::VirtAddr::new(user_stack_bottom - crate::memory::PAGE_SIZE);
+    let guard_frame = match vmm::PmmFrameAllocator.allocate_frame() {
+        Some(f) => f,
+        None => { unsafe { vmm::free_user_address_space(new_pml4); } return errno::ENOMEM as u64; }
+    };
+    vmm::map_page(new_pml4, guard_virt, PhysAddr::new(guard_frame.start_address().as_u64()),
+        x86_64::structures::paging::PageTableFlags::PRESENT);
+
+    // Free old address space
+    unsafe { vmm::free_user_address_space(PhysAddr::new(old_pml4_phys)); }
+
+    // Set up user stack with argc/argv data
+    let mut sp = user_stack_top - 8; // 16-byte aligned before CALL
+
+    // Write argv strings and pointers to user stack
+    // Layout (high to low):
+    //   argv string data
+    //   argv pointers (u64)
+    //   NULL terminator
+    //   argc (u64) <-- RSP
+    let actual_argc = argv_strings.len() as u64;
+
+    // First, write all strings at the top of the usable stack area
+    let mut string_offsets: Vec<u64> = Vec::new();
+    let string_data_start = sp - 4096; // Use the page below RSP for string data
+    let mut string_pos = string_data_start;
+
+    for s in &argv_strings {
+        string_offsets.push(string_pos);
+        let bytes = s.as_bytes();
+        for (j, &b) in bytes.iter().enumerate() {
+            let addr = string_pos + j as u64;
+            if let Some(phys) = vmm::translate_addr(new_pml4, x86_64::VirtAddr::new(addr)) {
+                let ptr = unsafe { vmm::phys_to_virt(phys.as_u64()).as_mut_ptr::<u8>() };
+                unsafe { *ptr = b; }
+            }
+        }
+        // Null terminator
+        let null_addr = string_pos + bytes.len() as u64;
+        if let Some(phys) = vmm::translate_addr(new_pml4, x86_64::VirtAddr::new(null_addr)) {
+            let ptr = unsafe { vmm::phys_to_virt(phys.as_u64()).as_mut_ptr::<u8>() };
+            unsafe { *ptr = 0; }
+        }
+        string_pos += (bytes.len() + 1) as u64;
+    }
+
+    // Write NULL terminator for argv
+    sp -= 8;
+    if let Some(phys) = vmm::translate_addr(new_pml4, x86_64::VirtAddr::new(sp)) {
+        let ptr = unsafe { vmm::phys_to_virt(phys.as_u64()).as_mut_ptr::<u64>() };
+        unsafe { ptr.write(0); }
+    }
+
+    // Write argv pointers (reversed order since stack grows down)
+    for i in (0..argv_strings.len()).rev() {
+        sp -= 8;
+        let ptr_val = string_offsets[i];
+        if let Some(phys) = vmm::translate_addr(new_pml4, x86_64::VirtAddr::new(sp)) {
+            let ptr = unsafe { vmm::phys_to_virt(phys.as_u64()).as_mut_ptr::<u64>() };
+            unsafe { ptr.write(ptr_val); }
+        }
+    }
+    let argv_user_ptr = sp; // User-space pointer to the argv array
+
+    // Write argc
+    sp -= 8;
+    if let Some(phys) = vmm::translate_addr(new_pml4, x86_64::VirtAddr::new(sp)) {
+        let ptr = unsafe { vmm::phys_to_virt(phys.as_u64()).as_mut_ptr::<u64>() };
+        unsafe { ptr.write(actual_argc); }
+    }
+
+    let user_rip = elf_image.entry;
+    let user_rsp = sp; // RSP points to argc
+
+    // Update the process
+    {
+        let mut sched = crate::process::scheduler::SCHEDULER.lock();
+        if let Some(ref mut proc) = sched.processes_mut()[current_pid as usize] {
+            proc.pml4_phys = new_pml4.as_u64();
+            proc.user_rip = Some(user_rip);
+            proc.user_rsp = Some(user_rsp);
+            proc.is_user = true;
+
+            let sp_ptr = proc.stack_pointer as *mut u64;
+            if sp_ptr.is_null() {
+                return errno::EINVAL as u64;
+            }
+            unsafe {
+                sp_ptr.add(15).write(user_rip);  // RIP
+                sp_ptr.add(16).write(crate::gdt::user_code_selector().0 as u64); // CS
+                sp_ptr.add(17).write(0x202u64);  // RFLAGS (IF=1)
+                sp_ptr.add(18).write(user_rsp);   // RSP
+                sp_ptr.add(19).write(crate::gdt::user_data_selector().0 as u64); // SS
+                // Set argc (RDI) and argv pointer (RSI) for _start
+                sp_ptr.add(5).write(actual_argc); // RDI = argc
+                sp_ptr.add(4).write(argv_user_ptr); // RSI = argv pointer
+            }
+        }
+    }
+
+    crate::serial::write_str("[SYSCALL] execve: entry=");
+    crate::serial::write_hex(user_rip);
+    crate::serial::write_str(" rsp=");
+    crate::serial::write_hex(user_rsp);
+    crate::serial::write_str(" argc=");
+    crate::serial::write_u64(actual_argc);
+    crate::serial::write_nl();
+
+    0
+}
+
+/// SYS_CHDIR (19) — Change the current working directory.
+///
+/// Arguments: path_ptr (user pointer to null-terminated path string)
+/// Returns: 0 on success, or negative errno on error.
+fn sys_chdir(path_ptr: u64) -> u64 {
+    use alloc::string::String;
+    use alloc::vec::Vec;
+
+    if path_ptr == 0 {
+        return errno::EFAULT as u64;
+    }
+
+    let pml4 = {
+        let sched = crate::process::scheduler::SCHEDULER.lock();
+        if let Some(pid) = sched.current_pid() {
+            if let Some(ref proc) = sched.processes()[pid as usize] {
+                proc.pml4_phys
+            } else {
+                return errno::ESRCH as u64;
+            }
+        } else {
+            return errno::ESRCH as u64;
+        }
+    };
+
+    let path = {
+        let mut buf = Vec::new();
+        let user_ptr = path_ptr as *const u8;
+        for i in 0..4096u64 {
+            if !is_valid_user_range(user_ptr as u64 + i, 1) { return errno::EFAULT as u64; }
+            if !is_user_buffer_mapped(pml4, user_ptr as u64 + i, 1) { return errno::EFAULT as u64; }
+            let byte = unsafe { *user_ptr.add(i as usize) };
+            if byte == 0 { break; }
+            buf.push(byte);
+        }
+        String::from_utf8(buf).unwrap_or_default()
+    };
+
+    if path.is_empty() {
+        return errno::EINVAL as u64;
+    }
+
+    // Resolve the path against CWD if relative
+    let resolved = {
+        let sched = crate::process::scheduler::SCHEDULER.lock();
+        if let Some(pid) = sched.current_pid() {
+            if let Some(ref proc) = sched.processes()[pid as usize] {
+                resolve_cwd(proc.cwd_str(), &path)
+            } else {
+                return errno::ESRCH as u64;
+            }
+        } else {
+            return errno::ESRCH as u64;
+        }
+    };
+
+    // Verify the path exists and is a directory
+    match crate::vfs::vfs().resolve(&resolved) {
+        Ok(inode) => {
+            if !inode.is_dir() {
+                return errno::ENOTDIR as u64;
+            }
+        }
+        Err(e) => return e.to_errno() as u64,
+    }
+
+    // Set the CWD
+    let mut sched = crate::process::scheduler::SCHEDULER.lock();
+    if let Some(pid) = sched.current_pid() {
+        if let Some(ref mut proc) = sched.processes_mut()[pid as usize] {
+            proc.set_cwd(&resolved);
+        }
+    }
+
+    0
+}
+
+/// SYS_GETCWD (20) — Get the current working directory.
+///
+/// Arguments: buf_ptr (user buffer), buf_size (buffer size)
+/// Returns: number of bytes written (excluding null), or negative errno on error.
+fn sys_getcwd(buf_ptr: u64, buf_size: u64) -> u64 {
+    if buf_ptr == 0 || buf_size == 0 {
+        return errno::EINVAL as u64;
+    }
+
+    if !is_valid_user_range(buf_ptr, buf_size) {
+        return errno::EFAULT as u64;
+    }
+
+    let cwd = {
+        let sched = crate::process::scheduler::SCHEDULER.lock();
+        if let Some(pid) = sched.current_pid() {
+            if let Some(ref proc) = sched.processes()[pid as usize] {
+                let len = proc.cwd.iter().position(|&b| b == 0).unwrap_or(256);
+                let mut result = alloc::vec![0u8; len + 1];
+                result[..len].copy_from_slice(&proc.cwd[..len]);
+                result[len] = 0;
+                result
+            } else {
+                return errno::ESRCH as u64;
+            }
+        } else {
+            return errno::ESRCH as u64;
+        }
+    };
+
+    let copy_len = core::cmp::min(cwd.len() as u64, buf_size);
+    let pml4 = {
+        let sched = crate::process::scheduler::SCHEDULER.lock();
+        if let Some(pid) = sched.current_pid() {
+            if let Some(ref proc) = sched.processes()[pid as usize] {
+                proc.pml4_phys
+            } else {
+                return errno::ESRCH as u64;
+            }
+        } else {
+            return errno::ESRCH as u64;
+        }
+    };
+    if !is_user_buffer_mapped(pml4, buf_ptr, copy_len) {
+        return errno::EFAULT as u64;
+    }
+
+    unsafe {
+        core::ptr::copy_nonoverlapping(cwd.as_ptr(), buf_ptr as *mut u8, copy_len as usize);
+    }
+
+    // Return the length of the string (excluding null terminator) per POSIX getcwd
+    let len = cwd.iter().position(|&b| b == 0).unwrap_or(cwd.len());
+    len as u64
+}
+
+/// SYS_MKDIR (21) — Create a directory.
+///
+/// Arguments: path_ptr (user pointer to null-terminated path string)
+/// Returns: 0 on success, or negative errno on error.
+fn sys_mkdir(path_ptr: u64) -> u64 {
+    use alloc::string::String;
+    use alloc::vec::Vec;
+
+    if path_ptr == 0 {
+        return errno::EFAULT as u64;
+    }
+
+    let pml4 = {
+        let sched = crate::process::scheduler::SCHEDULER.lock();
+        if let Some(pid) = sched.current_pid() {
+            if let Some(ref proc) = sched.processes()[pid as usize] {
+                proc.pml4_phys
+            } else {
+                return errno::ESRCH as u64;
+            }
+        } else {
+            return errno::ESRCH as u64;
+        }
+    };
+
+    let path = {
+        let mut buf = Vec::new();
+        let user_ptr = path_ptr as *const u8;
+        for i in 0..4096u64 {
+            if !is_valid_user_range(user_ptr as u64 + i, 1) { return errno::EFAULT as u64; }
+            if !is_user_buffer_mapped(pml4, user_ptr as u64 + i, 1) { return errno::EFAULT as u64; }
+            let byte = unsafe { *user_ptr.add(i as usize) };
+            if byte == 0 { break; }
+            buf.push(byte);
+        }
+        String::from_utf8(buf).unwrap_or_default()
+    };
+
+    if path.is_empty() {
+        return errno::EINVAL as u64;
+    }
+
+    match crate::vfs::vfs().create_dir(&path) {
+        Ok(()) => 0,
+        Err(e) => e.to_errno() as u64,
+    }
+}
+
+/// Resolve a relative path against a CWD.
+///
+/// Handles ".", "..", and multiple slashes. Returns an absolute path.
+fn resolve_cwd(cwd: &str, path: &str) -> alloc::string::String {
+    use alloc::string::String;
+    use alloc::vec::Vec;
+
+    // If path starts with '/', it's absolute
+    if path.starts_with('/') {
+        return normalize_path(path);
+    }
+
+    // Relative path: start from CWD
+    let mut parts: Vec<&str> = cwd.split('/').filter(|s| !s.is_empty()).collect();
+    for part in path.split('/').filter(|s| !s.is_empty()) {
+        match part {
+            "." => {}
+            ".." => { parts.pop(); }
+            other => parts.push(other),
+        }
+    }
+
+    let mut result = String::from("/");
+    for (i, part) in parts.iter().enumerate() {
+        if i > 0 { result.push('/'); }
+        result.push_str(part);
+    }
+    if result.is_empty() { result.push('/'); }
+    result
+}
+
+/// Normalize a path by resolving ".", ".." and collapsing multiple slashes.
+fn normalize_path(path: &str) -> alloc::string::String {
+    use alloc::string::String;
+    use alloc::vec::Vec;
+
+    let mut parts: Vec<&str> = path.split('/').filter(|s| !s.is_empty()).collect();
+    let mut resolved = Vec::new();
+    for part in parts.drain(..) {
+        match part {
+            "." => {}
+            ".." => { resolved.pop(); }
+            other => resolved.push(other),
+        }
+    }
+
+    let mut result = String::from("/");
+    for (i, part) in resolved.iter().enumerate() {
+        if i > 0 { result.push('/'); }
+        result.push_str(part);
+    }
+    if result.is_empty() { result.push('/'); }
+    result
 }

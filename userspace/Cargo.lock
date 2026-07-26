@@ -7,6 +7,13 @@ name = "indo-syscall"
 version = "0.1.0"
 
 [[package]]
+name = "indominus-utils"
+version = "1.0.0"
+dependencies = [
+ "indo-syscall",
+]
+
+[[package]]
 name = "indosh"
 version = "0.3.0"
 dependencies = [

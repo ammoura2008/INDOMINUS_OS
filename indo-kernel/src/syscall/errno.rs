@@ -33,6 +33,10 @@ pub const ENOEXEC: i64 = -8;
 pub const ENOSYS: i64 = -38;
 /// Not a directory
 pub const ENOTDIR: i64 = -20;
+/// File exists
+pub const EEXIST: i64 = -17;
+/// Not a terminal
+pub const ENOTTY: i64 = -25;
 
 /// Maximum errno value (absolute). Used by userspace to detect errors:
 /// if result > -4096 as unsigned, it's an error.

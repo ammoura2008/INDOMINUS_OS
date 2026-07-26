@@ -26,7 +26,11 @@ PACKAGES = [
     ("indosh", "userspace/shell"),
     ("test_robustness", "userspace/test_robustness"),
     ("test_fat_write", "userspace/test_fat_write"),
+    ("indominus-utils", "userspace/utils"),
 ]
+
+# Additional binaries from the utils crate to copy
+UTIL_BINARIES = ["echo", "cat", "ls", "pwd", "mkdir", "touch", "rm", "true_bin", "false_bin"]
 
 
 def run(cmd, cwd=WORKSPACE, env=None):
@@ -78,9 +82,22 @@ def build_package(name, crate_path):
         return False
 
     # Copy the binary to rootfs/bin/
-    # The binary name might have the target triple suffix
-    binary_names = [name, f"{name}-x86_64-indominus"]
     src_dir = os.path.join(target_dir, "x86_64-indominus", "release")
+    
+    # For multi-binary crates (utils), copy all known binaries
+    if name == "indominus-utils":
+        found_any = False
+        for bin_name in UTIL_BINARIES:
+            src = os.path.join(src_dir, bin_name)
+            if os.path.exists(src):
+                dst = os.path.join(build_dir, bin_name)
+                shutil.copy2(src, dst)
+                print(f"  -> {dst}")
+                found_any = True
+        return found_any
+    
+    # For single-binary crates
+    binary_names = [name, f"{name}-x86_64-indominus"]
     
     found = False
     for binary_name in binary_names:

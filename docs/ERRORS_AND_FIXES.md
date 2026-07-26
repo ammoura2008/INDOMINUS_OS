@@ -4,6 +4,46 @@ This document records every error, bug, gap, and problem encountered during INDO
 
 ---
 
+## 15. Phase 12 — Full Interactive Userspace & Shell
+
+### Overview
+Implemented a complete interactive shell with tokenizer, parser, builtins, pipelines, and file redirection, plus 4 new kernel syscalls and 9 userspace utility binaries.
+
+### New Kernel Syscalls (4)
+| # | Name | Purpose |
+|---|------|---------|
+| 18 | SYS_EXECVE | Execute ELF binary with argc/argv propagation |
+| 19 | SYS_CHDIR | Change current working directory |
+| 20 | SYS_GETCWD | Get current working directory |
+| 21 | SYS_MKDIR | Create directory |
+
+### Shell Features
+- **Tokenizer**: Handles words, quoted strings, pipes, redirections (>, >>, <)
+- **Pipeline parser**: Chains commands with `|`
+- **15 builtins**: help, exit, echo, pwd, cd, clear, cat, ls, mkdir, touch, rm, pid, ps, true, false
+- **Process lifecycle**: fork → execve → waitpid (blocking + WNOHANG)
+- **PATH resolution**: Searches `/bin/<command>`
+- **File redirection**: `>` (truncate), `>>` (append), `<` (input)
+- **CWD tracking**: Shell maintains CWD, calls chdir/getcwd syscalls
+
+### Userspace Utilities (9 binaries)
+echo, cat, ls, pwd, mkdir, touch, rm, true_bin, false_bin — all no_std, no global allocator, stack-only.
+
+### Key Changes
+- `MAX_FDS` increased from 8 to 16
+- `Process.cwd: [u8; 256]` added for CWD tracking
+- `WaitForChild` wake reason added to scheduler
+- `keyboard_wake()` rewritten as two-phase (collect then wake) to avoid borrow conflicts
+- `sys_exit()` now calls `keyboard_wake()` so parent blocking waitpid can wake
+- O_APPEND flag added to open()
+- All `_start` signatures updated to `fn _start(argc: u64, argv: u64)`
+
+### Testing
+- 3/3 boot tests pass, 0 TFES, all 6 phases (9.4-9.9) pass
+- Shell banner visible in serial output
+
+---
+
 ## 14. AHCI PORT_IS_TFES Bit Position Fix (Phase 10C)
 
 ### Problem

@@ -1,0 +1,43 @@
+[package]
+name = "indominus-utils"
+version = "1.0.0"
+edition = "2021"
+
+[dependencies]
+indo-syscall = { path = "../syscall" }
+
+[[bin]]
+name = "echo"
+path = "src/bin/echo.rs"
+
+[[bin]]
+name = "cat"
+path = "src/bin/cat.rs"
+
+[[bin]]
+name = "ls"
+path = "src/bin/ls.rs"
+
+[[bin]]
+name = "pwd"
+path = "src/bin/pwd.rs"
+
+[[bin]]
+name = "mkdir"
+path = "src/bin/mkdir.rs"
+
+[[bin]]
+name = "touch"
+path = "src/bin/touch.rs"
+
+[[bin]]
+name = "rm"
+path = "src/bin/rm.rs"
+
+[[bin]]
+name = "true_bin"
+path = "src/bin/true_bin.rs"
+
+[[bin]]
+name = "false_bin"
+path = "src/bin/false_bin.rs"

@@ -29,6 +29,10 @@ pub const SYS_DUP2: u64 = 14;
 pub const SYS_READDIR: u64 = 15;
 pub const SYS_UNLINK: u64 = 16;
 pub const SYS_BRK: u64 = 17;
+pub const SYS_EXECVE: u64 = 18;
+pub const SYS_CHDIR: u64 = 19;
+pub const SYS_GETCWD: u64 = 20;
+pub const SYS_MKDIR: u64 = 21;
 
 /// Open flags (POSIX-compatible).
 pub const O_RDONLY: u64 = 0x0000;
@@ -36,6 +40,7 @@ pub const O_WRONLY: u64 = 0x0001;
 pub const O_RDWR: u64 = 0x0002;
 pub const O_CREAT: u64 = 0x0040;
 pub const O_TRUNC: u64 = 0x0200;
+pub const O_APPEND: u64 = 0x0400;
 /// Close this FD on exec(). POSIX default is inherit (flag clear).
 pub const O_CLOEXEC: u64 = 0x80000;
 
@@ -147,9 +152,22 @@ pub fn getpid() -> u64 {
 }
 
 /// Wait for a child process to exit.
-/// Returns child's exit code, or negative errno on error.
-pub fn waitpid(child_pid: u64) -> i64 {
-    unsafe { syscall1(SYS_WAITPID, child_pid) }
+/// flags: 0 = blocking, 1 = WNOHANG (non-blocking).
+/// Returns child's exit code, 0 if still running (WNOHANG), or negative errno on error.
+pub fn waitpid(child_pid: u64, flags: u64) -> i64 {
+    unsafe { syscall2(SYS_WAITPID, child_pid, flags) }
+}
+
+/// Wait for a child process to exit (blocking).
+/// Convenience wrapper: waitpid(child_pid, 0).
+pub fn waitpid_blocking(child_pid: u64) -> i64 {
+    waitpid(child_pid, 0)
+}
+
+/// Wait for any child process to exit (non-blocking).
+/// Convenience wrapper: waitpid(0, 1).
+pub fn waitpid_any_nohang() -> i64 {
+    waitpid(0, 1)
 }
 
 /// Sleep for a specified number of timer ticks (10ms each).
@@ -167,6 +185,31 @@ pub fn fork() -> i64 {
 /// Returns 0 on success, or negative errno on error.
 pub fn exec(path: &str) -> i64 {
     unsafe { syscall1(SYS_EXEC, path.as_ptr() as u64) }
+}
+
+/// Execute a new program with arguments, replacing the current address space.
+/// argc = number of arguments, argv_ptrs = pointer to array of string pointers.
+/// Returns 0 on success, or negative errno on error.
+pub fn execve(path: &str, argc: u64, argv_ptrs: *const *const u8) -> i64 {
+    unsafe { syscall3(SYS_EXECVE, path.as_ptr() as u64, argc, argv_ptrs as u64) }
+}
+
+/// Change the current working directory.
+/// Returns 0 on success, or negative errno on error.
+pub fn chdir(path: &str) -> i64 {
+    unsafe { syscall1(SYS_CHDIR, path.as_ptr() as u64) }
+}
+
+/// Get the current working directory into buf.
+/// Returns number of bytes written (excluding null), or negative errno on error.
+pub fn getcwd(buf: &mut [u8]) -> i64 {
+    unsafe { syscall2(SYS_GETCWD, buf.as_mut_ptr() as u64, buf.len() as u64) }
+}
+
+/// Create a directory.
+/// Returns 0 on success, or negative errno on error.
+pub fn mkdir(path: &str) -> i64 {
+    unsafe { syscall1(SYS_MKDIR, path.as_ptr() as u64) }
 }
 
 // ─── Pipes ──────────────────────────────────────────────────────────────────

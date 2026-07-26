@@ -135,6 +135,51 @@ Phase 10C: AHCI TFES fix (bit 30), validate_elf_header
 Phase 10D: Comprehensive code audit + doc fixes
 ```
 
+## Phase 11: FAT Write Support
+
+```
+[ ] create_file creates new files
+[ ] write_file writes data and reads back correctly
+[ ] create_file + write_file end-to-end
+[ ] Large file write (3+ clusters) reads back correctly
+[ ] create_dir creates directories
+[ ] delete_file removes files
+[ ] Multiple create/delete cycles work
+```
+
+## Phase 12: Full Interactive Userspace & Shell
+
+```
+Kernel Syscalls:
+[ ] sys_execve (18) executes ELF with argc/argv propagation
+[ ] sys_chdir (19) changes CWD, validates directory exists
+[ ] sys_getcwd (20) returns CWD to user buffer
+[ ] sys_mkdir (21) creates directories
+[ ] sys_waitpid blocking: parent blocks until child exits
+[ ] sys_waitpid WNOHANG: returns immediately if no child
+[ ] O_APPEND flag: writes append to file end
+
+Shell Features:
+[ ] Tokenizer handles words, quotes, pipes, redirections
+[ ] Builtins: help, exit, echo, pwd, cd, clear, cat, ls, mkdir, touch, rm, pid, ps, true, false
+[ ] External commands: fork → execve → waitpid lifecycle
+[ ] PATH resolution: /bin/<command>
+[ ] File redirection: > (truncate), >> (append), < (input)
+[ ] Pipelines: cmd1 | cmd2 chains stdin/stdout
+[ ] CWD tracking: cd changes shell CWD
+
+Userspace Utilities:
+[ ] echo prints arguments
+[ ] cat prints file contents
+[ ] ls lists directory entries
+[ ] pwd prints current directory
+[ ] mkdir creates directories
+[ ] touch creates empty files
+[ ] rm deletes files
+[ ] true exits 0
+[ ] false exits 1
+```
+
 ## Automated Boot Test (qemu_boot_test.py)
 
 ```powershell

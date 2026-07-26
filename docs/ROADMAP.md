@@ -16,9 +16,9 @@
 
 ---
 
-## Current Status (as of Phase 11)
+## Current Status (as of Phase 12)
 
-**Completed through:** Phase 11 (FAT Write Support)
+**Completed through:** Phase 12 (Full Interactive Userspace & Shell)
 
 | Actual Phase | Roadmap Phase | Status | Key Deliverable |
 |-------------|--------------|--------|-----------------|
@@ -26,7 +26,7 @@
 | 1 | Phase 1 | ✅ DONE | PMM, VMM, kernel heap (16 MiB) |
 | 2 | Phase 2 | ✅ DONE | LAPIC, IO-APIC, PIT, IRQ dispatch |
 | 3 | Phase 3 | ✅ DONE | Process struct, context switch, round-robin scheduler |
-| 4 | Phase 4 | ✅ DONE | `syscall`/`sysret`, 18 syscalls, user mode |
+| 4 | Phase 4 | ✅ DONE | `syscall`/`sysret`, 21 syscalls, user mode |
 | 5 | Phase 5 | ✅ DONE | PCI enumeration, ACPI, MMIO |
 | 5.3 | Phase 6 | ✅ DONE | AHCI storage driver, block device abstraction |
 | 5.4 | Phase 9 | ✅ DONE | Page fault classification, user process kill |
@@ -44,8 +44,15 @@
 | 10B | — | ✅ DONE | Process lifecycle fixes (drop, exit, waitpid) |
 | 10C | — | ✅ DONE | AHCI TFES fix (bit 30), validate_elf_header |
 | 10D | — | ✅ DONE | Comprehensive code audit + doc fixes |
+| 11 | Phase 11 | ✅ DONE | FAT write support (create/write/truncate files) |
+| 12.1-12.4 | Phase 12 | ✅ DONE | Shell tokenizer/parser, execve, chdir/getcwd/mkdir |
+| 12.5-12.6 | Phase 12 | ✅ DONE | Shell fork/exec/wait lifecycle + 15 builtins |
+| 12.7-12.9 | Phase 12 | ✅ DONE | O_APPEND, file redirection (>, >>, <), pipelines |
+| 12.10-12.11 | Phase 12 | ✅ DONE | Userspace utilities (echo, cat, ls, pwd, mkdir, touch, rm, true, false) |
+| 12.12 | Phase 12 | ✅ DONE | Security hardening + audit |
+| 12.13 | Phase 12 | ✅ DONE | Full regression (3/3 boots, 0 TFES) |
 
-**Total tests:** 65/65 passing (50 integration + 15 robustness stress tests)
+**Total tests:** 65/65 passing + 3/3 boot regression (Phase 12)
 
 ## Phase Overview
 

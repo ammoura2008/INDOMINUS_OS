@@ -22,7 +22,7 @@ pub const MAX_PROCESSES: usize = 32;
 pub const KERNEL_STACK_SIZE: usize = 8192;
 
 /// Maximum number of file descriptors per process.
-pub const MAX_FDS: usize = 8;
+pub const MAX_FDS: usize = 16;
 
 /// Process identifier.
 pub type Pid = u64;
@@ -61,6 +61,8 @@ pub enum WakeReason {
     PipeRead { pipe_idx: u8 },
     /// Waiting for pipe space (write end).
     PipeWrite { pipe_idx: u8 },
+    /// Waiting for a child process to exit.
+    WaitForChild { child_pid: u64 },
 }
 
 /// Process states.
@@ -88,6 +90,7 @@ pub const O_WRONLY: u64 = 0x0001;
 pub const O_RDWR: u64 = 0x0002;
 pub const O_CREAT: u64 = 0x0040;
 pub const O_TRUNC: u64 = 0x0200;
+pub const O_APPEND: u64 = 0x0400;
 /// Close this FD on exec(). POSIX default is inherit (flag clear).
 pub const O_CLOEXEC: u64 = 0x80000;
 
@@ -133,6 +136,8 @@ pub struct Process {
     pub heap_start: u64,
     /// Current heap end address (grows upward via brk).
     pub heap_end: u64,
+    /// Current working directory (null-terminated path, max 255 bytes).
+    pub cwd: [u8; 256],
 }
 
 impl Process {
@@ -171,6 +176,11 @@ impl Process {
             file_handles: Default::default(),
             heap_start: 0,
             heap_end: 0,
+            cwd: {
+                let mut c = [0u8; 256];
+                c[0] = b'/';
+                c
+            },
         })
     }
 
@@ -211,7 +221,26 @@ impl Process {
             file_handles: Default::default(),
             heap_start: 0,
             heap_end: 0,
+            cwd: {
+                let mut c = [0u8; 256];
+                c[0] = b'/';
+                c
+            },
         })
+    }
+
+    /// Get the current working directory as a byte slice.
+    pub fn cwd_str(&self) -> &str {
+        let len = self.cwd.iter().position(|&b| b == 0).unwrap_or(256);
+        core::str::from_utf8(&self.cwd[..len]).unwrap_or("/")
+    }
+
+    /// Set the current working directory.
+    pub fn set_cwd(&mut self, path: &str) {
+        let bytes = path.as_bytes();
+        let copy_len = core::cmp::min(bytes.len(), 255);
+        self.cwd = [0u8; 256];
+        self.cwd[..copy_len].copy_from_slice(&bytes[..copy_len]);
     }
 }
 

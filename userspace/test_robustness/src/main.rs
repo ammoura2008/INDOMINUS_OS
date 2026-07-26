@@ -23,7 +23,7 @@ fn report(test: &str, passed: bool) {
 }
 
 #[no_mangle]
-pub extern "C" fn _start() -> ! {
+pub extern "C" fn _start(_argc: u64, _argv: u64) -> ! {
     let mut passed: u32 = 0;
     let mut failed: u32 = 0;
 
@@ -87,7 +87,7 @@ pub extern "C" fn _start() -> ! {
                 break;
             } else {
                 // Parent: wait for child
-                let wait_ret = sys::waitpid(ret as u64);
+                let wait_ret = sys::waitpid(ret as u64, 0);
                 if sys::is_error(wait_ret) {
                     ok = false;
                     break;
@@ -205,7 +205,7 @@ pub extern "C" fn _start() -> ! {
         if ok {
             for i in 0..5usize {
                 if pids[i] != 0 {
-                    let w = sys::waitpid(pids[i] as u64);
+                    let w = sys::waitpid(pids[i] as u64, 0);
                     if sys::is_error(w) {
                         ok = false;
                         break;

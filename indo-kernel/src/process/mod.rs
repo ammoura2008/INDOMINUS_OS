@@ -188,43 +188,64 @@ pub fn start_scheduler() -> ! {
 pub fn keyboard_wake() {
     let mut sched = SCHEDULER.lock();
     let pipes = PIPES.lock();
-    for i in 0..process::MAX_PROCESSES as u64 {
-        if let Some(Some(ref mut proc)) = sched.processes_mut().get_mut(i as usize) {
-            if proc.state == process::ProcessState::Blocked {
-                match proc.wake_reason {
-                    process::WakeReason::Keyboard => {
-                        proc.state = process::ProcessState::Ready;
-                        proc.wake_reason = process::WakeReason::None;
-                    }
-                    process::WakeReason::PipeRead { pipe_idx } => {
-                        let idx = pipe_idx as usize;
-                        if idx < MAX_PIPES {
-                            if let Some(ref p) = pipes[idx] {
-                                let nread = p.nread.load(core::sync::atomic::Ordering::Relaxed);
-                                let nwrite = p.nwrite.load(core::sync::atomic::Ordering::Relaxed);
-                                if nread < nwrite || !p.write_open.load(core::sync::atomic::Ordering::Relaxed) {
-                                    proc.state = process::ProcessState::Ready;
-                                    proc.wake_reason = process::WakeReason::None;
-                                }
-                            }
-                        }
-                    }
-                    process::WakeReason::PipeWrite { pipe_idx } => {
-                        let idx = pipe_idx as usize;
-                        if idx < MAX_PIPES {
-                            if let Some(ref p) = pipes[idx] {
-                                let nread = p.nread.load(core::sync::atomic::Ordering::Relaxed);
-                                let nwrite = p.nwrite.load(core::sync::atomic::Ordering::Relaxed);
-                                if nwrite < nread.wrapping_add(pipe::PIPE_SIZE as u32) {
-                                    proc.state = process::ProcessState::Ready;
-                                    proc.wake_reason = process::WakeReason::None;
-                                }
-                            }
-                        }
-                    }
-                    _ => {}
-                }
+
+    // Phase 1: Collect which processes need waking (avoid borrow conflicts)
+    let mut wake_list: alloc::vec::Vec<usize> = alloc::vec::Vec::new();
+
+    for i in 0..process::MAX_PROCESSES {
+        if let Some(ref proc) = sched.processes()[i] {
+            if proc.state != process::ProcessState::Blocked {
+                continue;
             }
+            match proc.wake_reason {
+                process::WakeReason::Keyboard => {
+                    wake_list.push(i);
+                }
+                process::WakeReason::PipeRead { pipe_idx } => {
+                    let idx = pipe_idx as usize;
+                    if idx < MAX_PIPES {
+                        if let Some(ref p) = pipes[idx] {
+                            let nread = p.nread.load(core::sync::atomic::Ordering::Relaxed);
+                            let nwrite = p.nwrite.load(core::sync::atomic::Ordering::Relaxed);
+                            if nread < nwrite || !p.write_open.load(core::sync::atomic::Ordering::Relaxed) {
+                                wake_list.push(i);
+                            }
+                        }
+                    }
+                }
+                process::WakeReason::PipeWrite { pipe_idx } => {
+                    let idx = pipe_idx as usize;
+                    if idx < MAX_PIPES {
+                        if let Some(ref p) = pipes[idx] {
+                            let nread = p.nread.load(core::sync::atomic::Ordering::Relaxed);
+                            let nwrite = p.nwrite.load(core::sync::atomic::Ordering::Relaxed);
+                            if nwrite < nread.wrapping_add(pipe::PIPE_SIZE as u32) {
+                                wake_list.push(i);
+                            }
+                        }
+                    }
+                }
+                process::WakeReason::WaitForChild { child_pid } => {
+                    let cp = child_pid as usize;
+                    if cp < process::MAX_PROCESSES {
+                        let child_is_zombie = sched.processes()[cp]
+                            .as_ref()
+                            .map_or(false, |c| c.state == process::ProcessState::Zombie);
+                        if child_is_zombie {
+                            wake_list.push(i);
+                        }
+                    }
+                }
+                _ => {}
+            }
+        }
+    }
+
+    // Phase 2: Wake the collected processes
+    for pid in wake_list {
+        if let Some(Some(ref mut proc)) = sched.processes_mut().get_mut(pid) {
+            proc.state = process::ProcessState::Ready;
+            proc.wake_reason = process::WakeReason::None;
         }
     }
 }
@@ -233,8 +254,6 @@ pub fn keyboard_wake() {
 ///
 /// Sets the force_switch flag so the syscall_entry handler performs a context
 /// switch via the force_switch path (which correctly does swapgs before iretq).
-///
-/// # IMPORTANT: Do NOT use `sti; hlt` here!
 ///
 /// yield_now() is called from INSIDE a syscall handler, after swapgs has set
 /// KERNEL_GS_BASE = 0. If we do `sti; hlt`, the timer interrupt fires while
