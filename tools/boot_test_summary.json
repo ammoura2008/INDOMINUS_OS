@@ -1,6 +1,6 @@
 {
   "total_boots": 3,
-  "shell_banners": 3,
+  "shell_banners": 0,
   "all_phases_passed": 3,
   "kernel_panics": 0,
   "boot_timeouts": 0,
@@ -19,10 +19,10 @@
   "results": [
     {
       "boot_id": 1,
-      "timestamp": "2026-07-26T02:18:46.360793",
-      "timeout": 120,
+      "timestamp": "2026-07-26T06:52:34.075197",
+      "timeout": 150,
       "sent_input": true,
-      "shell_banner": true,
+      "shell_banner": false,
       "help_output": false,
       "unknown_cmd": false,
       "kernel_panic": false,
@@ -43,16 +43,16 @@
         "9.9": "PASSED"
       },
       "boot_completed": false,
-      "elapsed_seconds": 138.1,
+      "elapsed_seconds": 168.1,
       "log_file": "C:\\Users\\USER\\Documents\\indominux rex operating system\\tools\\boot_logs\\boot_001.log",
       "failed_count": 0
     },
     {
       "boot_id": 2,
-      "timestamp": "2026-07-26T02:21:04.437050",
-      "timeout": 120,
+      "timestamp": "2026-07-26T06:55:22.673616",
+      "timeout": 150,
       "sent_input": true,
-      "shell_banner": true,
+      "shell_banner": false,
       "help_output": false,
       "unknown_cmd": false,
       "kernel_panic": false,
@@ -73,16 +73,16 @@
         "9.9": "PASSED"
       },
       "boot_completed": false,
-      "elapsed_seconds": 138.1,
+      "elapsed_seconds": 168.0,
       "log_file": "C:\\Users\\USER\\Documents\\indominux rex operating system\\tools\\boot_logs\\boot_002.log",
       "failed_count": 0
     },
     {
       "boot_id": 3,
-      "timestamp": "2026-07-26T02:23:22.519558",
-      "timeout": 120,
+      "timestamp": "2026-07-26T06:58:10.723776",
+      "timeout": 150,
       "sent_input": true,
-      "shell_banner": true,
+      "shell_banner": false,
       "help_output": false,
       "unknown_cmd": false,
       "kernel_panic": false,
@@ -103,7 +103,7 @@
         "9.9": "PASSED"
       },
       "boot_completed": false,
-      "elapsed_seconds": 138.1,
+      "elapsed_seconds": 168.1,
       "log_file": "C:\\Users\\USER\\Documents\\indominux rex operating system\\tools\\boot_logs\\boot_003.log",
       "failed_count": 0
     }
