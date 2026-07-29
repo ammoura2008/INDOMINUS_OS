@@ -62,6 +62,7 @@ static mut JOBS: [Job; MAX_JOBS] = {
 };
 
 static mut CURRENT_FG: usize = 0; // index into JOBS, 0 = no foreground job
+static mut LAST_EXIT_CODE: i64 = 0; // $?
 
 fn find_free_job_slot() -> Option<usize> {
     unsafe {
@@ -501,6 +502,7 @@ fn is_builtin(cmd: &[u8]) -> bool {
         || bytes_eq(cmd, "touch") || bytes_eq(cmd, "rm") || bytes_eq(cmd, "pid")
         || bytes_eq(cmd, "ps") || bytes_eq(cmd, "true") || bytes_eq(cmd, "false")
         || bytes_eq(cmd, "jobs") || bytes_eq(cmd, "fg") || bytes_eq(cmd, "bg")
+        || bytes_eq(cmd, "status")
 }
 
 fn run_builtin(cmd: &ParsedCmd) -> i64 {
@@ -525,6 +527,7 @@ fn run_builtin(cmd: &ParsedCmd) -> i64 {
         write_str("  jobs              - list background jobs\n");
         write_str("  fg [job]          - bring job to foreground\n");
         write_str("  bg [job]          - resume job in background\n");
+        write_str("  status            - show last exit code ($?)\n");
         0
     }
     else if bytes_eq(name, "exit") {
@@ -667,6 +670,20 @@ fn run_builtin(cmd: &ParsedCmd) -> i64 {
     }
     else if bytes_eq(name, "true") { 0 }
     else if bytes_eq(name, "false") { 1 }
+    else if bytes_eq(name, "status") {
+        unsafe {
+            let code = LAST_EXIT_CODE;
+            if code < 0 {
+                write_str("Signal: ");
+                print_decimal((-code) as u64);
+            } else {
+                write_str("Exit: ");
+                print_decimal(code as u64);
+            }
+            sys::write(1, b"\n");
+        }
+        0
+    }
     else if bytes_eq(name, "jobs") {
         cleanup_done_jobs();
         unsafe {
@@ -898,8 +915,6 @@ fn execute_pipeline(cmds: &[ParsedCmd], cmd_count: usize) -> i64 {
 
                 sys::dup2(pipe_w as u64, 1);
                 sys::close(pipe_w as u64);
-                sys::dup2(pipe_w as u64, 1);
-                sys::close(pipe_w as u64);
             }
 
             // Explicit redirections override pipes
@@ -964,13 +979,28 @@ fn execute_pipeline(cmds: &[ParsedCmd], cmd_count: usize) -> i64 {
     loop {
         let result = sys::waitpid(0, 1);
         if sys::is_error(result) || result == 0 { break; }
-        exit_code = result as i64;
+        // Decode POSIX wait status
+        let status = result as u64;
+        if sys::wifexited(status) {
+            exit_code = sys::wexitstatus(status) as i64;
+        } else if sys::wifsignaled(status) {
+            exit_code = -(sys::wtermsig(status) as i64);
+        } else if sys::wifstopped(status) {
+            exit_code = -(sys::wstopsig(status) as i64);
+        }
     }
     sys::yield_now();
     loop {
         let result = sys::waitpid(0, 1);
         if sys::is_error(result) || result == 0 { break; }
-        exit_code = result as i64;
+        let status = result as u64;
+        if sys::wifexited(status) {
+            exit_code = sys::wexitstatus(status) as i64;
+        } else if sys::wifsignaled(status) {
+            exit_code = -(sys::wtermsig(status) as i64);
+        } else if sys::wifstopped(status) {
+            exit_code = -(sys::wstopsig(status) as i64);
+        }
     }
 
     // Mark job as done
@@ -979,6 +1009,7 @@ fn execute_pipeline(cmds: &[ParsedCmd], cmd_count: usize) -> i64 {
             JOBS[CURRENT_FG].state = JobState::Done;
         }
         CURRENT_FG = 0;
+        LAST_EXIT_CODE = exit_code;
     }
 
     exit_code

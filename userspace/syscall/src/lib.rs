@@ -52,6 +52,42 @@ pub const O_APPEND: u64 = 0x0400;
 /// Close this FD on exec(). POSIX default is inherit (flag clear).
 pub const O_CLOEXEC: u64 = 0x80000;
 
+// ─── Wait status constants ───────────────────────────────────────────────
+
+pub const WNOHANG: u64 = 1;
+pub const WUNTRACED: u64 = 2;
+pub const WCONTINUED: u64 = 8;
+
+/// Check if wait status indicates normal exit
+pub fn wifexited(status: u64) -> bool {
+    (status & 0x7f) == 0
+}
+
+/// Get the exit code from a normal-exit wait status
+pub fn wexitstatus(status: u64) -> u64 {
+    (status >> 8) & 0xff
+}
+
+/// Check if wait status indicates signal death
+pub fn wifsignaled(status: u64) -> bool {
+    ((status & 0x7f) != 0) && ((status & 0x7f) != 0x7f)
+}
+
+/// Get the signal number from a signal-death wait status
+pub fn wtermsig(status: u64) -> u64 {
+    status & 0x7f
+}
+
+/// Check if wait status indicates stopped by signal
+pub fn wifstopped(status: u64) -> bool {
+    (status & 0xff) == 0x7f
+}
+
+/// Get the signal number that stopped the process
+pub fn wstopsig(status: u64) -> u64 {
+    (status >> 8) & 0x7f
+}
+
 /// Error threshold: if result > -4096 (unsigned), it's an error.
 const ERR_THRESHOLD: u64 = (-4096i64) as u64;
 

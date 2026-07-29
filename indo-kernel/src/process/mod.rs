@@ -314,12 +314,14 @@ pub fn send_signal_to_fg(signal: u8) {
                         2 | 3 => {
                             // SIGINT or SIGQUIT: kill the process
                             proc.state = crate::process::process::ProcessState::Zombie;
-                            proc.exit_code = 128 + signal as u64;
+                            proc.exit_code = signal as u64;
+                            proc.terminated_by_signal = true;
                         }
                         20 => {
-                            // SIGTSTP: stop the process
+                            // SIGTSTP: stop the process (for WUNTRACED)
                             proc.state = crate::process::process::ProcessState::Blocked;
                             proc.wake_reason = crate::process::process::WakeReason::None;
+                            proc.stop_signal = signal;
                         }
                         18 => {
                             // SIGCONT: resume stopped processes

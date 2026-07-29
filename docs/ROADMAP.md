@@ -16,9 +16,9 @@
 
 ---
 
-## Current Status (as of Phase 13.4)
+## Current Status (as of Phase 13.5)
 
-**Completed through:** Phase 13.4 (Process Groups / Job Control)
+**Completed through:** Phase 13.5 (Enhanced waitpid / Exit Status)
 
 | Actual Phase | Roadmap Phase | Status | Key Deliverable |
 |-------------|--------------|--------|-----------------|

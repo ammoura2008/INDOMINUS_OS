@@ -109,6 +109,10 @@ pub struct Process {
     /// User-mode initial stack pointer. None for kernel processes.
     pub user_rsp: Option<u64>,
     pub exit_code: u64,
+    /// True if the process was terminated by a signal (not a normal exit).
+    pub terminated_by_signal: bool,
+    /// Signal that stopped this process (for WUNTRACED support).
+    pub stop_signal: u8,
     /// Whether this is a user-mode process.
     pub is_user: bool,
     /// Parent process PID. None for the idle process and kernel tasks spawned at boot.
@@ -182,6 +186,8 @@ impl Process {
             user_rip: None,
             user_rsp: None,
             exit_code: 0,
+            terminated_by_signal: false,
+            stop_signal: 0,
             is_user: false,
             parent_pid: None,
             parent_generation: 0,
@@ -233,6 +239,8 @@ impl Process {
             user_rip: Some(user_rip),
             user_rsp: Some(user_rsp),
             exit_code: 0,
+            terminated_by_signal: false,
+            stop_signal: 0,
             is_user: true,
             parent_pid,
             parent_generation,

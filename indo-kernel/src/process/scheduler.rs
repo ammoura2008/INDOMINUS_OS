@@ -473,6 +473,23 @@ impl Scheduler {
         None
     }
 
+    /// Find a stopped child (for WUNTRACED). Returns (child_pid, stop_signal).
+    pub fn find_any_stopped_child(&self, parent_pid: Pid, parent_gen: u32) -> Option<(Pid, u8)> {
+        for i in 0..MAX_PROCESSES as u64 {
+            if let Some(Some(proc)) = self.processes.get(i as usize) {
+                if proc.parent_pid == Some(parent_pid)
+                    && proc.parent_generation == parent_gen
+                    && proc.state == ProcessState::Blocked
+                    && proc.wake_reason == WakeReason::None
+                    && proc.stop_signal != 0
+                {
+                    return Some((proc.pid, proc.stop_signal));
+                }
+            }
+        }
+        None
+    }
+
     /// Remove a process slot (set to None).
     /// Used after waitpid collects a zombie's exit code.
     pub fn reap_zombie(&mut self, pid: Pid) {
@@ -526,15 +543,17 @@ impl Scheduler {
                             // SIGINT/SIGQUIT: terminate
                             if let Some(ref mut proc) = self.processes[pid as usize] {
                                 proc.state = ProcessState::Zombie;
-                                proc.exit_code = 128 + signum as u64;
+                                proc.exit_code = signum as u64; // signal number in low bits
+                                proc.terminated_by_signal = true;
                                 proc.signals_pending &= !(1 << (signum - 1));
                             }
                         }
                         20 => {
-                            // SIGTSTP: stop
+                            // SIGTSTP: stop (for WUNTRACED)
                             if let Some(ref mut proc) = self.processes[pid as usize] {
                                 proc.state = ProcessState::Blocked;
                                 proc.wake_reason = WakeReason::None;
+                                proc.stop_signal = signum as u8;
                                 proc.signals_pending &= !(1 << (signum - 1));
                             }
                         }
@@ -548,7 +567,8 @@ impl Scheduler {
                             // SIGTERM and others: terminate
                             if let Some(ref mut proc) = self.processes[pid as usize] {
                                 proc.state = ProcessState::Zombie;
-                                proc.exit_code = 128 + signum as u64;
+                                proc.exit_code = signum as u64;
+                                proc.terminated_by_signal = true;
                                 proc.signals_pending &= !(1 << (signum - 1));
                             }
                         }

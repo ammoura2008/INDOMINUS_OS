@@ -67,7 +67,7 @@ libraries work unmodified.
 | 1 | SYS_EXIT | exit_code | never (context switch) |
 | 2 | SYS_YIELD | — | 0 |
 | 3 | SYS_GETPID | — | current PID |
-| 4 | SYS_WAITPID | child_pid, flags | exit_code, 0 (running), or -errno |
+| 4 | SYS_WAITPID | child_pid, flags (WNOHANG=1, WUNTRACED=2) | POSIX wait status, 0 (running), or -errno |
 | 5 | SYS_SLEEP | ticks (10ms) | 0 |
 | 6 | SYS_READ | fd, buf_ptr, count | bytes read or -errno |
 | 7 | SYS_PIPE | — | (read_fd << 32) \| write_fd, or -errno |

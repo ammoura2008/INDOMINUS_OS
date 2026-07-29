@@ -658,7 +658,9 @@ fn sys_exit(exit_code: u64) -> u64 {
             sched.reparent_orphans_to_init(pid);
             if let Some(ref mut proc) = sched.processes_mut()[pid as usize] {
                 proc.state = crate::process::ProcessState::Zombie;
-                proc.exit_code = exit_code;
+                // POSIX wait status: exit code in bits 15-8
+                proc.exit_code = (exit_code & 0xff) << 8;
+                proc.terminated_by_signal = false;
             }
             Some(pid)
         } else {
@@ -709,6 +711,7 @@ fn sys_waitpid(child_pid: u64, flags: u64) -> u64 {
     use crate::process::ProcessState;
 
     const WNOHANG: u64 = 1;
+    const WUNTRACED: u64 = 2;
 
     let mut sched = crate::process::scheduler::SCHEDULER.lock();
     let parent_pid = match sched.current_pid() {
@@ -717,12 +720,21 @@ fn sys_waitpid(child_pid: u64, flags: u64) -> u64 {
     };
     let parent_gen = sched.get_generation(parent_pid);
 
-    // Step 1: Find the target child and its state
-    let (found_pid, is_zombie, exit_code) = if child_pid == 0 {
+    // Step 1: Find zombie children first
+    let (found_pid, exit_code) = if child_pid == 0 {
         // Wait for any child
         match sched.find_any_zombie_child() {
-            Some((c_pid, _, exit)) => (c_pid, true, exit),
+            Some((c_pid, _, exit)) => (c_pid, exit),
             None => {
+                // Check for stopped children if WUNTRACED
+                if flags & WUNTRACED != 0 {
+                    if let Some((c_pid, _)) = sched.find_any_stopped_child(parent_pid, parent_gen) {
+                        let stop_sig = sched.processes()[c_pid as usize].as_ref()
+                            .map(|p| p.stop_signal).unwrap_or(20);
+                        // Encode stopped status: signal in low 7 bits, 0x7f in low byte
+                        return (c_pid as u64) << 16 | ((stop_sig as u64) << 8) | 0x7f;
+                    }
+                }
                 if flags & WNOHANG != 0 {
                     return 0; // WNOHANG: no zombie yet
                 }
@@ -759,13 +771,17 @@ fn sys_waitpid(child_pid: u64, flags: u64) -> u64 {
             Some(Some(proc)) => {
                 let is_z = proc.state == ProcessState::Zombie;
                 let exit = if is_z { proc.exit_code } else { 0 };
-                (child_pid, is_z, exit)
+                (child_pid, exit)
             }
             _ => return errno::ESRCH as u64, // Child slot empty
         }
     };
 
     // Step 2: Act on the child's state
+    let is_zombie = sched.processes()[found_pid as usize]
+        .as_ref()
+        .map_or(false, |p| p.state == ProcessState::Zombie);
+
     if is_zombie {
         // Found a zombie — reap it (free slot)
         sched.reap_zombie(found_pid);
