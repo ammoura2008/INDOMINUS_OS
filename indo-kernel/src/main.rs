@@ -11,6 +11,7 @@ mod idt;
 mod interrupts;
 mod keyboard;
 mod tty;
+mod aslr;
 mod memory;
 mod process;
 mod serial;
@@ -2768,6 +2769,8 @@ pub extern "sysv64" fn kernel_main(boot_info: *const BootInfo) -> ! {
     write_str_nl("[MARK] After harden_identity_map");
 
     write_str_nl("[MARK] Before process init");
+    crate::aslr::init(crate::interrupts::pit::tick_count());
+    write_str_nl("[MARK] ASLR initialized");
     crate::process::init();
     write_str_nl("[MARK] After process init");
 

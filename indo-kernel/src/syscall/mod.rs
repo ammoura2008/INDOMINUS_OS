@@ -1466,8 +1466,8 @@ fn sys_exec(path_ptr: u64) -> u64 {
         }
     };
 
-    // Map a new user stack: 4 pages (16 KiB) + 1 guard page
-    let user_stack_top = crate::memory::USER_STACK_TOP;
+    // Map a new user stack: 4 pages (16 KiB) + 1 guard page (ASLR randomized)
+    let user_stack_top = crate::aslr::randomize_stack_base();
     let user_stack_bottom = user_stack_top - 4 * crate::memory::PAGE_SIZE;
 
     // Map the stack pages
@@ -2110,10 +2110,11 @@ fn sys_brk(new_brk: u64) -> u64 {
     let mut sched = crate::process::scheduler::SCHEDULER.lock();
     if let Some(pid) = sched.current_pid() {
         if let Some(ref mut proc) = sched.processes_mut()[pid as usize] {
-            // Initialize heap_start on first call
+            // Initialize heap_start on first call (ASLR randomized)
             if proc.heap_start == 0 {
-                proc.heap_start = crate::memory::USER_HEAP_BASE;
-                proc.heap_end = crate::memory::USER_HEAP_BASE;
+                let heap_base = crate::aslr::randomize_heap_base();
+                proc.heap_start = heap_base;
+                proc.heap_end = heap_base;
             }
 
             if new_brk == 0 {
@@ -2349,7 +2350,7 @@ fn sys_execve(path_ptr: u64, argc: u64, argv_ptr: u64) -> u64 {
         }
     };
 
-    let user_stack_top = crate::memory::USER_STACK_TOP;
+    let user_stack_top = crate::aslr::randomize_stack_base();
     let user_stack_bottom = user_stack_top - 4 * crate::memory::PAGE_SIZE;
 
     // Map stack pages
@@ -2700,8 +2701,8 @@ fn sys_mmap(addr: u64, length: u64) -> u64 {
             }
 
             // Find the next free virtual address region
-            // Start from USER_MMAP_BASE and scan forward
-            let mut base = crate::memory::USER_MMAP_BASE;
+            // Start from randomized mmap base (ASLR) and scan forward
+            let mut base = crate::aslr::randomize_mmap_base();
             let pml4 = proc.pml4_phys;
             'outer: loop {
                 // Check if this region overlaps with any existing mmap

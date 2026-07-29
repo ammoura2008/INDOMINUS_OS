@@ -81,7 +81,7 @@ pub fn init() {
 /// Creates a per-process PML4, loads ELF segments via the ELF loader,
 /// maps a user stack page, and creates the process.
 pub fn spawn_user(elf_data: &[u8], parent: Option<Pid>) -> Option<Pid> {
-    use crate::memory::{self, vmm, USER_STACK_TOP};
+    use crate::memory::{self, vmm};
     use x86_64::structures::paging::{FrameAllocator, PageTableFlags};
     use x86_64::VirtAddr;
 
@@ -105,17 +105,11 @@ pub fn spawn_user(elf_data: &[u8], parent: Option<Pid>) -> Option<Pid> {
         }
     };
 
-    // 4. Map user stack with guard page below
-    //    Layout (grows downward):
-    //    USER_STACK_TOP                          = stack top (RSP starts here)
-    //    USER_STACK_TOP - PAGE_SIZE              = stack page 4
-    //    USER_STACK_TOP - 2*PAGE_SIZE            = stack page 3
-    //    USER_STACK_TOP - 3*PAGE_SIZE            = stack page 2
-    //    USER_STACK_TOP - 4*PAGE_SIZE            = stack page 1 (bottom)
-    //    USER_STACK_TOP - 5*PAGE_SIZE            = guard page (not user-accessible)
+    // 4. Map user stack with guard page below (ASLR randomized stack top)
+    let stack_top = crate::aslr::randomize_stack_base();
     let guard_page_frame = vmm::PmmFrameAllocator.allocate_frame()
         .expect("PMM: out of memory for user stack guard page");
-    let guard_page_virt = VirtAddr::new(crate::memory::USER_STACK_TOP - 5 * crate::memory::PAGE_SIZE);
+    let guard_page_virt = VirtAddr::new(stack_top - 5 * crate::memory::PAGE_SIZE);
     let guard_flags = PageTableFlags::PRESENT; // No USER_ACCESSIBLE, no WRITABLE
     vmm::map_page(user_pml4, guard_page_virt, memory::PhysAddr::new(guard_page_frame.start_address().as_u64()), guard_flags);
 
@@ -123,8 +117,8 @@ pub fn spawn_user(elf_data: &[u8], parent: Option<Pid>) -> Option<Pid> {
     for i in 0..4 {
         let frame = vmm::PmmFrameAllocator.allocate_frame()
             .expect("PMM: out of memory for user stack page");
-        let offset = (4 - i) * crate::memory::PAGE_SIZE; // pages 4,3,2,1 from top
-        let stack_virt = VirtAddr::new(crate::memory::USER_STACK_TOP - offset);
+        let offset = (4 - i) * crate::memory::PAGE_SIZE;
+        let stack_virt = VirtAddr::new(stack_top - offset);
         let stack_flags = PageTableFlags::PRESENT
             | PageTableFlags::WRITABLE
             | PageTableFlags::USER_ACCESSIBLE
@@ -132,15 +126,15 @@ pub fn spawn_user(elf_data: &[u8], parent: Option<Pid>) -> Option<Pid> {
         vmm::map_page(user_pml4, stack_virt, memory::PhysAddr::new(frame.start_address().as_u64()), stack_flags);
     }
 
-    // User RSP starts at the top of the stack region
-    let user_rsp = USER_STACK_TOP - 8; // ABI: RSP must be 16-byte aligned before CALL
+    // User RSP starts at the top of the stack region (ASLR randomized)
+    let user_rsp = stack_top - 8;
 
     crate::serial::write_str("[PROC] ELF loaded: entry=");
     crate::serial::write_hex(elf_image.entry);
     crate::serial::write_str(", stack_top=");
-    crate::serial::write_hex(USER_STACK_TOP);
+    crate::serial::write_hex(stack_top);
     crate::serial::write_str(", stack_guard=");
-    crate::serial::write_hex(crate::memory::USER_STACK_TOP - 5 * crate::memory::PAGE_SIZE);
+    crate::serial::write_hex(stack_top - 5 * crate::memory::PAGE_SIZE);
     crate::serial::write_str(", pml4=");
     crate::serial::write_hex(user_pml4.as_u64());
     crate::serial::write_nl();

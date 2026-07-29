@@ -16,9 +16,9 @@
 
 ---
 
-## Current Status (as of Phase 13.5)
+## Current Status (as of Phase 13.6)
 
-**Completed through:** Phase 13.5 (Enhanced waitpid / Exit Status)
+**Completed through:** Phase 13.6 (Memory Protection / ASLR)
 
 | Actual Phase | Roadmap Phase | Status | Key Deliverable |
 |-------------|--------------|--------|-----------------|
