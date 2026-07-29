@@ -616,6 +616,8 @@ pub unsafe extern "C" fn syscall_dispatch(regs: *mut u64) -> u64 {
         23 => sys_munmap(arg0, arg1),
         24 => sys_tcgetattr(arg0, arg1),
         25 => sys_tcsetattr(arg0, arg1, arg2),
+        26 => sys_sigaction(arg0, arg1, arg2),
+        27 => sys_kill(arg0, arg1),
         _ => {
             crate::serial::write_str("[SYSCALL] Unknown syscall: ");
             crate::serial::write_u64(syscall_num);
@@ -2839,6 +2841,59 @@ fn sys_tcsetattr(fd: u64, _optional_actions: u64, termios_ptr: u64) -> u64 {
 
     crate::tty::tty_apply_termios(&termios);
     0
+}
+
+/// SYS_SIGACTION (26) — Register a signal handler.
+///
+/// Arguments: signum, handler_ptr (user function addr), old_handler_ptr (out)
+/// Returns: 0 on success, or negative errno.
+fn sys_sigaction(signum: u64, handler_ptr: u64, old_handler_ptr: u64) -> u64 {
+    if signum == 0 || signum > 31 {
+        return errno::EINVAL as u64;
+    }
+
+    let sig_idx = signum as usize - 1;
+
+    let mut sched = crate::process::scheduler::SCHEDULER.lock();
+    let pid = sched.current_pid().unwrap_or(0) as usize;
+    if let Some(Some(ref mut proc)) = sched.processes_mut().get_mut(pid) {
+        // Return old handler if requested
+        if old_handler_ptr != 0 {
+            let old_val = proc.signal_handlers[sig_idx];
+            let dst = old_handler_ptr as *mut u64;
+            if is_valid_user_range(old_handler_ptr, 8) {
+                unsafe { core::ptr::write_volatile(dst, old_val); }
+            }
+        }
+        // Set new handler
+        proc.signal_handlers[sig_idx] = handler_ptr;
+        0
+    } else {
+        errno::ESRCH as u64
+    }
+}
+
+/// SYS_KILL (27) — Send a signal to a process.
+///
+/// Arguments: pid, signum
+/// Returns: 0 on success, or negative errno.
+fn sys_kill(pid: u64, signum: u64) -> u64 {
+    if signum == 0 || signum > 31 {
+        return errno::EINVAL as u64;
+    }
+
+    let target = pid as usize;
+    let mut sched = crate::process::scheduler::SCHEDULER.lock();
+
+    if let Some(Some(ref mut proc)) = sched.processes_mut().get_mut(target) {
+        if proc.state == crate::process::process::ProcessState::Zombie {
+            return errno::ESRCH as u64;
+        }
+        proc.send_signal(signum as u8);
+        0
+    } else {
+        errno::ESRCH as u64
+    }
 }
 
 /// Resolve a relative path against a CWD.

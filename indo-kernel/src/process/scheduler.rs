@@ -161,7 +161,16 @@ impl Scheduler {
                 crate::serial::write_u64(self.current_pid.unwrap_or(99));
                 crate::serial::write_nl();
             }
-            return self.switch_next();
+            let new_sp = self.switch_next();
+
+            // Deliver pending signals to the next process before returning
+            if let Some(next_pid) = self.current_pid {
+                if next_pid != 0 { // Skip idle
+                    self.deliver_signal(next_pid);
+                }
+            }
+
+            return new_sp;
         }
         self.current_stack_pointer()
     }
@@ -240,7 +249,7 @@ impl Scheduler {
 
     /// Force-switch: always picks the next Ready process, ignoring quantum.
     /// Used by sys_exit/sys_yield where the current process must yield now.
-    pub(crate) fn switch_next_force(&mut self) -> u64 {
+    pub fn switch_next_force(&mut self) -> u64 {
         let old_pid = self.current_pid;
 
         // Mark old process: if Running → Ready, if Zombie → stay Zombie
@@ -266,10 +275,17 @@ impl Scheduler {
 
         self.current_pid = Some(new_pid);
 
-        self.processes[new_pid as usize]
+        let sp = self.processes[new_pid as usize]
             .as_ref()
             .map(|p| p.stack_pointer)
-            .unwrap_or(0)
+            .unwrap_or(0);
+
+        // Deliver pending signals to the next process
+        if new_pid != 0 {
+            self.deliver_signal(new_pid);
+        }
+
+        sp
     }
 
     pub fn dump_table(&self) {
@@ -478,6 +494,118 @@ impl Scheduler {
                     crate::serial::write_u64(i);
                     crate::serial::write_str(" to init (PID 1)");
                     crate::serial::write_nl();
+                }
+            }
+        }
+    }
+
+    /// Check for pending signals on a process and deliver them.
+    /// For default actions (handler == 0): kill/stop/cont based on signal number.
+    /// For user handlers: modify IRET frame RIP to redirect to signal trampoline.
+    /// For ignore (handler == 1): clear pending bit.
+    pub fn deliver_signal(&mut self, pid: Pid) {
+        let sig_opt = {
+            if let Some(ref proc) = self.processes[pid as usize] {
+                if !proc.is_user { return; }
+                proc.has_pending_signal()
+            } else {
+                return;
+            }
+        };
+
+        if let Some(signum) = sig_opt {
+            let handler = self.processes[pid as usize].as_ref().unwrap().signal_handler(signum);
+
+            match handler {
+                0 => {
+                    // Default action
+                    match signum {
+                        2 | 3 => {
+                            // SIGINT/SIGQUIT: terminate
+                            if let Some(ref mut proc) = self.processes[pid as usize] {
+                                proc.state = ProcessState::Zombie;
+                                proc.exit_code = 128 + signum as u64;
+                                proc.signals_pending &= !(1 << (signum - 1));
+                            }
+                        }
+                        20 => {
+                            // SIGTSTP: stop
+                            if let Some(ref mut proc) = self.processes[pid as usize] {
+                                proc.state = ProcessState::Blocked;
+                                proc.wake_reason = WakeReason::None;
+                                proc.signals_pending &= !(1 << (signum - 1));
+                            }
+                        }
+                        18 | 19 => {
+                            // SIGCONT/SIGSTOP: ignore (no-op for now)
+                            if let Some(ref mut proc) = self.processes[pid as usize] {
+                                proc.signals_pending &= !(1 << (signum - 1));
+                            }
+                        }
+                        _ => {
+                            // SIGTERM and others: terminate
+                            if let Some(ref mut proc) = self.processes[pid as usize] {
+                                proc.state = ProcessState::Zombie;
+                                proc.exit_code = 128 + signum as u64;
+                                proc.signals_pending &= !(1 << (signum - 1));
+                            }
+                        }
+                    }
+                    // Wake parent if waiting for this child
+                    if let Some(ref proc) = self.processes[pid as usize] {
+                        if let Some(parent) = proc.parent_pid {
+                            let parent_gen = proc.parent_generation;
+                            if let Some(ref mut pproc) = self.processes[parent as usize] {
+                                if pproc.generation == parent_gen {
+                                    if let WakeReason::WaitForChild { child_pid } = pproc.wake_reason {
+                                        if child_pid == pid as u64 {
+                                            pproc.state = ProcessState::Ready;
+                                            pproc.wake_reason = WakeReason::None;
+                                        }
+                                    }
+                                }
+                            }
+                        }
+                    }
+                }
+                1 => {
+                    // Ignore: just clear the pending bit
+                    if let Some(ref mut proc) = self.processes[pid as usize] {
+                        proc.signals_pending &= !(1 << (signum - 1));
+                    }
+                }
+                handler_addr => {
+                    // User handler: redirect IRET frame to call the handler.
+                    // Push orig_rip on user stack as return address for the handler.
+                    // When handler calls ret, it returns to orig_rip.
+                    // Signal number goes in RDI (x86-64 calling convention).
+                    if let Some(ref mut proc) = self.processes[pid as usize] {
+                        let sp = proc.stack_pointer;
+                        if sp == 0 { return; }
+
+                        unsafe {
+                            // IRET frame is at sp + 15*8 (after 15 GP register pops)
+                            let iret_base = sp + 15 * 8;
+                            let orig_rip = core::ptr::read_volatile(iret_base as *const u64);
+                            let mut orig_rsp_val = core::ptr::read_volatile((iret_base + 24) as *const u64);
+
+                            // Decrement user RSP by 8 and write orig_rip there (return address)
+                            orig_rsp_val = orig_rsp_val.wrapping_sub(8);
+                            core::ptr::write_volatile(orig_rsp_val as *mut u64, orig_rip);
+
+                            // Update IRET frame: set RIP = handler, RSP = modified
+                            core::ptr::write_volatile(iret_base as *mut u64, handler_addr);
+                            core::ptr::write_volatile((iret_base + 24) as *mut u64, orig_rsp_val);
+
+                            // Signal number in RDI (will be restored by 15 GP pops)
+                            // RDI is pop slot index 5 (0-indexed: rax,rbx,rcx,rdx,rsi,rdi,...)
+                            let rdi_slot = sp + 5 * 8;
+                            core::ptr::write_volatile(rdi_slot as *mut u64, signum as u64);
+                        }
+
+                        // Clear pending bit
+                        proc.signals_pending &= !(1 << (signum - 1));
+                    }
                 }
             }
         }

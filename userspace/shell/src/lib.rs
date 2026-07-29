@@ -740,6 +740,12 @@ pub extern "C" fn shell_main(_argc: u64, _argv: u64) -> ! {
     write_str("Indominus OS Shell v1.0\n");
     write_str("Type 'help' for commands, 'exit' to quit.\n\n");
 
+    // Trap SIGINT: set handler to ignore (1) so the shell itself is not killed.
+    // Child processes inherit the handler but will be killed via send_signal_to_fg.
+    sys::sigaction(2, 1, 0); // SIGINT -> ignore
+    sys::sigaction(3, 1, 0); // SIGQUIT -> ignore
+    sys::sigaction(20, 0, 0); // SIGTSTP -> default (kill)
+
     let mut input = [0u8; MAX_INPUT];
     let mut tokens = [Token { start: 0, end: 0, kind: TokenKind::Word }; MAX_TOKENS];
     let mut cmds = [ParsedCmd::new(); MAX_CMDS];

@@ -16,9 +16,9 @@
 
 ---
 
-## Current Status (as of Phase 13.2)
+## Current Status (as of Phase 13.3)
 
-**Completed through:** Phase 13.2 (TTY Layer & Terminal Discipline)
+**Completed through:** Phase 13.3 (Signal Infrastructure)
 
 | Actual Phase | Roadmap Phase | Status | Key Deliverable |
 |-------------|--------------|--------|-----------------|

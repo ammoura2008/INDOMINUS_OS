@@ -37,6 +37,8 @@ pub const SYS_MMAP: u64 = 22;
 pub const SYS_MUNMAP: u64 = 23;
 pub const SYS_TCGETATTR: u64 = 24;
 pub const SYS_TCSETATTR: u64 = 25;
+pub const SYS_SIGACTION: u64 = 26;
+pub const SYS_KILL: u64 = 27;
 
 /// Open flags (POSIX-compatible).
 pub const O_RDONLY: u64 = 0x0000;
@@ -263,6 +265,20 @@ pub fn cfmakeraw(termios: &mut Termios) {
 pub const ICANON: u32 = 0x01;
 pub const ECHO: u32 = 0x02;
 pub const ISIG: u32 = 0x04;
+
+// ─── Signals ─────────────────────────────────────────────────────────────
+
+/// Register a signal handler. Returns 0 or negative errno.
+/// handler: user function address, or 0 (default), 1 (ignore).
+/// old_handler: if non-null, writes the previous handler value.
+pub fn sigaction(signum: u64, handler: u64, old_handler: u64) -> i64 {
+    unsafe { syscall3(SYS_SIGACTION, signum, handler, old_handler) }
+}
+
+/// Send a signal to a process. Returns 0 or negative errno.
+pub fn kill(pid: u64, signum: u64) -> i64 {
+    unsafe { syscall2(SYS_KILL, pid, signum) }
+}
 
 // ─── Pipes ────────────────────────────────────────────────────────────────
 

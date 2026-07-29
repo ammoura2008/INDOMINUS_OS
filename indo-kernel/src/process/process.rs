@@ -142,6 +142,12 @@ pub struct Process {
     pub mmap_regions: [(u64, u64); MAX_MMAP_REGIONS],
     /// Number of active mmap regions.
     pub mmap_count: u8,
+    /// Pending signals (bitfield, bit N = signal N+1 pending)
+    pub signals_pending: u32,
+    /// Blocked signals (bitfield, bit N = signal N+1 blocked)
+    pub signals_blocked: u32,
+    /// Signal handlers: handler_addr[signum] = user function address, 0=default, 1=ignore
+    pub signal_handlers: [u64; 32],
 }
 
 /// Maximum number of mmap regions per process.
@@ -190,6 +196,9 @@ impl Process {
             },
             mmap_regions: [(0, 0); MAX_MMAP_REGIONS],
             mmap_count: 0,
+            signals_pending: 0,
+            signals_blocked: 0,
+            signal_handlers: [0; 32],
         })
     }
 
@@ -237,6 +246,9 @@ impl Process {
             },
             mmap_regions: [(0, 0); MAX_MMAP_REGIONS],
             mmap_count: 0,
+            signals_pending: 0,
+            signals_blocked: 0,
+            signal_handlers: [0; 32],
         })
     }
 
@@ -252,6 +264,38 @@ impl Process {
         let copy_len = core::cmp::min(bytes.len(), 255);
         self.cwd = [0u8; 256];
         self.cwd[..copy_len].copy_from_slice(&bytes[..copy_len]);
+    }
+
+    /// Send a signal to this process. Sets the pending bit.
+    pub fn send_signal(&mut self, signum: u8) {
+        if signum == 0 || signum > 31 { return; }
+        self.signals_pending |= 1 << (signum - 1);
+    }
+
+    /// Check if a signal is pending and not blocked.
+    pub fn has_pending_signal(&self) -> Option<u8> {
+        let pending = self.signals_pending & !self.signals_blocked;
+        if pending == 0 { return None; }
+        // Return lowest-numbered signal
+        for i in 0..32 {
+            if pending & (1 << i) != 0 {
+                return Some(i + 1);
+            }
+        }
+        None
+    }
+
+    /// Get the handler address for a signal.
+    /// Returns: user function address, 0 = default action, 1 = ignore
+    pub fn signal_handler(&self, signum: u8) -> u64 {
+        if signum == 0 || signum > 31 { return 0; }
+        self.signal_handlers[signum as usize - 1]
+    }
+
+    /// Clear a pending signal after delivery.
+    pub fn clear_pending_signal(&mut self, signum: u8) {
+        if signum == 0 || signum > 31 { return; }
+        self.signals_pending &= !(1 << (signum - 1));
     }
 }
 

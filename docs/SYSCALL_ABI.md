@@ -89,6 +89,8 @@ libraries work unmodified.
 | 23 | SYS_MUNMAP | addr, length | 0 or -errno |
 | 24 | SYS_TCGETATTR | fd, termios_ptr | 0 or -errno |
 | 25 | SYS_TCSETATTR | fd, optional_actions, termios_ptr | 0 or -errno |
+| 26 | SYS_SIGACTION | signum, handler_ptr, old_handler_ptr | 0 or -errno |
+| 27 | SYS_KILL | pid, signum | 0 or -errno |
 
 ## Error Codes
 
