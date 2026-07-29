@@ -459,4 +459,4 @@ This is a personal learning project. Contributions are welcome but please open a
 
 ## License
 
-This project is currently not licensed. All rights reserved by the author.
+This project is currently not licensed. All rights reserved by the author. made with the hope that Aya would notice me, and to keep me from thinking...
