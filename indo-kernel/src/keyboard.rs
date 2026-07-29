@@ -101,6 +101,24 @@ pub fn has_data() -> bool {
 /// - Enter (0x0A): commit line (advance w to e), wake blocked readers
 /// - Other: ignore
 pub fn line_discipline_input(byte: u8) {
+    // Check for signal characters first (Ctrl+C, Ctrl+Z, Ctrl+\)
+    let sig = crate::tty::check_signal_char(byte);
+    if sig != 0 {
+        // Echo ^C, ^Z, or ^\ to show the signal
+        crate::serial::write_byte(b'^');
+        crate::serial::write_byte(match sig {
+            2 => b'C',
+            3 => b'\\',
+            20 => b'Z',
+            _ => b'?',
+        });
+        crate::serial::write_byte(b'\n');
+
+        // Send signal to foreground process group
+        crate::process::send_signal_to_fg(sig);
+        return;
+    }
+
     match byte {
         b'\n' => {
             // Enter — commit the line
@@ -111,28 +129,44 @@ pub fn line_discipline_input(byte: u8) {
             // Wake blocked readers
             crate::process::keyboard_wake();
         }
-        0x08 => {
-            // Backspace — remove last character if available
+        0x08 | 0x7F => {
+            // Backspace (0x08) or DEL (0x7F) — remove last character if available
             let r = LINE_R.load(Ordering::Relaxed);
             let e = LINE_E.load(Ordering::Relaxed);
-            if e > r {
+            if e > r && crate::tty::is_canonical() {
                 // Decrement edit index
                 LINE_E.store(e - 1, Ordering::Relaxed);
                 // Echo backspace sequence: move cursor back, overwrite with space, move back again
                 crate::serial::write_byte(0x08);
                 crate::serial::write_byte(b' ');
                 crate::serial::write_byte(0x08);
+            } else if !crate::tty::is_canonical() {
+                // In raw mode, deliver the backspace character like any other byte
+                let e = LINE_E.load(Ordering::Relaxed);
+                if e < LINE_BUF_SIZE {
+                    unsafe { core::ptr::write_volatile((*LINE_BUF.get()).as_mut_ptr().add(e), byte); }
+                    LINE_E.store(e + 1, Ordering::Relaxed);
+                    if crate::tty::is_echo() {
+                        crate::serial::write_byte(byte);
+                    }
+                }
             }
         }
         _ => {
             // Printable character — append to edit buffer if space available
             let e = LINE_E.load(Ordering::Relaxed);
-            // Only append if there's space (leave room for at least one more line)
             if e < LINE_BUF_SIZE {
                 unsafe { core::ptr::write_volatile((*LINE_BUF.get()).as_mut_ptr().add(e), byte); }
                 LINE_E.store(e + 1, Ordering::Relaxed);
-                // Echo the character to serial
-                crate::serial::write_byte(byte);
+                // Echo the character if echo is enabled
+                if crate::tty::is_echo() {
+                    crate::serial::write_byte(byte);
+                }
+                // In raw mode, commit each character immediately (no line buffering)
+                if !crate::tty::is_canonical() {
+                    LINE_W.store(LINE_E.load(Ordering::Relaxed), Ordering::Relaxed);
+                    crate::process::keyboard_wake();
+                }
             }
         }
     }

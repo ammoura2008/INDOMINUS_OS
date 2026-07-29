@@ -268,3 +268,36 @@ pub fn keyboard_wake() {
 pub fn yield_now() {
     unsafe { crate::syscall::set_force_switch(); }
 }
+
+/// Send a signal to all processes in the foreground process group.
+///
+/// For now, all user processes are in the same "foreground group" (group 0).
+/// SIGINT (2) and SIGQUIT (3) kill the process. SIGTSTP (20) stops it.
+pub fn send_signal_to_fg(signal: u8) {
+    use core::sync::atomic::Ordering;
+
+    let mut sched = SCHEDULER.lock();
+    for i in 1..crate::process::process::MAX_PROCESSES {
+        if let Some(ref mut proc) = sched.processes_mut()[i] {
+            if proc.is_user && proc.state != crate::process::process::ProcessState::Zombie {
+                match signal {
+                    2 | 3 => {
+                        // SIGINT or SIGQUIT: kill the process
+                        proc.state = crate::process::process::ProcessState::Zombie;
+                        proc.exit_code = 128 + signal as u64;
+                        // If parent is waiting, wake it
+                        drop(sched);
+                        crate::process::keyboard_wake();
+                        return;
+                    }
+                    20 => {
+                        // SIGTSTP: stop the process (set to blocked with no wake reason)
+                        proc.state = crate::process::process::ProcessState::Blocked;
+                        proc.wake_reason = crate::process::process::WakeReason::None;
+                    }
+                    _ => {}
+                }
+            }
+        }
+    }
+}

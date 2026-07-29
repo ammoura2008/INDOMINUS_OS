@@ -10,6 +10,7 @@ mod gdt;
 mod idt;
 mod interrupts;
 mod keyboard;
+mod tty;
 mod memory;
 mod process;
 mod serial;

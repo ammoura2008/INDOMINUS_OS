@@ -87,6 +87,8 @@ libraries work unmodified.
 | 21 | SYS_MKDIR | path_ptr | 0 or -errno |
 | 22 | SYS_MMAP | addr, length | mapped address or -errno |
 | 23 | SYS_MUNMAP | addr, length | 0 or -errno |
+| 24 | SYS_TCGETATTR | fd, termios_ptr | 0 or -errno |
+| 25 | SYS_TCSETATTR | fd, optional_actions, termios_ptr | 0 or -errno |
 
 ## Error Codes
 

@@ -614,6 +614,8 @@ pub unsafe extern "C" fn syscall_dispatch(regs: *mut u64) -> u64 {
         21 => sys_mkdir(arg0),
         22 => sys_mmap(arg0, arg1),
         23 => sys_munmap(arg0, arg1),
+        24 => sys_tcgetattr(arg0, arg1),
+        25 => sys_tcsetattr(arg0, arg1, arg2),
         _ => {
             crate::serial::write_str("[SYSCALL] Unknown syscall: ");
             crate::serial::write_u64(syscall_num);
@@ -2798,6 +2800,45 @@ fn sys_munmap(addr: u64, length: u64) -> u64 {
     } else {
         errno::ESRCH as u64
     }
+}
+
+/// SYS_TCGETATTR (24) — Get terminal attributes.
+///
+/// Arguments: fd, termios_ptr
+/// Returns: 0 on success, or negative errno.
+fn sys_tcgetattr(fd: u64, termios_ptr: u64) -> u64 {
+    if fd > 2 || termios_ptr == 0 {
+        return errno::EINVAL as u64;
+    }
+
+    let termios = crate::tty::Termios::default_cooked();
+
+    // Write termios to user buffer
+    let dst = termios_ptr as *mut crate::tty::Termios;
+    if !is_valid_user_range(termios_ptr, core::mem::size_of::<crate::tty::Termios>() as u64) {
+        return errno::EFAULT as u64;
+    }
+    unsafe { core::ptr::write_volatile(dst, termios); }
+    0
+}
+
+/// SYS_TCSETATTR (25) — Set terminal attributes.
+///
+/// Arguments: fd, optional_actions, termios_ptr
+/// Returns: 0 on success, or negative errno.
+fn sys_tcsetattr(fd: u64, _optional_actions: u64, termios_ptr: u64) -> u64 {
+    if fd > 2 || termios_ptr == 0 {
+        return errno::EINVAL as u64;
+    }
+
+    let src = termios_ptr as *const crate::tty::Termios;
+    if !is_valid_user_range(termios_ptr, core::mem::size_of::<crate::tty::Termios>() as u64) {
+        return errno::EFAULT as u64;
+    }
+    let termios = unsafe { core::ptr::read_volatile(src) };
+
+    crate::tty::tty_apply_termios(&termios);
+    0
 }
 
 /// Resolve a relative path against a CWD.

@@ -16,9 +16,9 @@
 
 ---
 
-## Current Status (as of Phase 13.1)
+## Current Status (as of Phase 13.2)
 
-**Completed through:** Phase 13.1 (brk/mmap/munmap)
+**Completed through:** Phase 13.2 (TTY Layer & Terminal Discipline)
 
 | Actual Phase | Roadmap Phase | Status | Key Deliverable |
 |-------------|--------------|--------|-----------------|

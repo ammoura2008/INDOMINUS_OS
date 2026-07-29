@@ -35,6 +35,8 @@ pub const SYS_GETCWD: u64 = 20;
 pub const SYS_MKDIR: u64 = 21;
 pub const SYS_MMAP: u64 = 22;
 pub const SYS_MUNMAP: u64 = 23;
+pub const SYS_TCGETATTR: u64 = 24;
+pub const SYS_TCSETATTR: u64 = 25;
 
 /// Open flags (POSIX-compatible).
 pub const O_RDONLY: u64 = 0x0000;
@@ -227,7 +229,42 @@ pub fn munmap(addr: u64, length: u64) -> i64 {
     unsafe { syscall2(SYS_MUNMAP, addr, length) }
 }
 
-// ─── Pipes ──────────────────────────────────────────────────────────────────
+// ─── Terminal ────────────────────────────────────────────────────────────
+
+/// Termios structure matching the kernel layout
+#[repr(C)]
+#[derive(Clone, Copy)]
+pub struct Termios {
+    pub iflag: u32,
+    pub oflag: u32,
+    pub cflag: u32,
+    pub lflag: u32,
+    pub cc: [u8; 32],
+}
+
+/// Get terminal attributes. Returns 0 or negative errno.
+pub fn tcgetattr(fd: u64, termios: &mut Termios) -> i64 {
+    unsafe { syscall2(SYS_TCGETATTR, fd, termios as *mut Termios as u64) }
+}
+
+/// Set terminal attributes. Returns 0 or negative errno.
+pub fn tcsetattr(fd: u64, optional_actions: u64, termios: &Termios) -> i64 {
+    unsafe { syscall3(SYS_TCSETATTR, fd, optional_actions, termios as *const Termios as u64) }
+}
+
+/// Switch to raw mode (no canonical, no echo, no signals)
+pub fn cfmakeraw(termios: &mut Termios) {
+    termios.lflag = 0;
+    termios.iflag = 0;
+    termios.oflag = 0;
+}
+
+/// Local flag constants
+pub const ICANON: u32 = 0x01;
+pub const ECHO: u32 = 0x02;
+pub const ISIG: u32 = 0x04;
+
+// ─── Pipes ────────────────────────────────────────────────────────────────
 
 /// Create a pipe pair.
 /// Returns (read_fd << 32) | write_fd, or negative errno on error.
