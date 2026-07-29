@@ -618,6 +618,8 @@ pub unsafe extern "C" fn syscall_dispatch(regs: *mut u64) -> u64 {
         25 => sys_tcsetattr(arg0, arg1, arg2),
         26 => sys_sigaction(arg0, arg1, arg2),
         27 => sys_kill(arg0, arg1),
+        28 => sys_setpgid(arg0, arg1),
+        29 => sys_getpgid(arg0),
         _ => {
             crate::serial::write_str("[SYSCALL] Unknown syscall: ");
             crate::serial::write_u64(syscall_num);
@@ -1257,6 +1259,8 @@ fn sys_fork() -> u64 {
                     child.fd_types = parent_proc.fd_types;
                     child.file_handles = parent_proc.file_handles.clone();
                     child.parent_generation = parent_proc.generation;
+                    // Inherit process group from parent
+                    child.pgid = parent_proc.pgid;
 
                     // CRITICAL: Increment pipe refcounts for inherited pipe FDs.
                     // Without this, when the child closes its pipe FDs, the refcount
@@ -2891,6 +2895,52 @@ fn sys_kill(pid: u64, signum: u64) -> u64 {
         }
         proc.send_signal(signum as u8);
         0
+    } else {
+        errno::ESRCH as u64
+    }
+}
+
+/// SYS_SETPGID (28) — Set the process group ID of a process.
+///
+/// Arguments: pid, pgid
+/// If pid == 0, use current process. If pgid == 0, create new group (PGID = PID).
+/// Returns: 0 on success, or negative errno.
+fn sys_setpgid(pid: u64, pgid: u64) -> u64 {
+    let mut sched = crate::process::scheduler::SCHEDULER.lock();
+    let target_pid = if pid == 0 {
+        sched.current_pid().unwrap_or(0)
+    } else {
+        pid
+    };
+
+    let new_pgid = if pgid == 0 {
+        target_pid
+    } else {
+        pgid
+    };
+
+    if let Some(Some(ref mut proc)) = sched.processes_mut().get_mut(target_pid as usize) {
+        proc.pgid = new_pgid;
+        0
+    } else {
+        errno::ESRCH as u64
+    }
+}
+
+/// SYS_GETPGID (29) — Get the process group ID of a process.
+///
+/// Arguments: pid (0 = current process)
+/// Returns: PGID, or negative errno.
+fn sys_getpgid(pid: u64) -> u64 {
+    let sched = crate::process::scheduler::SCHEDULER.lock();
+    let target = if pid == 0 {
+        sched.current_pid().unwrap_or(0)
+    } else {
+        pid
+    };
+
+    if let Some(Some(ref proc)) = sched.processes().get(target as usize) {
+        proc.pgid
     } else {
         errno::ESRCH as u64
     }

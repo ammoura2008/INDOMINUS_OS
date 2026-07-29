@@ -91,6 +91,8 @@ libraries work unmodified.
 | 25 | SYS_TCSETATTR | fd, optional_actions, termios_ptr | 0 or -errno |
 | 26 | SYS_SIGACTION | signum, handler_ptr, old_handler_ptr | 0 or -errno |
 | 27 | SYS_KILL | pid, signum | 0 or -errno |
+| 28 | SYS_SETPGID | pid, pgid | 0 or -errno |
+| 29 | SYS_GETPGID | pid | PGID or -errno |
 
 ## Error Codes
 

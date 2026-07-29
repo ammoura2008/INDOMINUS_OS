@@ -271,33 +271,71 @@ pub fn yield_now() {
 
 /// Send a signal to all processes in the foreground process group.
 ///
-/// For now, all user processes are in the same "foreground group" (group 0).
+/// Finds the running user process with the lowest PID (the foreground process)
+/// and sends the signal to all processes sharing its PGID.
 /// SIGINT (2) and SIGQUIT (3) kill the process. SIGTSTP (20) stops it.
 pub fn send_signal_to_fg(signal: u8) {
     use core::sync::atomic::Ordering;
 
     let mut sched = SCHEDULER.lock();
-    for i in 1..crate::process::process::MAX_PROCESSES {
-        if let Some(ref mut proc) = sched.processes_mut()[i] {
-            if proc.is_user && proc.state != crate::process::process::ProcessState::Zombie {
-                match signal {
-                    2 | 3 => {
-                        // SIGINT or SIGQUIT: kill the process
-                        proc.state = crate::process::process::ProcessState::Zombie;
-                        proc.exit_code = 128 + signal as u64;
-                        // If parent is waiting, wake it
-                        drop(sched);
-                        crate::process::keyboard_wake();
-                        return;
+
+    // Find the foreground PGID: the PGID of the lowest-PID running user process
+    let fg_pgid = {
+        let mut found_pgid = None;
+        for i in 1..crate::process::process::MAX_PROCESSES {
+            if let Some(ref proc) = sched.processes()[i] {
+                if proc.is_user && proc.state == crate::process::process::ProcessState::Running {
+                    found_pgid = Some(proc.pgid);
+                    break;
+                }
+            }
+        }
+        // If no running process, find the lowest-PID ready user process
+        if found_pgid.is_none() {
+            for i in 1..crate::process::process::MAX_PROCESSES {
+                if let Some(ref proc) = sched.processes()[i] {
+                    if proc.is_user && proc.state == crate::process::process::ProcessState::Ready {
+                        found_pgid = Some(proc.pgid);
+                        break;
                     }
-                    20 => {
-                        // SIGTSTP: stop the process (set to blocked with no wake reason)
-                        proc.state = crate::process::process::ProcessState::Blocked;
-                        proc.wake_reason = crate::process::process::WakeReason::None;
+                }
+            }
+        }
+        found_pgid
+    };
+
+    if let Some(fg_pgid) = fg_pgid {
+        for i in 1..crate::process::process::MAX_PROCESSES {
+            if let Some(ref mut proc) = sched.processes_mut()[i] {
+                if proc.is_user && proc.pgid == fg_pgid
+                    && proc.state != crate::process::process::ProcessState::Zombie
+                {
+                    match signal {
+                        2 | 3 => {
+                            // SIGINT or SIGQUIT: kill the process
+                            proc.state = crate::process::process::ProcessState::Zombie;
+                            proc.exit_code = 128 + signal as u64;
+                        }
+                        20 => {
+                            // SIGTSTP: stop the process
+                            proc.state = crate::process::process::ProcessState::Blocked;
+                            proc.wake_reason = crate::process::process::WakeReason::None;
+                        }
+                        18 => {
+                            // SIGCONT: resume stopped processes
+                            if proc.state == crate::process::process::ProcessState::Blocked
+                                && proc.wake_reason == crate::process::process::WakeReason::None
+                            {
+                                proc.state = crate::process::process::ProcessState::Ready;
+                            }
+                        }
+                        _ => {}
                     }
-                    _ => {}
                 }
             }
         }
     }
+
+    drop(sched);
+    crate::process::keyboard_wake();
 }

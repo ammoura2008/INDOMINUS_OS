@@ -17,6 +17,86 @@ const MAX_CMDS: usize = 8;
 // Shell state
 // ═══════════════════════════════════════════════════════════════════════════════
 
+const MAX_JOBS: usize = 16;
+const MAX_CMD_NAME: usize = 32;
+
+#[derive(Clone, Copy, PartialEq, Eq)]
+enum JobState {
+    Running,
+    Stopped,
+    Done,
+}
+
+#[derive(Clone, Copy)]
+struct Job {
+    pgid: u64,
+    state: JobState,
+    cmd_name: [u8; MAX_CMD_NAME],
+}
+
+impl Job {
+    const fn new() -> Self {
+        Job {
+            pgid: 0,
+            state: JobState::Done,
+            cmd_name: [0u8; MAX_CMD_NAME],
+        }
+    }
+
+    fn set_name(&mut self, name: &str) {
+        self.cmd_name = [0u8; MAX_CMD_NAME];
+        let bytes = name.as_bytes();
+        let len = core::cmp::min(bytes.len(), MAX_CMD_NAME - 1);
+        self.cmd_name[..len].copy_from_slice(&bytes[..len]);
+    }
+
+    fn name_str(&self) -> &str {
+        let len = self.cmd_name.iter().position(|&b| b == 0).unwrap_or(MAX_CMD_NAME);
+        core::str::from_utf8(&self.cmd_name[..len]).unwrap_or("")
+    }
+}
+
+static mut JOBS: [Job; MAX_JOBS] = {
+    const INIT: Job = Job::new();
+    [INIT; MAX_JOBS]
+};
+
+static mut CURRENT_FG: usize = 0; // index into JOBS, 0 = no foreground job
+
+fn find_free_job_slot() -> Option<usize> {
+    unsafe {
+        for i in 0..MAX_JOBS {
+            if JOBS[i].state == JobState::Done {
+                return Some(i);
+            }
+        }
+    }
+    None
+}
+
+fn add_job(pgid: u64, name: &str) -> Option<usize> {
+    unsafe {
+        if let Some(slot) = find_free_job_slot() {
+            JOBS[slot].pgid = pgid;
+            JOBS[slot].state = JobState::Running;
+            JOBS[slot].set_name(name);
+            Some(slot)
+        } else {
+            None
+        }
+    }
+}
+
+fn cleanup_done_jobs() {
+    unsafe {
+        for i in 0..MAX_JOBS {
+            if JOBS[i].state == JobState::Done {
+                JOBS[i].pgid = 0;
+            }
+        }
+    }
+}
+
 static mut CWD: [u8; MAX_CWD] = {
     let mut arr = [0u8; MAX_CWD];
     arr[0] = b'/';
@@ -255,6 +335,34 @@ fn write_str(s: &str) {
     sys::write(1, s.as_bytes());
 }
 
+fn write_str_num(n: u64) {
+    if n == 0 {
+        sys::write(1, b"0");
+        return;
+    }
+    let mut buf = [0u8; 20];
+    let mut i = buf.len();
+    let mut val = n;
+    while val > 0 {
+        i -= 1;
+        buf[i] = b'0' + (val % 10) as u8;
+        val /= 10;
+    }
+    sys::write(1, &buf[i..]);
+}
+
+fn parse_decimal(bytes: &[u8]) -> u64 {
+    let mut n: u64 = 0;
+    for &b in bytes {
+        if b >= b'0' && b <= b'9' {
+            n = n * 10 + (b - b'0') as u64;
+        } else {
+            break;
+        }
+    }
+    n
+}
+
 fn write_err(cmd: &str, msg: &str) {
     sys::write(2, b"indosh: ");
     sys::write(2, cmd.as_bytes());
@@ -392,6 +500,7 @@ fn is_builtin(cmd: &[u8]) -> bool {
         || bytes_eq(cmd, "cat") || bytes_eq(cmd, "ls") || bytes_eq(cmd, "mkdir")
         || bytes_eq(cmd, "touch") || bytes_eq(cmd, "rm") || bytes_eq(cmd, "pid")
         || bytes_eq(cmd, "ps") || bytes_eq(cmd, "true") || bytes_eq(cmd, "false")
+        || bytes_eq(cmd, "jobs") || bytes_eq(cmd, "fg") || bytes_eq(cmd, "bg")
 }
 
 fn run_builtin(cmd: &ParsedCmd) -> i64 {
@@ -413,6 +522,9 @@ fn run_builtin(cmd: &ParsedCmd) -> i64 {
         write_str("  pid               - show current PID\n");
         write_str("  exec <file> [args]- execute program\n");
         write_str("  true / false      - exit status\n");
+        write_str("  jobs              - list background jobs\n");
+        write_str("  fg [job]          - bring job to foreground\n");
+        write_str("  bg [job]          - resume job in background\n");
         0
     }
     else if bytes_eq(name, "exit") {
@@ -555,6 +667,120 @@ fn run_builtin(cmd: &ParsedCmd) -> i64 {
     }
     else if bytes_eq(name, "true") { 0 }
     else if bytes_eq(name, "false") { 1 }
+    else if bytes_eq(name, "jobs") {
+        cleanup_done_jobs();
+        unsafe {
+            let mut found = false;
+            for i in 0..MAX_JOBS {
+                if JOBS[i].state != JobState::Done {
+                    found = true;
+                    let prefix = if i == CURRENT_FG { "+" } else { "-" };
+                    sys::write(1, b"[");
+                    write_str_num(i as u64 + 1);
+                    sys::write(1, b"] ");
+                    sys::write(1, b"  ");
+                    sys::write(1, prefix.as_bytes());
+                    sys::write(1, b"  ");
+                    let state_str = match JOBS[i].state {
+                        JobState::Running => "Running",
+                        JobState::Stopped => "Stopped",
+                        JobState::Done => "Done",
+                    };
+                    write_str(state_str);
+                    sys::write(1, b"  ");
+                    write_str(JOBS[i].name_str());
+                    sys::write(1, b"\n");
+                }
+            }
+            if !found {
+                write_str("No active jobs\n");
+            }
+        }
+        0
+    }
+    else if bytes_eq(name, "fg") {
+        unsafe {
+            let slot = if cmd.arg_count > 1 {
+                // Parse job number from argument (e.g., "fg 1")
+                let arg = cmd.arg(1);
+                let num = parse_decimal(arg);
+                if num == 0 || num as usize > MAX_JOBS {
+                    write_err("fg", "invalid job number");
+                    return 1;
+                }
+                (num - 1) as usize
+            } else {
+                // Use current foreground job
+                if CURRENT_FG >= MAX_JOBS || JOBS[CURRENT_FG].state == JobState::Done {
+                    write_err("fg", "no foreground job");
+                    return 1;
+                }
+                CURRENT_FG
+            };
+
+            if slot >= MAX_JOBS || JOBS[slot].state == JobState::Done {
+                write_err("fg", "job not found");
+                return 1;
+            }
+
+            let pgid = JOBS[slot].pgid;
+            JOBS[slot].state = JobState::Running;
+            CURRENT_FG = slot;
+
+            // Send SIGCONT to resume if stopped
+            sys::kill(pgid, 18); // SIGCONT
+
+            // Wait for the job
+            loop {
+                let result = sys::waitpid(pgid, 1);
+                if sys::is_error(result) || result == 0 { break; }
+            }
+
+            JOBS[slot].state = JobState::Done;
+            CURRENT_FG = 0;
+        }
+        0
+    }
+    else if bytes_eq(name, "bg") {
+        unsafe {
+            let slot = if cmd.arg_count > 1 {
+                let arg = cmd.arg(1);
+                let num = parse_decimal(arg);
+                if num == 0 || num as usize > MAX_JOBS {
+                    write_err("bg", "invalid job number");
+                    return 1;
+                }
+                (num - 1) as usize
+            } else {
+                // Find last stopped job
+                let mut found_slot = None;
+                for i in (0..MAX_JOBS).rev() {
+                    if JOBS[i].state == JobState::Stopped {
+                        found_slot = Some(i);
+                        break;
+                    }
+                }
+                match found_slot {
+                    Some(s) => s,
+                    None => {
+                        write_err("bg", "no stopped job");
+                        return 1;
+                    }
+                }
+            };
+
+            if slot >= MAX_JOBS || JOBS[slot].state != JobState::Stopped {
+                write_err("bg", "job not found or not stopped");
+                return 1;
+            }
+
+            let pgid = JOBS[slot].pgid;
+            JOBS[slot].state = JobState::Running;
+            sys::kill(pgid, 18); // SIGCONT
+            write_str("Background job resumed\n");
+        }
+        0
+    }
     else {
         sys::write(2, b"indosh: unknown command: ");
         sys::write(2, name);
@@ -660,13 +886,18 @@ fn execute_pipeline(cmds: &[ParsedCmd], cmd_count: usize) -> i64 {
         if sys::is_error(pid) { write_err("pipeline", "fork failed"); return 1; }
 
         if pid == 0 {
-            // Child
+            // Child — set process group to child PID (creates new group)
+            sys::setpgid(0, 0);
+
             if prev_read_fd >= 0 {
                 sys::dup2(prev_read_fd as u64, 0);
                 sys::close(prev_read_fd as u64);
             }
             if !is_last {
                 sys::close(pipe_r as u64);
+
+                sys::dup2(pipe_w as u64, 1);
+                sys::close(pipe_w as u64);
                 sys::dup2(pipe_w as u64, 1);
                 sys::close(pipe_w as u64);
             }
@@ -708,10 +939,23 @@ fn execute_pipeline(cmds: &[ParsedCmd], cmd_count: usize) -> i64 {
                 sys::exit(1);
             }
         } else {
-            // Parent
+            // Parent — set child's process group to child PID
+            sys::setpgid(pid as u64, pid as u64);
+
             if !is_last { sys::close(pipe_w as u64); }
             if prev_read_fd >= 0 { sys::close(prev_read_fd as u64); }
             if !is_last { prev_read_fd = pipe_r; }
+
+            // For single-command pipelines, add to job list
+            if i == 0 && cmd_count == 1 {
+                let cmd_name = cmds[0].arg(0);
+                let name_str = core::str::from_utf8(cmd_name).unwrap_or("unknown");
+                unsafe {
+                    if let Some(slot) = add_job(pid as u64, name_str) {
+                        CURRENT_FG = slot;
+                    }
+                }
+            }
         }
     }
 
@@ -728,6 +972,15 @@ fn execute_pipeline(cmds: &[ParsedCmd], cmd_count: usize) -> i64 {
         if sys::is_error(result) || result == 0 { break; }
         exit_code = result as i64;
     }
+
+    // Mark job as done
+    unsafe {
+        if CURRENT_FG < MAX_JOBS && JOBS[CURRENT_FG].state != JobState::Done {
+            JOBS[CURRENT_FG].state = JobState::Done;
+        }
+        CURRENT_FG = 0;
+    }
+
     exit_code
 }
 

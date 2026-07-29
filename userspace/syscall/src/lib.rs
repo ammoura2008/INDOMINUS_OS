@@ -39,6 +39,8 @@ pub const SYS_TCGETATTR: u64 = 24;
 pub const SYS_TCSETATTR: u64 = 25;
 pub const SYS_SIGACTION: u64 = 26;
 pub const SYS_KILL: u64 = 27;
+pub const SYS_SETPGID: u64 = 28;
+pub const SYS_GETPGID: u64 = 29;
 
 /// Open flags (POSIX-compatible).
 pub const O_RDONLY: u64 = 0x0000;
@@ -278,6 +280,18 @@ pub fn sigaction(signum: u64, handler: u64, old_handler: u64) -> i64 {
 /// Send a signal to a process. Returns 0 or negative errno.
 pub fn kill(pid: u64, signum: u64) -> i64 {
     unsafe { syscall2(SYS_KILL, pid, signum) }
+}
+
+/// Set process group ID. Returns 0 or negative errno.
+/// pid=0 uses current process. pgid=0 creates new group (PGID=PID).
+pub fn setpgid(pid: u64, pgid: u64) -> i64 {
+    unsafe { syscall2(SYS_SETPGID, pid, pgid) }
+}
+
+/// Get process group ID. Returns PGID or negative errno.
+/// pid=0 returns current process's PGID.
+pub fn getpgid(pid: u64) -> i64 {
+    unsafe { syscall1(SYS_GETPGID, pid) }
 }
 
 // ─── Pipes ────────────────────────────────────────────────────────────────

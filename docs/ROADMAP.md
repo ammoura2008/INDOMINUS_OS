@@ -16,9 +16,9 @@
 
 ---
 
-## Current Status (as of Phase 13.3)
+## Current Status (as of Phase 13.4)
 
-**Completed through:** Phase 13.3 (Signal Infrastructure)
+**Completed through:** Phase 13.4 (Process Groups / Job Control)
 
 | Actual Phase | Roadmap Phase | Status | Key Deliverable |
 |-------------|--------------|--------|-----------------|

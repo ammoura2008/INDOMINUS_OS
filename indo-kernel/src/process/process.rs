@@ -148,6 +148,9 @@ pub struct Process {
     pub signals_blocked: u32,
     /// Signal handlers: handler_addr[signum] = user function address, 0=default, 1=ignore
     pub signal_handlers: [u64; 32],
+    /// Process group ID (PGID). All processes in a group share a PGID.
+    /// PGID == PID means this process is the group leader.
+    pub pgid: u64,
 }
 
 /// Maximum number of mmap regions per process.
@@ -199,6 +202,7 @@ impl Process {
             signals_pending: 0,
             signals_blocked: 0,
             signal_handlers: [0; 32],
+            pgid: 0,
         })
     }
 
@@ -249,6 +253,7 @@ impl Process {
             signals_pending: 0,
             signals_blocked: 0,
             signal_handlers: [0; 32],
+            pgid: 0,
         })
     }
 

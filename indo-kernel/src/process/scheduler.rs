@@ -115,6 +115,8 @@ impl Scheduler {
 
         let mut process = Process::new_user(pid, user_rip, user_rsp, pml4, parent, parent_gen)?;
         process.generation = gen;
+        // New user processes are group leaders by default (PGID = PID)
+        process.pgid = pid;
         self.processes[slot] = Some(process);
 
         crate::serial::write_str("[SCHED] Spawned user process ");
