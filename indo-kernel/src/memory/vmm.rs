@@ -147,6 +147,21 @@ pub fn translate_addr(pml4_phys: super::PhysAddr, virtual_addr: VirtAddr) -> Opt
     }
 }
 
+/// Unmap a single page at the given virtual address.
+///
+/// Returns the physical frame that was mapped, so the caller can free it.
+/// Panics if the page is not mapped.
+pub fn unmap_page(pml4_phys: super::PhysAddr, virtual_addr: VirtAddr) -> super::PhysAddr {
+    let page = Page::<Size4KiB>::containing_address(virtual_addr);
+    let mut mapper = unsafe { mapper_from_pml4(pml4_phys) };
+
+    let (frame, flush) = unsafe { mapper.unmap(page) }
+        .expect("VMM: failed to unmap page");
+    flush.flush();
+
+    super::PhysAddr::new(frame.start_address().as_u64())
+}
+
 /// Walk the page tables and return a mutable pointer to the leaf PTE for a virtual address.
 ///
 /// Returns `None` if any intermediate page table entry is not present.

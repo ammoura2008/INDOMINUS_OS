@@ -138,7 +138,14 @@ pub struct Process {
     pub heap_end: u64,
     /// Current working directory (null-terminated path, max 255 bytes).
     pub cwd: [u8; 256],
+    /// Anonymous mmap regions: [(virt_base, num_pages); MAX_MMAP_REGIONS]
+    pub mmap_regions: [(u64, u64); MAX_MMAP_REGIONS],
+    /// Number of active mmap regions.
+    pub mmap_count: u8,
 }
+
+/// Maximum number of mmap regions per process.
+pub const MAX_MMAP_REGIONS: usize = 16;
 
 impl Process {
     /// Create a new kernel-mode process (Ring 0).
@@ -181,6 +188,8 @@ impl Process {
                 c[0] = b'/';
                 c
             },
+            mmap_regions: [(0, 0); MAX_MMAP_REGIONS],
+            mmap_count: 0,
         })
     }
 
@@ -226,6 +235,8 @@ impl Process {
                 c[0] = b'/';
                 c
             },
+            mmap_regions: [(0, 0); MAX_MMAP_REGIONS],
+            mmap_count: 0,
         })
     }
 

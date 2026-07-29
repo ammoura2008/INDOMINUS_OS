@@ -612,6 +612,8 @@ pub unsafe extern "C" fn syscall_dispatch(regs: *mut u64) -> u64 {
         19 => sys_chdir(arg0),
         20 => sys_getcwd(arg0, arg1),
         21 => sys_mkdir(arg0),
+        22 => sys_mmap(arg0, arg1),
+        23 => sys_munmap(arg0, arg1),
         _ => {
             crate::serial::write_str("[SYSCALL] Unknown syscall: ");
             crate::serial::write_u64(syscall_num);
@@ -2078,16 +2080,74 @@ fn sys_unlink(path_ptr: u64) -> u64 {
 /// Arguments: new_brk (0 = query current, >0 = set new break)
 /// Returns: new break address on success, or negative errno on error.
 fn sys_brk(new_brk: u64) -> u64 {
+    use crate::memory::{self, vmm, PhysAddr, PAGE_SIZE};
+    use x86_64::VirtAddr;
+
     let mut sched = crate::process::scheduler::SCHEDULER.lock();
     if let Some(pid) = sched.current_pid() {
         if let Some(ref mut proc) = sched.processes_mut()[pid as usize] {
+            // Initialize heap_start on first call
+            if proc.heap_start == 0 {
+                proc.heap_start = crate::memory::USER_HEAP_BASE;
+                proc.heap_end = crate::memory::USER_HEAP_BASE;
+            }
+
             if new_brk == 0 {
+                // Query: return current heap end
                 return proc.heap_end;
             }
-            if new_brk >= proc.heap_start {
-                proc.heap_end = new_brk;
-                return new_brk;
+
+            if new_brk < proc.heap_start {
+                // Below heap start — invalid
+                return proc.heap_end;
             }
+
+            let old_end = proc.heap_end;
+            let new_end = new_brk;
+
+            if new_end > old_end {
+                // Growing: map new pages
+                let pml4 = proc.pml4_phys;
+                let mut addr = old_end;
+                while addr < new_end {
+                    let page_virt = VirtAddr::new(addr);
+                    // Check if already mapped
+                    if vmm::translate_addr(PhysAddr::new(pml4), page_virt).is_none() {
+                        // Allocate a new physical frame and map it
+                        let frame = crate::memory::pmm::alloc_frame();
+                        if let Some(frame) = frame {
+                            vmm::map_page(
+                                PhysAddr::new(pml4),
+                                page_virt,
+                                frame,
+                                x86_64::structures::paging::PageTableFlags::PRESENT
+                                    | x86_64::structures::paging::PageTableFlags::WRITABLE
+                                    | x86_64::structures::paging::PageTableFlags::USER_ACCESSIBLE,
+                            );
+                        } else {
+                            // OOM: can't grow
+                            break;
+                        }
+                    }
+                    addr += PAGE_SIZE;
+                }
+                proc.heap_end = addr;
+            } else if new_end < old_end {
+                // Shrinking: unmap pages
+                let pml4 = proc.pml4_phys;
+                let mut addr = new_end;
+                while addr < old_end {
+                    let page_virt = VirtAddr::new(addr);
+                    // Unmap and free the physical frame
+                    if let Some(phys) = vmm::translate_addr(PhysAddr::new(pml4), page_virt) {
+                        vmm::unmap_page(PhysAddr::new(pml4), page_virt);
+                        crate::memory::pmm::free_frame(phys);
+                    }
+                    addr += PAGE_SIZE;
+                }
+                proc.heap_end = new_end;
+            }
+
             return proc.heap_end;
         }
     }
@@ -2373,6 +2433,9 @@ fn sys_execve(path_ptr: u64, argc: u64, argv_ptr: u64) -> u64 {
             proc.user_rip = Some(user_rip);
             proc.user_rsp = Some(user_rsp);
             proc.is_user = true;
+            // Initialize heap at USER_HEAP_BASE (brk(0) will return this until first brk call)
+            proc.heap_start = crate::memory::USER_HEAP_BASE;
+            proc.heap_end = crate::memory::USER_HEAP_BASE;
 
             let sp_ptr = proc.stack_pointer as *mut u64;
             if sp_ptr.is_null() {
@@ -2580,6 +2643,160 @@ fn sys_mkdir(path_ptr: u64) -> u64 {
     match crate::vfs::vfs().create_dir(&path) {
         Ok(()) => 0,
         Err(e) => e.to_errno() as u64,
+    }
+}
+
+/// SYS_MMAP (22) — Map anonymous memory.
+///
+/// Arguments: addr (hint), length
+/// Returns: mapped address on success, or negative errno on error.
+///
+/// For now, only supports MAP_ANONYMOUS | MAP_PRIVATE (no file backing).
+/// The `addr` parameter is a hint; the kernel ignores it and picks an address.
+fn sys_mmap(addr: u64, length: u64) -> u64 {
+    use crate::memory::{self, vmm, PhysAddr, PAGE_SIZE};
+    use x86_64::VirtAddr;
+
+    if length == 0 {
+        return errno::EINVAL as u64;
+    }
+
+    // Round up to page boundary
+    let num_pages = (length + PAGE_SIZE - 1) / PAGE_SIZE;
+
+    let mut sched = crate::process::scheduler::SCHEDULER.lock();
+    if let Some(pid) = sched.current_pid() {
+        if let Some(ref mut proc) = sched.processes_mut()[pid as usize] {
+            if proc.pml4_phys == 0 {
+                return errno::ESRCH as u64;
+            }
+
+            if proc.mmap_count as usize >= crate::process::process::MAX_MMAP_REGIONS {
+                return errno::ENOMEM as u64;
+            }
+
+            // Find the next free virtual address region
+            // Start from USER_MMAP_BASE and scan forward
+            let mut base = crate::memory::USER_MMAP_BASE;
+            let pml4 = proc.pml4_phys;
+            'outer: loop {
+                // Check if this region overlaps with any existing mmap
+                let mut overlap = false;
+                for i in 0..proc.mmap_count as usize {
+                    let (existing_base, existing_pages) = proc.mmap_regions[i];
+                    let existing_end = existing_base + existing_pages * PAGE_SIZE;
+                    if base < existing_end && base + num_pages * PAGE_SIZE > existing_base {
+                        base = existing_end;
+                        overlap = true;
+                        break;
+                    }
+                }
+                if overlap { continue 'outer; }
+
+                // Also check against stack (leave a guard page)
+                let stack_bottom = crate::memory::USER_STACK_TOP - 5 * PAGE_SIZE;
+                if base + num_pages * PAGE_SIZE > stack_bottom {
+                    return errno::ENOMEM as u64;
+                }
+
+                // Check if all pages in the region are unmapped
+                for i in 0..num_pages {
+                    let page_virt = VirtAddr::new(base + i * PAGE_SIZE);
+                    if vmm::translate_addr(PhysAddr::new(pml4), page_virt).is_some() {
+                        base = base + (i + 1) * PAGE_SIZE;
+                        continue 'outer;
+                    }
+                }
+                break;
+            }
+
+            // Map the pages
+            for i in 0..num_pages {
+                let page_virt = VirtAddr::new(base + i * PAGE_SIZE);
+                let frame = crate::memory::pmm::alloc_frame();
+                if let Some(frame) = frame {
+                    vmm::map_page(
+                        PhysAddr::new(pml4),
+                        page_virt,
+                        frame,
+                        x86_64::structures::paging::PageTableFlags::PRESENT
+                            | x86_64::structures::paging::PageTableFlags::WRITABLE
+                            | x86_64::structures::paging::PageTableFlags::USER_ACCESSIBLE,
+                    );
+                } else {
+                    // OOM: unmap already-mapped pages
+                    for j in 0..i {
+                        let page_virt = VirtAddr::new(base + j * PAGE_SIZE);
+                        if let Some(phys) = vmm::translate_addr(PhysAddr::new(pml4), page_virt) {
+                            vmm::unmap_page(PhysAddr::new(pml4), page_virt);
+                            crate::memory::pmm::free_frame(phys);
+                        }
+                    }
+                    return errno::ENOMEM as u64;
+                }
+            }
+
+            // Track the region
+            proc.mmap_regions[proc.mmap_count as usize] = (base, num_pages);
+            proc.mmap_count += 1;
+
+            return base;
+        }
+    }
+    errno::ESRCH as u64
+}
+
+/// SYS_MUNMAP (23) — Unmap anonymous memory.
+///
+/// Arguments: addr, length
+/// Returns: 0 on success, or negative errno on error.
+fn sys_munmap(addr: u64, length: u64) -> u64 {
+    use crate::memory::{self, vmm, PhysAddr, PAGE_SIZE};
+    use x86_64::VirtAddr;
+
+    if length == 0 || addr == 0 {
+        return errno::EINVAL as u64;
+    }
+
+    let num_pages = (length + PAGE_SIZE - 1) / PAGE_SIZE;
+    let end = addr + num_pages * PAGE_SIZE;
+
+    let mut sched = crate::process::scheduler::SCHEDULER.lock();
+    if let Some(pid) = sched.current_pid() {
+        if let Some(ref mut proc) = sched.processes_mut()[pid as usize] {
+            let pml4 = proc.pml4_phys;
+
+            // Find and remove the mmap region
+            let mut found = false;
+            for i in 0..proc.mmap_count as usize {
+                let (region_base, region_pages) = proc.mmap_regions[i];
+                let region_end = region_base + region_pages * PAGE_SIZE;
+                if addr >= region_base && end <= region_end {
+                    // Found it — unmap the pages
+                    for j in 0..region_pages {
+                        let page_virt = VirtAddr::new(region_base + j * PAGE_SIZE);
+                        if let Some(phys) = vmm::translate_addr(PhysAddr::new(pml4), page_virt) {
+                            vmm::unmap_page(PhysAddr::new(pml4), page_virt);
+                            crate::memory::pmm::free_frame(phys);
+                        }
+                    }
+                    // Remove from tracking array
+                    for j in i..(proc.mmap_count as usize - 1) {
+                        proc.mmap_regions[j] = proc.mmap_regions[j + 1];
+                    }
+                    proc.mmap_regions[proc.mmap_count as usize - 1] = (0, 0);
+                    proc.mmap_count -= 1;
+                    found = true;
+                    break;
+                }
+            }
+
+            if found { 0 } else { errno::EINVAL as u64 }
+        } else {
+            errno::ESRCH as u64
+        }
+    } else {
+        errno::ESRCH as u64
     }
 }
 

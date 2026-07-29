@@ -104,6 +104,17 @@ pub const KERNEL_HEAP_INITIAL_SIZE: u64 = 16 * 1024 * 1024;
 /// stack growth and guard pages.
 pub const USER_STACK_TOP: u64 = 0x0000_7FFF_FFFF_0000;
 
+/// Virtual base address of the user heap (grows upward).
+/// Placed in the middle of user space. The heap starts here and grows
+/// toward the stack (downward from USER_STACK_TOP).
+pub const USER_HEAP_BASE: u64 = 0x0000_4000_0000_0000;
+
+/// Maximum user heap size (256 MiB).
+pub const USER_HEAP_MAX_SIZE: u64 = 256 * 1024 * 1024;
+
+/// Virtual base address for mmap regions (grows upward from here).
+pub const USER_MMAP_BASE: u64 = 0x0000_2000_0000_0000;
+
 // ─────────────────────────────────────────────────────────────────────────────
 // Global heap allocator
 // ─────────────────────────────────────────────────────────────────────────────

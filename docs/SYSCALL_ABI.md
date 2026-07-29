@@ -85,6 +85,8 @@ libraries work unmodified.
 | 19 | SYS_CHDIR | path_ptr | 0 or -errno |
 | 20 | SYS_GETCWD | buf_ptr, buf_size | bytes written or -errno |
 | 21 | SYS_MKDIR | path_ptr | 0 or -errno |
+| 22 | SYS_MMAP | addr, length | mapped address or -errno |
+| 23 | SYS_MUNMAP | addr, length | 0 or -errno |
 
 ## Error Codes
 

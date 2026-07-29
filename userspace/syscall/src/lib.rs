@@ -33,6 +33,8 @@ pub const SYS_EXECVE: u64 = 18;
 pub const SYS_CHDIR: u64 = 19;
 pub const SYS_GETCWD: u64 = 20;
 pub const SYS_MKDIR: u64 = 21;
+pub const SYS_MMAP: u64 = 22;
+pub const SYS_MUNMAP: u64 = 23;
 
 /// Open flags (POSIX-compatible).
 pub const O_RDONLY: u64 = 0x0000;
@@ -210,6 +212,19 @@ pub fn getcwd(buf: &mut [u8]) -> i64 {
 /// Returns 0 on success, or negative errno on error.
 pub fn mkdir(path: &str) -> i64 {
     unsafe { syscall1(SYS_MKDIR, path.as_ptr() as u64) }
+}
+
+// ─── Memory Mapping ───────────────────────────────────────────────────────
+
+/// Map anonymous memory. Returns the mapped address, or negative errno.
+/// `addr` is a hint (ignored for now), `length` is bytes to map.
+pub fn mmap(addr: u64, length: u64) -> i64 {
+    unsafe { syscall2(SYS_MMAP, addr, length) }
+}
+
+/// Unmap previously mapped memory. Returns 0 or negative errno.
+pub fn munmap(addr: u64, length: u64) -> i64 {
+    unsafe { syscall2(SYS_MUNMAP, addr, length) }
 }
 
 // ─── Pipes ──────────────────────────────────────────────────────────────────

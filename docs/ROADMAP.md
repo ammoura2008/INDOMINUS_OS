@@ -16,9 +16,9 @@
 
 ---
 
-## Current Status (as of Phase 12)
+## Current Status (as of Phase 13.1)
 
-**Completed through:** Phase 12 (Full Interactive Userspace & Shell)
+**Completed through:** Phase 13.1 (brk/mmap/munmap)
 
 | Actual Phase | Roadmap Phase | Status | Key Deliverable |
 |-------------|--------------|--------|-----------------|
@@ -26,7 +26,7 @@
 | 1 | Phase 1 | ✅ DONE | PMM, VMM, kernel heap (16 MiB) |
 | 2 | Phase 2 | ✅ DONE | LAPIC, IO-APIC, PIT, IRQ dispatch |
 | 3 | Phase 3 | ✅ DONE | Process struct, context switch, round-robin scheduler |
-| 4 | Phase 4 | ✅ DONE | `syscall`/`sysret`, 21 syscalls, user mode |
+| 4 | Phase 4 | ✅ DONE | `syscall`/`sysret`, 23 syscalls, user mode |
 | 5 | Phase 5 | ✅ DONE | PCI enumeration, ACPI, MMIO |
 | 5.3 | Phase 6 | ✅ DONE | AHCI storage driver, block device abstraction |
 | 5.4 | Phase 9 | ✅ DONE | Page fault classification, user process kill |
@@ -51,8 +51,9 @@
 | 12.10-12.11 | Phase 12 | ✅ DONE | Userspace utilities (echo, cat, ls, pwd, mkdir, touch, rm, true, false) |
 | 12.12 | Phase 12 | ✅ DONE | Security hardening + audit |
 | 12.13 | Phase 12 | ✅ DONE | Full regression (3/3 boots, 0 TFES) |
+| 13.1 | Phase 13 | ✅ DONE | brk() page mapping, sys_mmap/munmap, heap growth |
 
-**Total tests:** 65/65 passing + 3/3 boot regression (Phase 12)
+**Total tests:** 65/65 passing + 3/3 boot regression (Phase 13.1)
 
 ## Phase Overview
 
