@@ -1,3 +1,8 @@
-// Placeholder lib for workspace root package workaround.
-// This crate is not built; it exists only to make this a package-root workspace
-// instead of a virtual workspace, which avoids a cargo/build-std bug on Windows.
+#![no_std]
+
+// Placeholder library for the workspace-root package workaround.
+// This crate is intentionally minimal so Cargo can treat the workspace as a
+// package-root workspace without requiring a std-enabled target.
+
+/// Placeholder symbol to keep the crate valid for Cargo metadata and checks.
+pub fn placeholder() {}

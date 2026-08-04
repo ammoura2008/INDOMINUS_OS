@@ -49,6 +49,8 @@ pub static mut IRET_RSP_VAL: u64 = 0;
 #[cfg(DEBUG_KERNEL)]
 pub static mut IRET_SS: u64 = 0;
 
+
+
 /// Deferred CR3 value for the first dispatch.
 ///
 /// When the first dispatch happens, the timer handler is still running on the
@@ -62,6 +64,96 @@ pub static mut IRET_SS: u64 = 0;
 /// Zero means "no deferred switch pending".
 #[no_mangle]
 pub static mut DEFERRED_CR3: u64 = 0;
+
+/// Deferred process cleanup slots.
+///
+/// `schedule_force` runs on the dying process's kernel stack. Calling
+/// `free_kernel_stack` on that stack corrupts the locals and return address.
+/// Instead, we stash dead resources here and free them at the next timer tick
+/// when we are safely on a different process's stack.
+const MAX_DEFERRED: usize = 4;
+use core::sync::atomic::{AtomicUsize, Ordering};
+static DEFERRED_COUNT: AtomicUsize = AtomicUsize::new(0);
+static DEFERRED_SLOTS: spin::Mutex<[(u64, u64, bool); MAX_DEFERRED]> =
+    spin::Mutex::new([(0, 0, false); MAX_DEFERRED]);
+
+/// Enqueue dead-process resources for deferred freeing.
+///
+/// # Safety
+/// Must only be called from `schedule_force` with interrupts disabled.
+#[allow(dead_code)]
+pub unsafe fn defer_free(kstack: u64, pml4: u64, is_user: bool) {
+    let count = DEFERRED_COUNT.load(Ordering::Relaxed);
+    if count < MAX_DEFERRED {
+        let mut slots = DEFERRED_SLOTS.lock();
+        slots[count] = (kstack, pml4, is_user);
+        DEFERRED_COUNT.store(count + 1, Ordering::Relaxed);
+    } else {
+        // Overflow: all deferred slots full. Free synchronously.
+        // We're on a safe (new process) stack when this is called from
+        // schedule_force, so it's safe to free directly.
+        if is_user && pml4 != 0 {
+            crate::serial::write_str("[SCHED] WARNING: deferred slots full, freeing PML4 0x");
+            crate::serial::write_hex(pml4);
+            crate::serial::write_nl();
+            // Switch to kernel PML4 to safely free user address space
+            let kernel_pml4 = crate::memory::kernel_pml4_phys();
+            let old_cr3: u64;
+            core::arch::asm!("mov {0}, cr3", out(reg) old_cr3);
+            core::arch::asm!("mov cr3, {0}", in(reg) kernel_pml4);
+            crate::memory::vmm::free_user_address_space(crate::memory::PhysAddr::new(pml4));
+            core::arch::asm!("mov cr3, {0}", in(reg) old_cr3);
+        }
+        if kstack != 0 {
+            super::process::free_kernel_stack(kstack);
+        }
+    }
+}
+
+/// Drain all deferred-freelist slots.  Must be called from a safe context
+/// (e.g. the timer handler after context-switching to a different process).
+pub fn drain_deferred_free() {
+    use crate::memory::vmm;
+    let count = DEFERRED_COUNT.swap(0, Ordering::Relaxed);
+    if count == 0 {
+        return;
+    }
+    let slots = {
+        let mut s = DEFERRED_SLOTS.lock();
+        let taken = *s;
+        for slot in s.iter_mut() {
+            *slot = (0, 0, false);
+        }
+        taken
+    };
+    for i in 0..count {
+        let (kstack, pml4, is_user) = slots[i];
+
+        // Switch to kernel PML4 for alloc/dealloc (PIC pointers need identity map).
+        let kernel_pml4 = crate::memory::kernel_pml4_phys();
+        let (saved_cr3, _) = x86_64::registers::control::Cr3::read();
+        if saved_cr3.start_address().as_u64() != kernel_pml4 {
+            unsafe { vmm::switch_page_table(crate::memory::PhysAddr::new(kernel_pml4)); }
+        }
+
+        // Free user address space if this was a user process.
+        // safe: we're on the kernel PML4 with identity map active.
+        if is_user && pml4 != 0 {
+            unsafe { vmm::free_user_address_space(crate::memory::PhysAddr::new(pml4)); }
+        }
+
+        if kstack != 0 {
+            super::process::free_kernel_stack(kstack);
+        }
+
+        // Restore original CR3.
+        if saved_cr3.start_address().as_u64() != kernel_pml4 {
+            unsafe { vmm::switch_page_table(crate::memory::PhysAddr::new(
+                saved_cr3.start_address().as_u64(),
+            )); }
+        }
+    }
+}
 
 // Marker strings as static byte arrays.
 #[no_mangle]
@@ -176,23 +268,10 @@ pub unsafe extern "C" fn timer_interrupt_handler() {
         "pop r14",
         "pop r15",
 
-        // ── DIAGNOSTIC: dump RAX before iretq ───────────────────────────
-        // RAX here = the value user code will have when it starts.
-        "mov rdi, 0x49",
-        "mov rsi, rax",
-        "call {dump_rax}",
-
-        // ── DIAGNOSTIC: dump IRET frame before iretq ──────────────────
-        // RSP now points at the IRET frame: RIP, CS, RFLAGS, RSP, SS
-        "mov rdi, rsp",
-        "call {dump_iret_before_iretq}",
-
         // ── Return from interrupt ────────────────────────────────────────
         "iretq",
 
         schedule = sym crate::process::context_switch::schedule,
-        dump_rax = sym crate::serial::dump_rax,
-        dump_iret_before_iretq = sym crate::process::context_switch::dump_iret_before_iretq,
         write_marker = sym crate::serial::write_marker_raw,
         ddbg_tick = sym crate::serial::ddbg,
         tick_msg = sym TICK_MSG,
@@ -412,6 +491,13 @@ pub unsafe extern "C" fn dump_iret_before_iretq(_rsp: u64) {}
 pub unsafe extern "C" fn schedule(saved_rsp: u64) -> u64 {
     use super::scheduler::SCHEDULER;
     use crate::memory::vmm;
+
+    // ── Drain deferred frees from the previous schedule_force() ─────────
+    // schedule_force() stashes dead process resources here instead of
+    // freeing them inline (freeing the stack we're executing on corrupts
+    // locals and the return address).  Now we're safely on the timer
+    // handler's kernel stack, so it's safe to free.
+    crate::process::context_switch::drain_deferred_free();
 
     #[cfg(DEBUG_KERNEL)]
     { SAVED_RSP = saved_rsp; }
@@ -667,43 +753,26 @@ pub unsafe extern "C" fn schedule_force(saved_rsp: u64) -> u64 {
     // ── Checkpoint R: about to return ────────────────────────────────
     crate::serial::ddbg(b'R');
 
-    // Now safe to free the dead process's resources — we've switched CR3
-    // and are about to return the new process's stack pointer.
+    // ── Deferred cleanup ──────────────────────────────────────────────────
+    // We are STILL executing on the dead process's kernel stack.  Calling
+    // free_kernel_stack here would deallocate the very memory we're using,
+    // corrupting local variables (`new_sp`, `saved_cr3`) and the function's
+    // return address → garbage SP → page fault on iretq.
     //
-    // CRITICAL: free_kernel_stack calls dealloc() which uses PIC function
-    // pointers (linked_list_allocator's HoleList::deallocate). With PIC,
-    // those pointers contain PHYSICAL addresses after bootloader relocation.
-    // Indirect calls through them require the identity map (kernel PML4).
-    // A user PML4 lacks the identity map → page fault at the physical address.
-    // So we must switch to the kernel PML4 before any alloc/dealloc calls.
-    let kernel_pml4 = crate::memory::kernel_pml4_phys();
-    let (saved_cr3, _) = x86_64::registers::control::Cr3::read();
-    if saved_cr3.start_address().as_u64() != kernel_pml4 {
-        vmm::switch_page_table(crate::memory::PhysAddr::new(kernel_pml4));
-    }
-
-    if dead_pml4 != 0 && dead_is_user {
-        vmm::free_user_address_space(crate::memory::PhysAddr::new(dead_pml4));
-    }
-    if dead_kstack != 0 {
-        super::process::free_kernel_stack(dead_kstack);
-    }
-
-    // Prevent double-free: zero freed resources so Drop::drop() skips them.
-    // Only when the old process was actually a zombie (resources were freed).
-    if dead_kstack != 0 {
+    // Instead, stash the dead resources in a static deferred-free list.
+    // drain_deferred_free() runs at the start of the next timer tick
+    // (schedule()), when we are safely on a different process's kernel stack.
+    if dead_kstack != 0 || dead_pml4 != 0 {
+        unsafe { defer_free(dead_kstack, dead_pml4, dead_is_user); }
         if let Some(ref mut old_proc) = sched.processes_mut()[old_pid as usize] {
             old_proc.kernel_stack_base = 0;
             old_proc.pml4_phys = 0;
         }
     }
 
-    // Restore CR3 to the new process's PML4 (required for iretq to user mode)
-    if saved_cr3.start_address().as_u64() != kernel_pml4 {
-        vmm::switch_page_table(crate::memory::PhysAddr::new(
-            saved_cr3.start_address().as_u64(),
-        ));
-    }
+    // No CR3 switch needed here — we stay on the new process's PML4
+    // (already switched above). drain_deferred_free() handles its own
+    // kernel-PML4 switch when it runs.
 
     if new_sp == 0 {
         crate::serial::write_str("[SCHED] FATAL: new_sp=0 in force_switch\n");
@@ -758,33 +827,16 @@ pub unsafe extern "C" fn kill_process() -> u64 {
     // pointers (linked_list_allocator internals). With PIC, those pointers
     // contain physical addresses. Indirect calls through them require the
     // identity map (kernel PML4). A user PML4 lacks the identity map.
-    let kernel_pml4 = crate::memory::kernel_pml4_phys();
-    let (saved_cr3, _) = x86_64::registers::control::Cr3::read();
-    if saved_cr3.start_address().as_u64() != kernel_pml4 {
-        vmm::switch_page_table(crate::memory::PhysAddr::new(kernel_pml4));
-    }
-
-    if dead_pml4 != 0 && dead_is_user {
-        vmm::free_user_address_space(crate::memory::PhysAddr::new(dead_pml4));
-    }
-    if dead_kstack != 0 {
-        super::process::free_kernel_stack(dead_kstack);
-    }
-
-    // Prevent double-free: zero freed resources so Drop::drop() skips them.
-    // kill_process always frees resources, so this is always guarded.
-    if dead_kstack != 0 {
+    //
+    // We are STILL on the dead process's kernel stack here (page_fault_return_to_user
+    // will switch stacks via `mov rsp, rdi`).  Freeing the stack now would corrupt
+    // locals and the return path.  Defer to the next timer tick.
+    if dead_kstack != 0 || dead_pml4 != 0 {
+        unsafe { defer_free(dead_kstack, dead_pml4, dead_is_user); }
         if let Some(ref mut old_proc) = sched.processes_mut()[dead_pid as usize] {
             old_proc.kernel_stack_base = 0;
             old_proc.pml4_phys = 0;
         }
-    }
-
-    // Restore CR3 to the new process's PML4
-    if saved_cr3.start_address().as_u64() != kernel_pml4 {
-        vmm::switch_page_table(crate::memory::PhysAddr::new(
-            saved_cr3.start_address().as_u64(),
-        ));
     }
 
     new_sp

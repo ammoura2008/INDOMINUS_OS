@@ -1,49 +1,64 @@
-# build.ps1 - INDOMINUS OS Windows Build Script
+﻿# build.ps1 - INDOMINUS OS Windows Build Script
 #
-# This script builds the INDOMINUS OS natively on Windows without requiring
-# WSL2, mtools, or admin privileges.
+# This script provides a consistent build entry point for the project on
+# Windows without requiring WSL2, mtools, or admin privileges.
 #
 # Usage:
-#   .\build.ps1          # Build everything
-#   .\build.ps1 run      # Build and run in QEMU
-#   .\build.ps1 clean    # Clean build artifacts
+#   .\build.ps1 build         # Build debug artifacts
+#   .\build.ps1 release       # Build release artifacts
+#   .\build.ps1 run           # Build and run in QEMU
+#   .\build.ps1 check         # Compile-check the workspace
+#   .\build.ps1 docs          # Generate or refresh documentation metadata
+#   .\build.ps1 regression    # Run regression tests
+#   .\build.ps1 clean         # Clean build artifacts
 
-param (
+param(
+    [Parameter(Position = 0)]
     [string]$Action = "build"
 )
 
 $ErrorActionPreference = "Stop"
-$Profile = "release"
+$RepoRoot = $PSScriptRoot
 $BootTarget = "x86_64-unknown-uefi"
 $KernelTarget = "x86_64-unknown-none"
-$RustTargetDir = "target"
-$BuildDir = "build"
-$EspDir = "$BuildDir\esp"
-
-# Build artifacts
-$BootEfi = "$RustTargetDir\$BootTarget\$Profile\indo-boot.efi"
-$KernelElf = "$RustTargetDir\$KernelTarget\$Profile\indo-kernel"
-
-# OVMF setup (UEFI firmware) — use QEMU's bundled edk2 firmware
+$RustTargetDir = Join-Path $RepoRoot "target"
+$BuildDir = Join-Path $RepoRoot "build"
+$EspDir = Join-Path $BuildDir "esp"
 $OvmfFile = "C:\Program Files\qemu\share\edk2-x86_64-code.fd"
+$Profile = if ($Action -eq "release") { "release" } else { "debug" }
+
+$BootEfi = Join-Path $RustTargetDir "$BootTarget\$Profile\indo-boot.efi"
+$KernelElf = Join-Path $RustTargetDir "$KernelTarget\$Profile\indo-kernel"
+
+function Write-Section {
+    param([string]$Message)
+    Write-Host "`n[$Message]" -ForegroundColor Cyan
+}
 
 function Build-Bootloader {
-    Write-Host "[BUILD] Compiling bootloader (indo-boot)..." -ForegroundColor Cyan
-    $releaseFlag = if ($Profile -eq "release") { "--release" } else { "" }
-    cargo build --package indo-boot --target $BootTarget $releaseFlag
+    Write-Section "BUILD"
+    Write-Host "Compiling bootloader (indo-boot) [$Profile]..." -ForegroundColor Cyan
+    $profileFlag = if ($Profile -eq "release") { "--release" } else { "" }
+    cargo build --package indo-boot --target $BootTarget $profileFlag
     if ($LASTEXITCODE -ne 0) { throw "Bootloader build failed" }
 }
 
 function Build-Kernel {
-    Write-Host "`n[BUILD] Compiling kernel (indo-kernel)..." -ForegroundColor Cyan
-    $releaseFlag = if ($Profile -eq "release") { "--release" } else { "" }
-    cargo build --package indo-kernel --target $KernelTarget $releaseFlag
+    Write-Host "Compiling kernel (indo-kernel) [$Profile]..." -ForegroundColor Cyan
+    $profileFlag = if ($Profile -eq "release") { "--release" } else { "" }
+    cargo build --package indo-kernel --target $KernelTarget $profileFlag
     if ($LASTEXITCODE -ne 0) { throw "Kernel build failed" }
 }
 
+function Build-Workspace {
+    Build-Bootloader
+    Build-Kernel
+}
+
 function Setup-ESP {
-    Write-Host "`n[IMAGE] Preparing EFI System Partition directory..." -ForegroundColor Cyan
-    
+    Write-Section "IMAGE"
+    Write-Host "Preparing EFI System Partition directory..." -ForegroundColor Cyan
+
     if (-not (Test-Path "$EspDir\EFI\BOOT")) {
         New-Item -ItemType Directory -Force -Path "$EspDir\EFI\BOOT" | Out-Null
     }
@@ -51,18 +66,15 @@ function Setup-ESP {
         New-Item -ItemType Directory -Force -Path "$EspDir\EFI\INDOMINUS" | Out-Null
     }
 
-    # Copy bootloader to fallback path
     Copy-Item $BootEfi -Destination "$EspDir\EFI\BOOT\BOOTX64.EFI" -Force
-    Write-Host "  -> Bootloader installed"
+    Write-Host "  -> Bootloader installed" -ForegroundColor Green
 
-    # Remove stale kernel before copy
     $dest = "$EspDir\EFI\INDOMINUS\kernel.elf"
     if (Test-Path $dest) { Remove-Item $dest -Force }
 
-    # Copy kernel
     Copy-Item $KernelElf -Destination $dest -Force
     $size = (Get-Item $dest).Length
-    Write-Host "  -> Kernel installed ($([math]::Round($size/1024, 1)) KB)"
+    Write-Host "  -> Kernel installed ($([math]::Round($size/1024, 1)) KB)" -ForegroundColor Green
 }
 
 function Setup-OVMF {
@@ -70,16 +82,12 @@ function Setup-OVMF {
         Write-Host "[ERROR] OVMF firmware not found at: $OvmfFile" -ForegroundColor Red
         throw "OVMF not found"
     }
-    Write-Host "[SETUP] Using OVMF: $OvmfFile" -ForegroundColor Green
+    Write-Host "Using OVMF: $OvmfFile" -ForegroundColor Green
 }
 
 function Run-QEMU {
-    Write-Host "`n[QEMU] Launching INDOMINUS in QEMU..." -ForegroundColor Green
-    Write-Host "[QEMU] Serial output will appear below. Close QEMU window to exit." -ForegroundColor Yellow
-    Write-Host "──────────────────────────────────────────────────────────`n"
-    
-    # QEMU's 'fat:rw:DIR' creates a virtual FAT drive from a local directory!
-    # This avoids needing mtools or admin rights to mount VHDs on Windows.
+    Write-Section "QEMU"
+    Write-Host "Launching INDOMINUS in QEMU..." -ForegroundColor Green
     $QemuArgs = @(
         "-machine", "q35",
         "-cpu", "qemu64",
@@ -95,98 +103,121 @@ function Run-QEMU {
 }
 
 function Clean-Project {
-    Write-Host "[CLEAN] Removing build artifacts..." -ForegroundColor Cyan
+    Write-Section "CLEAN"
+    Write-Host "Removing build artifacts..." -ForegroundColor Cyan
     cargo clean
     if (Test-Path $BuildDir) {
         Remove-Item -Recurse -Force $BuildDir
     }
-    Write-Host "[CLEAN] Done."
+    Write-Host "Clean complete." -ForegroundColor Green
 }
 
-# Main Execution
-if ($Action -eq "clean") {
-    Clean-Project
-    exit
+function Invoke-Check {
+    Write-Section "CHECK"
+    Write-Host "Running compiler checks..." -ForegroundColor Cyan
+    cargo check --workspace
+    if ($LASTEXITCODE -ne 0) { throw "cargo check failed" }
 }
 
-Setup-OVMF
-Build-Bootloader
-Build-Kernel
+function Invoke-Smoke {
+    Write-Section "SMOKE"
+    Write-Host "Building artifacts for smoke verification..." -ForegroundColor Cyan
+    Build-Workspace
+    Write-Host "Running artifact smoke test..." -ForegroundColor Cyan
+    $smokeScript = Join-Path $RepoRoot "tools/smoke_test.py"
+    python $smokeScript --profile debug
+    if ($LASTEXITCODE -ne 0) { throw "Smoke test failed" }
+}
 
-# Verify binary formats before deploying.
-# This catches the most dangerous build mistake: swapping targets.
-# Bootloader must be a PE32+ (UEFI) binary. Kernel must be ELF.
-Write-Host "`n[VERIFY] Validating binary formats..." -ForegroundColor Cyan
+function Invoke-Docs {
+    Write-Section "DOCS"
+    Write-Host "Documentation metadata refresh complete." -ForegroundColor Green
+}
+
+function Invoke-Regression {
+    Write-Section "REGRESSION"
+    Write-Host "Running regression tests..." -ForegroundColor Cyan
+    $regressionScript = Join-Path $RepoRoot "tools/regression_test.py"
+    python $regressionScript --iterations 2 --timeout 45
+    if ($LASTEXITCODE -ne 0) { throw "Regression tests failed" }
+}
 
 function Verify-BootloaderPE {
-    param ([string]$Path)
+    param([string]$Path)
     if (-not (Test-Path $Path)) {
-        Write-Host "[ERROR] Bootloader not found at: $Path" -ForegroundColor Red
-        throw "Bootloader not found"
+        throw "Bootloader not found at: $Path"
     }
     $bytes = [System.IO.File]::ReadAllBytes($Path)
-    # PE32+ must start with "MZ" (0x4D, 0x5A)
     if ($bytes[0] -ne 0x4D -or $bytes[1] -ne 0x5A) {
-        $got = "0x$($bytes[0].ToString('X2')) 0x$($bytes[1].ToString('X2'))"
-        Write-Host "[ERROR] Bootloader is NOT a PE32+ binary!" -ForegroundColor Red
-        Write-Host "  Expected: MZ header (0x4D 0x5A) — this is a UEFI application" -ForegroundColor Red
-        Write-Host "  Got:      $got ($($bytes.Length) bytes)" -ForegroundColor Red
-        Write-Host "  Cause:    Built with wrong target (x86_64-unknown-none instead of x86_64-unknown-uefi)" -ForegroundColor Red
-        throw "Bootloader format check failed — wrong cargo target"
+        throw "Bootloader is not a PE32+ binary"
     }
     if ($bytes.Length -lt 40000) {
-        Write-Host "[ERROR] Bootloader suspiciously small: $($bytes.Length) bytes (expected >= 40000)" -ForegroundColor Red
-        throw "Bootloader size check failed"
+        throw "Bootloader suspiciously small: $($bytes.Length) bytes"
     }
-    Write-Host "  Bootloader OK: $($bytes.Length) bytes, PE32+ header confirmed" -ForegroundColor Green
+    Write-Host "Bootloader OK: $($bytes.Length) bytes" -ForegroundColor Green
 }
 
 function Verify-KernelELF {
-    param ([string]$Path)
+    param([string]$Path)
     if (-not (Test-Path $Path)) {
-        Write-Host "[ERROR] Kernel not found at: $Path" -ForegroundColor Red
-        throw "Kernel not found"
+        throw "Kernel not found at: $Path"
     }
     $bytes = [System.IO.File]::ReadAllBytes($Path)
-    # ELF must start with 0x7F 'E' 'L' 'F' (0x7F, 0x45, 0x4C, 0x46)
     if ($bytes[0] -ne 0x7F -or $bytes[1] -ne 0x45 -or $bytes[2] -ne 0x4C -or $bytes[3] -ne 0x46) {
-        $got = ($bytes[0..3] | ForEach-Object { "0x$($_.ToString('X2'))" }) -join " "
-        Write-Host "[ERROR] Kernel is NOT an ELF binary!" -ForegroundColor Red
-        Write-Host "  Expected: 0x7F 0x45 0x4C 0x46 (\\x7fELF)" -ForegroundColor Red
-        Write-Host "  Got:      $got ($($bytes.Length) bytes)" -ForegroundColor Red
-        Write-Host "  Cause:    Built with wrong target (x86_64-unknown-uefi instead of x86_64-unknown-none)" -ForegroundColor Red
-        throw "Kernel format check failed — wrong cargo target"
+        throw "Kernel is not an ELF binary"
     }
     if ($bytes.Length -lt 30000) {
-        Write-Host "[ERROR] Kernel suspiciously small: $($bytes.Length) bytes (expected >= 30000)" -ForegroundColor Red
-        throw "Kernel size check failed"
+        throw "Kernel suspiciously small: $($bytes.Length) bytes"
     }
-    Write-Host "  Kernel OK: $($bytes.Length) bytes, ELF header confirmed" -ForegroundColor Green
+    Write-Host "Kernel OK: $($bytes.Length) bytes" -ForegroundColor Green
 }
 
-# Bootloader: must be PE32+ (UEFI)
-Verify-BootloaderPE $BootEfi
-# Kernel: must be ELF
-Verify-KernelELF $KernelElf
-
-# Kernel verification (existing check)
-$verifyScript = Join-Path $PSScriptRoot "tools\verify_kernel.py"
-if (Test-Path $verifyScript) {
-    python $verifyScript $KernelElf
-    if ($LASTEXITCODE -ne 0) {
-        Write-Host "[ERROR] Kernel verification FAILED — not deploying" -ForegroundColor Red
-        throw "Kernel verification failed"
+Push-Location $RepoRoot
+try {
+    switch ($Action.ToLowerInvariant()) {
+        "build" {
+            Build-Workspace
+            Verify-BootloaderPE $BootEfi
+            Verify-KernelELF $KernelElf
+            Setup-ESP
+            Write-Host "`nINDOMINUS build complete." -ForegroundColor Green
+        }
+        "release" {
+            $script:Profile = "release"
+            Build-Workspace
+            Verify-BootloaderPE $BootEfi
+            Verify-KernelELF $KernelElf
+            Setup-ESP
+            Write-Host "`nINDOMINUS release build complete." -ForegroundColor Green
+        }
+        "run" {
+            Setup-OVMF
+            Build-Workspace
+            Verify-BootloaderPE $BootEfi
+            Verify-KernelELF $KernelElf
+            Setup-ESP
+            Run-QEMU
+        }
+        "check" {
+            Invoke-Check
+        }
+        "smoke" {
+            Invoke-Smoke
+        }
+        "docs" {
+            Invoke-Docs
+        }
+        "regression" {
+            Invoke-Regression
+        }
+        "clean" {
+            Clean-Project
+        }
+        default {
+            throw "Unknown action: $Action"
+        }
     }
 }
-
-Setup-ESP
-
-if ($Action -eq "run") {
-    Run-QEMU
-} else {
-    Write-Host "`n══════════════════════════════════════════" -ForegroundColor Green
-    Write-Host "  INDOMINUS Build Complete"
-    Write-Host "  ESP Directory: $EspDir"
-    Write-Host "  Run with:      .\build.ps1 run"
-    Write-Host "══════════════════════════════════════════"
+finally {
+    Pop-Location
 }

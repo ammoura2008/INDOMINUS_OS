@@ -15,6 +15,7 @@ members = [
     "test_fat_write",
     "utils",
     "test_stress",
+    "test_reg",
 ]
 resolver = "2"
 

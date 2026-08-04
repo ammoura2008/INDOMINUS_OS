@@ -177,12 +177,19 @@ pub struct PerCpuData {
 ///
 /// # Safety
 /// Accessed only from the syscall entry handler (single-CPU system).
+/// The naked handler accesses fields via `gs:[offset]` (not through Rust references).
+/// The Rust helper functions (`set_kernel_rsp`, `set_force_switch`) access via
+/// direct pointer writes with interrupts disabled.
 ///
 /// # IMPORTANT: Identity map dependency
 /// The GS base is set to the physical address of this static (via `&raw const PER_CPU`).
 /// This works ONLY because the identity map (phys == virt for first 4 GiB) is active.
 /// Before removing the identity map in Phase 5.4, GS base MUST be changed to the
 /// higher-half virtual address: `phys_to_kernel_virt(&raw const PER_CPU as u64)`.
+///
+/// # SMP Note
+/// For SMP, each CPU needs its own PER_CPU structure. The GS base should be set
+/// per-CPU during AP initialization. For now, single-CPU only.
 static mut PER_CPU: PerCpuData = PerCpuData { user_rsp: 0, kernel_rsp: 0, force_switch: 0 };
 
 /// Update the kernel stack pointer in the per-CPU data.
@@ -422,16 +429,20 @@ pub unsafe extern "C" fn syscall_entry() {
 
         "mov qword ptr gs:[16], 0",             // Clear force_switch
 
-        // Read user state from saved GP register frame
-        // New canonical layout: [rsp+16]=RCX (user RIP), [rsp+80]=R11 (user RFLAGS)
-        "mov rax, [rsp + 16]",                  // RCX = user RIP
-        "mov rbx, [rsp + 80]",                  // R11 = user RFLAGS
-        "mov rcx, gs:[0]",                      // user RSP (saved at syscall entry)
+        // Save original frame base in R10 (clobbered by dispatch, safe to reuse).
+        // The saved frame at [RSP] has the ORIGINAL user registers (saved at
+        // syscall entry before any Rust code ran):
+        //   [RSP+0]=RAX, [RSP+8]=RBX, [RSP+16]=RCX(=user RIP),
+        //   [RSP+24]=RDX, [RSP+32]=RSI, [RSP+40]=RDI, [RSP+48]=RBP,
+        //   [RSP+56]=R8, [RSP+64]=R9, [RSP+72]=R10, [RSP+80]=R11(=user RFLAGS),
+        //   [RSP+88]=R12, [RSP+96]=R13, [RSP+104]=R14, [RSP+112]=R15
+        "mov r10, rsp",                         // R10 = original frame base
 
-        // Construct IRET frame FIRST (below GP regs in memory),
-        // THEN push GP regs on top. This produces the same layout the timer
-        // handler expects: GP regs at [RSP+0..112], IRET at [RSP+120..160].
-        //
+        // Load values we need for IRET frame from original frame
+        "mov rax, [r10 + 16]",                  // RAX = user RIP (from saved RCX slot)
+        "mov rbx, [r10 + 80]",                  // RBX = user RFLAGS (from saved R11 slot)
+        "mov rcx, gs:[0]",                      // RCX = user RSP (saved at syscall entry)
+
         // Push IRET frame (5 qwords) — these end up at HIGHER addresses
         // because the subsequent GP pushes go to LOWER addresses.
         "push 0x23",                            // SS  = user data selector (Ring 3)
@@ -440,23 +451,25 @@ pub unsafe extern "C" fn syscall_entry() {
         "push 0x1B",                            // CS  = user code selector (Ring 3)
         "push rax",                             // RIP = user RIP
 
-        // Push 15 GP regs (R15 first → RAX last). These go to LOWER addresses,
-        // placing them BELOW the IRET frame — matching the timer handler layout.
-        "push r15",
-        "push r14",
-        "push r13",
-        "push r12",
-        "push r11",
-        "push r10",
-        "push r9",
-        "push r8",
-        "push rbp",
-        "push rdi",
-        "push rsi",
-        "push rdx",
-        "push rcx",
-        "push rbx",
-        "push rax",
+        // Push 15 GP regs (R15 first → RAX last) using ORIGINAL saved values
+        // read from [R10 + offset]. R10 still points to the original frame
+        // (pushes only modify RSP, not R10). This produces the same layout
+        // the timer handler expects: GP regs at [RSP+0..112], IRET at [RSP+120..160].
+        "push qword ptr [r10 + 112]",           // R15 (original)
+        "push qword ptr [r10 + 104]",           // R14 (original)
+        "push qword ptr [r10 + 96]",            // R13 (original)
+        "push qword ptr [r10 + 88]",            // R12 (original)
+        "push qword ptr [r10 + 80]",            // R11 (original user RFLAGS)
+        "push qword ptr [r10 + 72]",            // R10 (original)
+        "push qword ptr [r10 + 64]",            // R9  (original)
+        "push qword ptr [r10 + 56]",            // R8  (original)
+        "push qword ptr [r10 + 48]",            // RBP (original)
+        "push qword ptr [r10 + 40]",            // RDI (original)
+        "push qword ptr [r10 + 32]",            // RSI (original)
+        "push qword ptr [r10 + 24]",            // RDX (original)
+        "push qword ptr [r10 + 16]",            // RCX (original user RIP)
+        "push qword ptr [r10 + 8]",             // RBX (original)
+        "push qword ptr [r10 + 0]",             // RAX (original user RAX = syscall number)
         // RSP now points at the GP frame base, with IRET frame immediately
         // above it — identical to the timer interrupt layout.
 
@@ -498,14 +511,6 @@ pub unsafe extern "C" fn syscall_entry() {
         "pop r14",
         "pop r15",
 
-        // ── Checkpoint I: about to iretq ────────────────────────────────
-        "push rax",
-        "push rdi",
-        "mov dil, 0x49",
-        "call {ddbg}",
-        "pop rdi",
-        "pop rax",
-
         // Restore user GS before returning to Ring 3.
         // The syscall_entry swapgs'd at entry (GS_BASE ↔ KERNEL_GS_BASE).
         // We must swap back so Ring 3 sees GS_BASE=0 (user value).
@@ -515,35 +520,42 @@ pub unsafe extern "C" fn syscall_entry() {
         "iretq",
 
         // ── Normal return path: iretq (replaces sysretq for CVE-2012-0217) ──
+        // We must preserve ALL user GP registers. The IRET frame needs the
+        // user RSP from gs:[0], so we use RAX as a temp (save/restore it).
         ".normal_return:",
-        "pop rax",
-        "pop rbx",
+        "pop rax",                              // RAX = user RAX (= syscall return value)
+        "pop rbx",                              // RBX = user RBX
         "pop rcx",                              // RCX = user RIP (saved by CPU on syscall)
-        "pop rdx",
-        "pop rsi",
-        "pop rdi",
-        "pop rbp",
-        "pop r8",
-        "pop r9",
-        "pop r10",
+        "pop rdx",                              // RDX = user RDX
+        "pop rsi",                              // RSI = user RSI
+        "pop rdi",                              // RDI = user RDI
+        "pop rbp",                              // RBP = user RBP
+        "pop r8",                               // R8  = user R8
+        "pop r9",                               // R9  = user R9
+        "pop r10",                              // R10 = user R10
         "pop r11",                              // R11 = user RFLAGS (saved by CPU on syscall)
-        "pop r12",
-        "pop r13",
-        "pop r14",
-        "pop r15",
+        "pop r12",                              // R12 = user R12
+        "pop r13",                              // R13 = user R13
+        "pop r14",                              // R14 = user R14
+        "pop r15",                              // R15 = user R15
 
-        // Read user RSP from per-CPU data BEFORE swapgs (while GS still points to kernel per-CPU)
-        "mov r12, gs:[0]",                      // r12 = user RSP
+        // Save return value, then use RAX as temp for gs:[0] (user RSP).
+        "push rax",                             // Save return value on kernel stack
+        "sub rsp, 40",                          // Make room for IRET frame (5 qwords)
+
+        // Build IRET frame at [rsp+0..32]: RIP, CS, RFLAGS, RSP, SS
+        "mov [rsp + 0],  rcx",                  // RIP = user instruction pointer
+        "mov qword ptr [rsp + 8], 0x1B",        // CS  = user code selector (Ring 3)
+        "mov [rsp + 16], r11",                  // RFLAGS = user RFLAGS
+        "mov rax, gs:[0]",                      // RAX = user RSP (temp, overwrites return value)
+        "mov [rsp + 24], rax",                  // RSP = user stack pointer
+        "mov qword ptr [rsp + 32], 0x23",       // SS  = user data selector (Ring 3)
+
+        // Restore return value (saved at push: [rsp+40])
+        "mov rax, [rsp + 40]",                  // RAX = return value (restored)
 
         "swapgs",                               // Restore user GSBase
 
-        // Construct IRET frame and return via iretq (safe on all Intel CPUs).
-        // sysretq is vulnerable to CVE-2012-0217 on some Intel CPUs.
-        "push 0x23",                            // SS  = user data selector (Ring 3)
-        "push r12",                             // RSP = user stack
-        "push r11",                             // RFLAGS = user RFLAGS
-        "push 0x1B",                            // CS  = user code selector (Ring 3)
-        "push rcx",                             // RIP = user instruction pointer
         "iretq",
 
         dispatch = sym syscall_dispatch,
@@ -589,6 +601,29 @@ pub unsafe extern "C" fn syscall_dispatch(regs: *mut u64) -> u64 {
     let arg2 = *frame.add(3);  // RDX
     let _arg3 = *frame.add(9); // R10
 
+    let pid = {
+        let sched = crate::process::scheduler::SCHEDULER.lock();
+        sched.current_pid().unwrap_or(99)
+    };
+
+    // Trace syscalls from shell (PID 4) and any stdin read
+    let trace = pid == 4 && (syscall_num == 6 || syscall_num == 0);
+    if trace {
+        crate::serial::write_str("[SCALL] enter pid=");
+        crate::serial::write_u64(pid);
+        crate::serial::write_str(" num=");
+        crate::serial::write_u64(syscall_num);
+        crate::serial::write_str(" a0=");
+        crate::serial::write_hex(arg0);
+        crate::serial::write_str(" a1=");
+        crate::serial::write_hex(arg1);
+        crate::serial::write_str(" a2=");
+        crate::serial::write_hex(arg2);
+        crate::serial::write_str(" rax_in=");
+        crate::serial::write_hex(*frame.add(0));
+        crate::serial::write_nl();
+    }
+
     let result = match syscall_num {
         0 => sys_write(arg0, arg1, arg2),
         1 => sys_exit(arg0),
@@ -631,6 +666,18 @@ pub unsafe extern "C" fn syscall_dispatch(regs: *mut u64) -> u64 {
     // Store return value in RAX slot
     *frame.add(0) = result;
 
+    if trace {
+        crate::serial::write_str("[SCALL] exit  pid=");
+        crate::serial::write_u64(pid);
+        crate::serial::write_str(" num=");
+        crate::serial::write_u64(syscall_num);
+        crate::serial::write_str(" result=");
+        crate::serial::write_hex(result);
+        crate::serial::write_str(" force_sw=");
+        crate::serial::write_u64(unsafe { PER_CPU.force_switch });
+        crate::serial::write_nl();
+    }
+
     result
 }
 
@@ -646,9 +693,15 @@ pub unsafe extern "C" fn syscall_dispatch(regs: *mut u64) -> u64 {
 /// Arguments: exit_code
 /// Returns: never (naked handler context-switches before returning to user)
 fn sys_exit(exit_code: u64) -> u64 {
+    let pid = {
+        let sched = crate::process::scheduler::SCHEDULER.lock();
+        sched.current_pid().unwrap_or(0)
+    };
     crate::serial::write_str("[SYSCALL] exit(");
     crate::serial::write_u64(exit_code);
-    crate::serial::write_str(")\n");
+    crate::serial::write_str(") pid=");
+    crate::serial::write_u64(pid);
+    crate::serial::write_nl();
 
     // Mark current process as Zombie
     let current_pid = {
@@ -672,7 +725,20 @@ fn sys_exit(exit_code: u64) -> u64 {
     // Must drop SCHEDULER before calling keyboard_wake (lock ordering).
     // keyboard_wake already handles WaitForChild wake reasons.
     drop(current_pid); // just drop the Option, not a lock
-    crate::process::keyboard_wake();
+
+    // Switch to kernel PML4 before wake_wait_for_child (needs identity map for allocator).
+    let (saved_cr3, _) = x86_64::registers::control::Cr3::read();
+    let kernel_pml4 = crate::memory::kernel_pml4_phys();
+    if saved_cr3.start_address().as_u64() != kernel_pml4 {
+        unsafe { crate::memory::vmm::switch_page_table(crate::memory::PhysAddr::new(kernel_pml4)); }
+    }
+    // Only wake parents waiting for this specific child — NOT keyboard/pipe waiters.
+    crate::process::wake_wait_for_child(pid);
+    if saved_cr3.start_address().as_u64() != kernel_pml4 {
+        unsafe { crate::memory::vmm::switch_page_table(crate::memory::PhysAddr::new(
+            saved_cr3.start_address().as_u64(),
+        )); }
+    }
 
     // Request context switch — the naked handler will call schedule() and
     // switch to the next process instead of doing sysretq back to user mode.
@@ -1148,6 +1214,18 @@ fn sys_write(fd: u64, buf_ptr: u64, count: u64) -> u64 {
 ///
 /// Returns: (read_fd << 32) | write_fd, or negative errno on error
 fn sys_pipe() -> u64 {
+    // Check per-process pipe limit before allocating
+    {
+        let sched = crate::process::scheduler::SCHEDULER.lock();
+        if let Some(pid) = sched.current_pid() {
+            if let Some(ref proc) = sched.processes()[pid as usize] {
+                if proc.pipe_count >= crate::process::process::MAX_PIPES_PER_PROCESS as u8 {
+                    return errno::EMFILE as u64;
+                }
+            }
+        }
+    }
+
     let pipe_idx = match crate::process::alloc_pipe() {
         Some(idx) => idx,
         None => return errno::ENOMEM as u64,
@@ -1173,6 +1251,7 @@ fn sys_pipe() -> u64 {
                     (Some(r), Some(w)) => {
                         proc.fd_types[r] = crate::process::FdType::Pipe { pipe_idx: pipe_idx as u8, writable: false };
                         proc.fd_types[w] = crate::process::FdType::Pipe { pipe_idx: pipe_idx as u8, writable: true };
+                        proc.pipe_count += 2;
                         (r as u64, w as u64)
                     }
                     _ => {
@@ -1182,9 +1261,11 @@ fn sys_pipe() -> u64 {
                     }
                 }
             } else {
+                unsafe { crate::process::free_pipe(pipe_idx); }
                 return errno::ESRCH as u64;
             }
         } else {
+            unsafe { crate::process::free_pipe(pipe_idx); }
             return errno::ESRCH as u64;
         }
     };
@@ -1417,7 +1498,14 @@ fn sys_exec(path_ptr: u64) -> u64 {
         for (pipe_idx, writable) in cloexec_pipes {
             if let Some(ref mut p) = pipes[pipe_idx] {
                 crate::process::pipe::pipe_close(p, writable);
-                let old = p.refcount.fetch_sub(1, core::sync::atomic::Ordering::AcqRel);
+                // Use fetch_update to prevent underflow
+                let old = p.refcount.fetch_update(
+                    core::sync::atomic::Ordering::AcqRel,
+                    core::sync::atomic::Ordering::Acquire,
+                    |current| {
+                        if current > 0 { Some(current - 1) } else { None }
+                    }
+                ).unwrap_or(0);
                 if old == 1 {
                     pipes[pipe_idx] = None;
                 }
@@ -1576,6 +1664,7 @@ fn sys_close(fd: u64) -> u64 {
 
     let mut pipe_ops: alloc::vec::Vec<(usize, bool)> = alloc::vec::Vec::new();
     let mut fs_close_indices: alloc::vec::Vec<usize> = alloc::vec::Vec::new();
+    let mut closed_pipe = false;
     {
         let mut sched = crate::process::scheduler::SCHEDULER.lock();
         if let Some(pid) = sched.current_pid() {
@@ -1590,6 +1679,7 @@ fn sys_close(fd: u64) -> u64 {
                         if pipe_idx < crate::process::MAX_PIPES {
                             pipe_ops.push((pipe_idx, writable));
                         }
+                        closed_pipe = true;
                     }
                     crate::process::FdType::FsFile { index } => {
                         let index = index as usize;
@@ -1605,6 +1695,9 @@ fn sys_close(fd: u64) -> u64 {
                 }
                 proc.fd_types[fd as usize] = crate::process::FdType::None;
                 proc.fd_flags[fd as usize] = 0;
+                if closed_pipe && proc.pipe_count > 0 {
+                    proc.pipe_count -= 1;
+                }
             } else {
                 return errno::ESRCH as u64;
             }
@@ -1617,7 +1710,14 @@ fn sys_close(fd: u64) -> u64 {
         let mut pipes = crate::process::PIPES.lock();
         if let Some(ref mut p) = pipes[pipe_idx] {
             crate::process::pipe::pipe_close(p, writable);
-            let old = p.refcount.fetch_sub(1, core::sync::atomic::Ordering::AcqRel);
+            // Use fetch_update to prevent underflow
+            let old = p.refcount.fetch_update(
+                core::sync::atomic::Ordering::AcqRel,
+                core::sync::atomic::Ordering::Acquire,
+                |current| {
+                    if current > 0 { Some(current - 1) } else { None }
+                }
+            ).unwrap_or(0);
             if old == 1 {
                 pipes[pipe_idx] = None;
             }
@@ -2308,7 +2408,14 @@ fn sys_execve(path_ptr: u64, argc: u64, argv_ptr: u64) -> u64 {
         for (pipe_idx, writable) in cloexec_pipes {
             if let Some(ref mut p) = pipes[pipe_idx] {
                 crate::process::pipe::pipe_close(p, writable);
-                let old = p.refcount.fetch_sub(1, core::sync::atomic::Ordering::AcqRel);
+                // Use fetch_update to prevent underflow
+                let old = p.refcount.fetch_update(
+                    core::sync::atomic::Ordering::AcqRel,
+                    core::sync::atomic::Ordering::Acquire,
+                    |current| {
+                        if current > 0 { Some(current - 1) } else { None }
+                    }
+                ).unwrap_or(0);
                 if old == 1 { pipes[pipe_idx] = None; }
             }
         }

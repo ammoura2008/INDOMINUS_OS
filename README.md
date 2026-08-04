@@ -233,6 +233,14 @@ The timer handler runs entirely in Ring 0 (interrupt context).
 
 ## Build & Run
 
+### Workspace tooling
+
+This repository now includes a basic VS Code workflow for building, debugging, and tracking progress:
+- VS Code tasks for build/run/test/clean actions
+- Debug profiles for QEMU/GDB
+- A simple CI workflow in [.github/workflows/ci.yml](.github/workflows/ci.yml)
+- A lightweight roadmap board in [docs/ROADMAP_BOARD.md](docs/ROADMAP_BOARD.md)
+
 ### Prerequisites
 
 - **Rust nightly** with `rust-src` component
@@ -247,6 +255,9 @@ powershell -ExecutionPolicy Bypass -File "build.ps1" build
 
 # Run in QEMU
 powershell -ExecutionPolicy Bypass -File "build.ps1" run
+
+# Validate the workspace scaffolding
+python tools/verify_windows_build.py
 
 # Run regression tests
 python tools/regression_test.py --iterations 10 --timeout 45

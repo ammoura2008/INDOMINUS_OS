@@ -155,10 +155,16 @@ pub struct Process {
     /// Process group ID (PGID). All processes in a group share a PGID.
     /// PGID == PID means this process is the group leader.
     pub pgid: u64,
+    /// Number of pipe FDs currently open by this process.
+    /// Used to enforce per-process pipe limits.
+    pub pipe_count: u8,
 }
 
 /// Maximum number of mmap regions per process.
 pub const MAX_MMAP_REGIONS: usize = 16;
+
+/// Maximum number of pipes per process (prevents one process from exhausting system-wide pipe slots).
+pub const MAX_PIPES_PER_PROCESS: usize = 8;
 
 impl Process {
     /// Create a new kernel-mode process (Ring 0).
@@ -209,6 +215,7 @@ impl Process {
             signals_blocked: 0,
             signal_handlers: [0; 32],
             pgid: 0,
+            pipe_count: 0,
         })
     }
 
@@ -262,6 +269,7 @@ impl Process {
             signals_blocked: 0,
             signal_handlers: [0; 32],
             pgid: 0,
+            pipe_count: 0,
         })
     }
 
@@ -337,7 +345,15 @@ impl Drop for Process {
                 let pipe_idx = *pipe_idx;
                 if let Some(ref mut p) = pipes[pipe_idx] {
                     crate::process::pipe::pipe_close(p, *writable);
-                    let old = p.refcount.fetch_sub(1, core::sync::atomic::Ordering::AcqRel);
+                    // Atomically decrement refcount, but only if > 0 (prevent underflow)
+                    let old = p.refcount.fetch_update(
+                        core::sync::atomic::Ordering::AcqRel,
+                        core::sync::atomic::Ordering::Acquire,
+                        |current| {
+                            if current > 0 { Some(current - 1) } else { None }
+                        }
+                    ).unwrap_or(0);
+                    // If refcount was 1 before decrement (now 0), free the pipe slot
                     if old == 1 {
                         pipes[pipe_idx] = None;
                     }

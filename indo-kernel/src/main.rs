@@ -2165,6 +2165,52 @@ fn phase11_fat_write_test() {
     write_str_nl("[T] ==================================================");
 }
 
+/// Phase 12: Register Preservation Test.
+///
+/// Spawns test_reg which verifies that all GP registers survive context
+/// switches across pipe reads, sleep, and fork.
+fn phase12_register_test() {
+    write_str_nl("[T] ==================================================");
+    write_str_nl("[T] Phase 12: Register Preservation Test");
+    write_str_nl("[T] ==================================================");
+
+    let test_elf = match crate::vfs::vfs().read_file("/bin/test_reg") {
+        Ok(data) => data,
+        Err(e) => {
+            write_str("[T]   SKIP: /bin/test_reg not found, errno=");
+            write_hex(e.to_errno() as u64);
+            write_nl();
+            return;
+        }
+    };
+
+    write_str("[T]   test_reg binary size: ");
+    write_hex(test_elf.len() as u64);
+    write_nl();
+
+    match crate::process::spawn_user(&test_elf, Some(1)) {
+        Some(pid) => {
+            write_str("[T]   Spawned test_reg PID=");
+            write_hex(pid);
+            write_nl();
+            write_str_nl("[T]   PASS: test_reg spawned successfully");
+        }
+        None => {
+            write_str_nl("[T]   FAIL: spawn_user returned None for test_reg");
+        }
+    }
+
+    for _ in 0..50 {
+        unsafe { crate::syscall::set_force_switch(); }
+        core::hint::spin_loop();
+    }
+
+    write_str_nl("[T] ==================================================");
+    write_str_nl("[T] Phase 12: Register Preservation Test — test running in userspace");
+    write_str_nl("[T] Check serial output for register test results");
+    write_str_nl("[T] ==================================================");
+}
+
 /// Regression test: KERNEL_GS_BASE preservation across context switches.
 ///
 /// Reproduces the exact scenario that caused KERNEL_GS_BASE corruption:
@@ -2840,6 +2886,9 @@ pub extern "sysv64" fn kernel_main(boot_info: *const BootInfo) -> ! {
         }
     }
 
+    // Re-spawn test_reg AFTER cleanup so it actually runs with the scheduler
+    phase12_register_test();
+
     // Regression: KERNEL_GS_BASE preservation across context switches.
     // Spawn stress tests BEFORE init/shell so they run concurrently.
     // If KERNEL_GS_BASE is corrupted, they page-fault at CR2=0x0 and get killed.
@@ -2854,6 +2903,7 @@ pub extern "sysv64" fn kernel_main(boot_info: *const BootInfo) -> ! {
             write_str_nl(" bytes");
             match crate::process::spawn_user(&init_elf, None) {
                 Some(pid) => {
+                    crate::process::scheduler::INIT_PID.store(pid, core::sync::atomic::Ordering::Relaxed);
                     write_str("[KERNEL] Init spawned as PID=");
                     write_hex(pid);
                     write_nl();

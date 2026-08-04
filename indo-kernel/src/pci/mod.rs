@@ -226,14 +226,19 @@ fn read_device(bus: u8, device: u8, function: u8) -> Option<PciDevice> {
     }
 }
 
-/// Enumerate all PCI devices on the bus
+/// Enumerate all PCI devices on the bus.
+///
+/// Scans bus 0 first (where 99% of devices live). If devices are found,
+/// continues scanning additional buses. Stops after 8 consecutive empty buses.
 pub fn enumerate() {
     crate::serial::write_str_nl("[PCI] Enumerating PCI bus...");
 
     let mut devices = PCI_DEVICES.lock();
     devices.clear();
 
+    let mut empty_bus_streak = 0u32;
     for bus in 0..=255u16 {
+        let mut found_on_bus = false;
         for device in 0..32u8 {
             // Try function 0 first
             if let Some(dev) = read_device(bus as u8, device, 0) {
@@ -246,6 +251,15 @@ pub fn enumerate() {
                     }
                 }
                 devices.push(dev);
+                found_on_bus = true;
+            }
+        }
+        if found_on_bus {
+            empty_bus_streak = 0;
+        } else {
+            empty_bus_streak += 1;
+            if empty_bus_streak >= 8 {
+                break;
             }
         }
     }

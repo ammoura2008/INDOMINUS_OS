@@ -21,9 +21,13 @@
 //! It only runs when all other tasks are Zombie or not Ready.
 
 use super::process::{Process, ProcessState, Pid, MAX_PROCESSES, WakeReason};
+use core::sync::atomic::{AtomicU64, Ordering};
 
 /// Time quantum in ticks (5 ticks = 50ms at 100 Hz).
 const DEFAULT_QUANTUM: u64 = 5;
+
+/// PID of the real init (reaper) process.  Set once during boot.
+pub static INIT_PID: AtomicU64 = AtomicU64::new(0);
 
 /// Global scheduler state.
 pub static SCHEDULER: spin::Lazy<spin::Mutex<Scheduler>> = spin::Lazy::new(|| {
@@ -177,12 +181,32 @@ impl Scheduler {
         self.current_stack_pointer()
     }
 
-    fn current_stack_pointer(&self) -> u64 {
+    fn current_stack_pointer(&mut self) -> u64 {
         if let Some(pid) = self.current_pid {
-            self.processes[pid as usize]
-                .as_ref()
-                .map(|p| p.stack_pointer)
-                .unwrap_or(0)
+            if let Some(ref proc) = self.processes[pid as usize] {
+                proc.stack_pointer
+            } else {
+                // Process slot is empty but current_pid points to it — dangling.
+                // Clear current_pid and find a new process to run.
+                crate::serial::write_str("[SCHED] WARNING: current_pid=");
+                crate::serial::write_u64(pid);
+                crate::serial::write_str(" points to empty slot, clearing\n");
+                self.current_pid = None;
+                // Try to find a ready process
+                if let Some(next) = self.find_next_ready(0) {
+                    let sp = self.processes[next as usize]
+                        .as_ref()
+                        .map(|p| p.stack_pointer)
+                        .unwrap_or(0);
+                    self.current_pid = Some(next);
+                    if let Some(ref mut proc) = self.processes_mut()[next as usize] {
+                        proc.state = ProcessState::Running;
+                    }
+                    sp
+                } else {
+                    0
+                }
+            }
         } else {
             0
         }
@@ -503,15 +527,18 @@ impl Scheduler {
     /// Called before marking a process as Zombie, so orphans are not leaked.
     /// Also sets the children's `parent_generation` to PID 1's generation (always 1).
     pub fn reparent_orphans_to_init(&mut self, old_parent: Pid) {
-        let init_gen = 1; // PID 1 generation is always 1
+        let init_pid = super::scheduler::INIT_PID.load(Ordering::Relaxed);
+        let init_gen = self.generations[init_pid as usize];
         for i in 0..MAX_PROCESSES as u64 {
             if let Some(Some(proc)) = self.processes.get_mut(i as usize) {
                 if proc.parent_pid == Some(old_parent) {
-                    proc.parent_pid = Some(1);
+                    proc.parent_pid = Some(init_pid);
                     proc.parent_generation = init_gen;
                     crate::serial::write_str("[SCHED] Re-parented PID ");
                     crate::serial::write_u64(i);
-                    crate::serial::write_str(" to init (PID 1)");
+                    crate::serial::write_str(" to init (PID ");
+                    crate::serial::write_u64(init_pid);
+                    crate::serial::write_str(")");
                     crate::serial::write_nl();
                 }
             }
@@ -581,6 +608,9 @@ impl Scheduler {
                                 if pproc.generation == parent_gen {
                                     if let WakeReason::WaitForChild { child_pid } = pproc.wake_reason {
                                         if child_pid == pid as u64 {
+                                            crate::serial::write_str("[WAKE] pid=");
+                                            crate::serial::write_u64(parent);
+                                            crate::serial::write_str(" -> Ready (deliver_signal:child_killed)\n");
                                             pproc.state = ProcessState::Ready;
                                             pproc.wake_reason = WakeReason::None;
                                         }
@@ -610,6 +640,18 @@ impl Scheduler {
                             let iret_base = sp + 15 * 8;
                             let orig_rip = core::ptr::read_volatile(iret_base as *const u64);
                             let mut orig_rsp_val = core::ptr::read_volatile((iret_base + 24) as *const u64);
+
+                            // Validate user stack pointer before modifying it
+                            // Check: no underflow, must be in user space (lower half canonical)
+                            const USER_ADDR_MAX: u64 = 0x0000_7FFF_FFFF_FFFF;
+                            if orig_rsp_val < 8 || orig_rsp_val - 8 > USER_ADDR_MAX {
+                                // Invalid user RSP — kill the process instead of corrupting memory
+                                proc.state = ProcessState::Zombie;
+                                proc.exit_code = 11; // SIGSEGV
+                                proc.terminated_by_signal = true;
+                                proc.signals_pending &= !(1 << (signum - 1));
+                                return;
+                            }
 
                             // Decrement user RSP by 8 and write orig_rip there (return address)
                             orig_rsp_val = orig_rsp_val.wrapping_sub(8);

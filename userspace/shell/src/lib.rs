@@ -352,6 +352,35 @@ fn write_str_num(n: u64) {
     sys::write(1, &buf[i..]);
 }
 
+fn write_i64(n: i64) {
+    if n < 0 {
+        sys::write(1, b"-");
+        write_str_num((-(n as i128)) as u64);
+    } else {
+        write_str_num(n as u64);
+    }
+}
+
+fn write_hex(val: u64) {
+    sys::write(1, b"0x");
+    let mut buf = [0u8; 16];
+    let hex = b"0123456789abcdef";
+    let mut i = 0;
+    let mut v = val;
+    if v == 0 {
+        buf[0] = b'0';
+        i = 1;
+    } else {
+        while v > 0 {
+            buf[i] = hex[(v & 0xF) as usize];
+            v >>= 4;
+            i += 1;
+        }
+        buf[..i].reverse();
+    }
+    sys::write(1, &buf[..i]);
+}
+
 fn parse_decimal(bytes: &[u8]) -> u64 {
     let mut n: u64 = 0;
     for &b in bytes {
@@ -1021,6 +1050,7 @@ fn execute_pipeline(cmds: &[ParsedCmd], cmd_count: usize) -> i64 {
 
 #[no_mangle]
 pub extern "C" fn shell_main(_argc: u64, _argv: u64) -> ! {
+    sys::write(1, b"[SHELL] shell_main entered\n");
     write_str("Indominus OS Shell v1.0\n");
     write_str("Type 'help' for commands, 'exit' to quit.\n\n");
 
@@ -1035,11 +1065,15 @@ pub extern "C" fn shell_main(_argc: u64, _argv: u64) -> ! {
     let mut cmds = [ParsedCmd::new(); MAX_CMDS];
 
     loop {
+        sys::write(1, b"[SHELL] loop iteration\n");
         write_str(cwd_str());
         write_str(" $ ");
 
         let n = sys::read(0, &mut input);
-        if sys::is_error(n) || n == 0 { continue; }
+
+        if sys::is_error(n) || n == 0 {
+            continue;
+        }
         let line = &input[..n as usize];
 
         let mut end = line.len();

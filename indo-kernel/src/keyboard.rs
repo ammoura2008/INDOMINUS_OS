@@ -122,6 +122,13 @@ pub fn line_discipline_input(byte: u8) {
     match byte {
         b'\n' => {
             // Enter — commit the line
+            crate::serial::write_str("[KBD] Enter: e=");
+            crate::serial::write_u64(LINE_E.load(Ordering::Relaxed) as u64);
+            crate::serial::write_str(" w=");
+            crate::serial::write_u64(LINE_W.load(Ordering::Relaxed) as u64);
+            crate::serial::write_str(" r=");
+            crate::serial::write_u64(LINE_R.load(Ordering::Relaxed) as u64);
+            crate::serial::write_nl();
             // Echo newline to serial
             crate::serial::write_byte(b'\n');
             // Advance write index to edit index (committed line)
@@ -188,6 +195,13 @@ pub fn line_discipline_input(byte: u8) {
 /// force_switch path context-switch. The process resumes in user mode and
 /// retries the syscall.
 pub fn read_line(buf: &mut [u8]) -> usize {
+    crate::serial::write_str("[KBD-READ] entry r=");
+    crate::serial::write_u64(LINE_R.load(Ordering::Relaxed) as u64);
+    crate::serial::write_str(" w=");
+    crate::serial::write_u64(LINE_W.load(Ordering::Relaxed) as u64);
+    crate::serial::write_str(" e=");
+    crate::serial::write_u64(LINE_E.load(Ordering::Relaxed) as u64);
+    crate::serial::write_nl();
     let r = LINE_R.load(Ordering::Relaxed);
     let w = LINE_W.load(Ordering::Relaxed);
 
@@ -202,13 +216,17 @@ pub fn read_line(buf: &mut [u8]) -> usize {
                 to_read,
             );
         }
-        LINE_R.store(r + to_read, Ordering::Relaxed);
 
-        // If we've consumed all committed data, reset the buffer (circular)
-        if LINE_R.load(Ordering::Relaxed) == LINE_W.load(Ordering::Relaxed) {
-            LINE_R.store(0, Ordering::Relaxed);
-            LINE_W.store(0, Ordering::Relaxed);
-            LINE_E.store(0, Ordering::Relaxed);
+        LINE_R.store(r + to_read, Ordering::Release);
+
+        // If we've consumed all committed data, reset the buffer (circular).
+        // Only reset if no new data is being edited (e == w means no partial line).
+        if LINE_R.load(Ordering::Acquire) == LINE_W.load(Ordering::Acquire)
+            && LINE_E.load(Ordering::Acquire) == LINE_W.load(Ordering::Acquire)
+        {
+            LINE_R.store(0, Ordering::Release);
+            LINE_W.store(0, Ordering::Release);
+            LINE_E.store(0, Ordering::Release);
         }
 
         return to_read;
@@ -228,6 +246,39 @@ pub fn read_line(buf: &mut [u8]) -> usize {
         }
     }
     crate::process::yield_now();
+
+    // After being woken, re-check: data may have arrived while we were blocked.
+    crate::serial::write_str("[KBD-RECHECK] r=");
+    crate::serial::write_u64(LINE_R.load(Ordering::Acquire) as u64);
+    crate::serial::write_str(" w=");
+    crate::serial::write_u64(LINE_W.load(Ordering::Acquire) as u64);
+    crate::serial::write_str(" e=");
+    crate::serial::write_u64(LINE_E.load(Ordering::Acquire) as u64);
+    crate::serial::write_nl();
+    let r = LINE_R.load(Ordering::Acquire);
+    let w = LINE_W.load(Ordering::Acquire);
+    if r < w {
+        let available = w - r;
+        let to_read = core::cmp::min(buf.len(), available);
+        unsafe {
+            core::ptr::copy_nonoverlapping(
+                (*LINE_BUF.get()).as_mut_ptr().add(r),
+                buf.as_mut_ptr(),
+                to_read,
+            );
+        }
+        LINE_R.store(r + to_read, Ordering::Release);
+        if LINE_R.load(Ordering::Acquire) == LINE_W.load(Ordering::Acquire)
+            && LINE_E.load(Ordering::Acquire) == LINE_W.load(Ordering::Acquire)
+        {
+            LINE_R.store(0, Ordering::Release);
+            LINE_W.store(0, Ordering::Release);
+            LINE_E.store(0, Ordering::Release);
+        }
+        return to_read;
+    }
+
+    crate::serial::write_str("[KBD] read_line returning 0 (no data after recheck)\n");
     0
 }
 

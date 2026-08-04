@@ -235,6 +235,7 @@ pub fn free_frame(frame: PhysAddr) {
 /// Increment the reference count of a physical frame.
 ///
 /// Called when a page table entry is duplicated (fork, dup).
+/// Uses saturating arithmetic — refcount caps at 255 (u8 max).
 ///
 /// # Safety
 /// `frame` must be currently allocated.
@@ -243,8 +244,16 @@ pub fn incref(frame: PhysAddr) {
     unsafe {
         assert!(index < *TOTAL_FRAMES.get(), "frame address out of range");
         assert!(bitmap_test(index), "incref on unallocated frame");
-        if (*REFCOUNTS.get())[index] < 255 {
-            (*REFCOUNTS.get())[index] += 1;
+        let old = (*REFCOUNTS.get())[index];
+        if old < 255 {
+            (*REFCOUNTS.get())[index] = old.saturating_add(1);
+        } else {
+            // Refcount at maximum — further shares are silently ignored.
+            // This prevents underflow on decref but means the frame won't
+            // be freed until all 255 holders release it.
+            crate::serial::write_str("[PMM] WARN: refcount saturated at 255 for frame 0x");
+            crate::serial::write_hex(frame.as_u64());
+            crate::serial::write_nl();
         }
     }
 }

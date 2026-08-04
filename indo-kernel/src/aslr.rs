@@ -4,7 +4,7 @@
 //! layout. Each process gets randomized stack, mmap, and heap bases to
 //! defeat predictable memory layout attacks.
 
-use core::sync::atomic::{AtomicU64, Ordering};
+
 
 /// Global PRNG state, seeded from PIT tick count during boot.
 static mut PRNG_STATE: u64 = 0;

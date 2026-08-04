@@ -42,7 +42,8 @@ pub const PIT_TICK_HZ: u32 = 100;
 
 /// Global tick counter. Incremented by the timer interrupt handler.
 /// Uses atomic for safe access from interrupt context and future SMP.
-static mut TICK_COUNT: u64 = 0;
+use core::sync::atomic::{AtomicU64, Ordering};
+static TICK_COUNT: AtomicU64 = AtomicU64::new(0);
 
 /// Initialize the PIT Channel 0 for periodic interrupts.
 ///
@@ -83,14 +84,14 @@ pub fn init() {
 /// # Safety
 /// Must be called from interrupt context with interrupts disabled.
 #[inline]
-pub unsafe fn on_tick() {
-    TICK_COUNT += 1;
+pub fn on_tick() {
+    TICK_COUNT.fetch_add(1, Ordering::Relaxed);
 }
 
 /// Get the current tick count since boot.
 ///
 /// Useful for timing, sleep, and scheduler quantum tracking.
 pub fn tick_count() -> u64 {
-    unsafe { TICK_COUNT }
+    TICK_COUNT.load(Ordering::Relaxed)
 }
 

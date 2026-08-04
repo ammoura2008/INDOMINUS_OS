@@ -109,15 +109,15 @@ pub fn spawn_user(elf_data: &[u8], parent: Option<Pid>) -> Option<Pid> {
     let stack_top = crate::aslr::randomize_stack_base();
     let guard_page_frame = vmm::PmmFrameAllocator.allocate_frame()
         .expect("PMM: out of memory for user stack guard page");
-    let guard_page_virt = VirtAddr::new(stack_top - 5 * crate::memory::PAGE_SIZE);
+    let guard_page_virt = VirtAddr::new(stack_top - 9 * crate::memory::PAGE_SIZE);
     let guard_flags = PageTableFlags::PRESENT; // No USER_ACCESSIBLE, no WRITABLE
     vmm::map_page(user_pml4, guard_page_virt, memory::PhysAddr::new(guard_page_frame.start_address().as_u64()), guard_flags);
 
-    // Map 4 stack pages (16 KiB)
-    for i in 0..4 {
+    // Map 8 stack pages (32 KiB)
+    for i in 0..8 {
         let frame = vmm::PmmFrameAllocator.allocate_frame()
             .expect("PMM: out of memory for user stack page");
-        let offset = (4 - i) * crate::memory::PAGE_SIZE;
+        let offset = (8 - i) * crate::memory::PAGE_SIZE;
         let stack_virt = VirtAddr::new(stack_top - offset);
         let stack_flags = PageTableFlags::PRESENT
             | PageTableFlags::WRITABLE
@@ -134,7 +134,7 @@ pub fn spawn_user(elf_data: &[u8], parent: Option<Pid>) -> Option<Pid> {
     crate::serial::write_str(", stack_top=");
     crate::serial::write_hex(stack_top);
     crate::serial::write_str(", stack_guard=");
-    crate::serial::write_hex(stack_top - 5 * crate::memory::PAGE_SIZE);
+    crate::serial::write_hex(stack_top - 9 * crate::memory::PAGE_SIZE);
     crate::serial::write_str(", pml4=");
     crate::serial::write_hex(user_pml4.as_u64());
     crate::serial::write_nl();
@@ -179,12 +179,16 @@ pub fn start_scheduler() -> ! {
 /// Wake all processes blocked on keyboard input or pipe I/O.
 ///
 /// Called by the keyboard IRQ handler and pipe write/read operations.
+/// Uses a fixed-size array instead of Vec to avoid heap allocation
+/// in interrupt context (PIC allocator requires identity map).
 pub fn keyboard_wake() {
     let mut sched = SCHEDULER.lock();
     let pipes = PIPES.lock();
 
     // Phase 1: Collect which processes need waking (avoid borrow conflicts)
-    let mut wake_list: alloc::vec::Vec<usize> = alloc::vec::Vec::new();
+    // Fixed-size array: max 32 processes, no heap allocation
+    let mut wake_list: [usize; process::MAX_PROCESSES] = [0; process::MAX_PROCESSES];
+    let mut wake_count: usize = 0;
 
     for i in 0..process::MAX_PROCESSES {
         if let Some(ref proc) = sched.processes()[i] {
@@ -193,7 +197,10 @@ pub fn keyboard_wake() {
             }
             match proc.wake_reason {
                 process::WakeReason::Keyboard => {
-                    wake_list.push(i);
+                    if wake_count < process::MAX_PROCESSES {
+                        wake_list[wake_count] = i;
+                        wake_count += 1;
+                    }
                 }
                 process::WakeReason::PipeRead { pipe_idx } => {
                     let idx = pipe_idx as usize;
@@ -202,7 +209,10 @@ pub fn keyboard_wake() {
                             let nread = p.nread.load(core::sync::atomic::Ordering::Relaxed);
                             let nwrite = p.nwrite.load(core::sync::atomic::Ordering::Relaxed);
                             if nread < nwrite || !p.write_open.load(core::sync::atomic::Ordering::Relaxed) {
-                                wake_list.push(i);
+                                if wake_count < process::MAX_PROCESSES {
+                                    wake_list[wake_count] = i;
+                                    wake_count += 1;
+                                }
                             }
                         }
                     }
@@ -211,10 +221,15 @@ pub fn keyboard_wake() {
                     let idx = pipe_idx as usize;
                     if idx < MAX_PIPES {
                         if let Some(ref p) = pipes[idx] {
+                            // Wake if: pipe has space, OR read end is closed (broken pipe)
                             let nread = p.nread.load(core::sync::atomic::Ordering::Relaxed);
                             let nwrite = p.nwrite.load(core::sync::atomic::Ordering::Relaxed);
-                            if nwrite < nread.wrapping_add(pipe::PIPE_SIZE as u32) {
-                                wake_list.push(i);
+                            let read_open = p.read_open.load(core::sync::atomic::Ordering::Relaxed);
+                            if nwrite < nread.wrapping_add(pipe::PIPE_SIZE as u32) || !read_open {
+                                if wake_count < process::MAX_PROCESSES {
+                                    wake_list[wake_count] = i;
+                                    wake_count += 1;
+                                }
                             }
                         }
                     }
@@ -226,7 +241,10 @@ pub fn keyboard_wake() {
                             .as_ref()
                             .map_or(false, |c| c.state == process::ProcessState::Zombie);
                         if child_is_zombie {
-                            wake_list.push(i);
+                            if wake_count < process::MAX_PROCESSES {
+                                wake_list[wake_count] = i;
+                                wake_count += 1;
+                            }
                         }
                     }
                 }
@@ -236,12 +254,23 @@ pub fn keyboard_wake() {
     }
 
     // Phase 2: Wake the collected processes
-    for pid in wake_list {
+    for idx in 0..wake_count {
+        let pid = wake_list[idx];
         if let Some(Some(ref mut proc)) = sched.processes_mut().get_mut(pid) {
+            log_wake(pid as u64, "keyboard_wake");
             proc.state = process::ProcessState::Ready;
             proc.wake_reason = process::WakeReason::None;
         }
     }
+}
+
+/// Log a BLOCKED→READY transition. Call from every wake site.
+fn log_wake(pid: u64, caller: &str) {
+    crate::serial::write_str("[WAKE] pid=");
+    crate::serial::write_u64(pid);
+    crate::serial::write_str(" -> Ready (");
+    crate::serial::write_str(caller);
+    crate::serial::write_str(")\n");
 }
 
 /// Yield the CPU to the next process.
@@ -263,14 +292,52 @@ pub fn yield_now() {
     unsafe { crate::syscall::set_force_switch(); }
 }
 
+/// Wake processes blocked in WaitForChild for a specific child PID.
+///
+/// Called from sys_exit after a process becomes zombie. Only wakes parents
+/// whose WaitForChild child_pid matches the zombie's PID. Does NOT wake
+/// Keyboard or Pipe-waiting processes (that's keyboard_wake's job).
+pub fn wake_wait_for_child(zombie_pid: u64) {
+    let mut sched = SCHEDULER.lock();
+    let mut wake_list: [usize; process::MAX_PROCESSES] = [0; process::MAX_PROCESSES];
+    let mut wake_count: usize = 0;
+
+    for i in 1..process::MAX_PROCESSES {
+        if let Some(ref proc) = sched.processes()[i] {
+            if proc.state != process::ProcessState::Blocked {
+                continue;
+            }
+            if let process::WakeReason::WaitForChild { child_pid } = proc.wake_reason {
+                if child_pid == zombie_pid || child_pid == 0 {
+                    if wake_count < process::MAX_PROCESSES {
+                        wake_list[wake_count] = i;
+                        wake_count += 1;
+                    }
+                }
+            }
+        }
+    }
+
+    for idx in 0..wake_count {
+        let pid = wake_list[idx];
+        if let Some(Some(ref mut proc)) = sched.processes_mut().get_mut(pid) {
+            log_wake(pid as u64, "wake_wait_for_child");
+            proc.state = process::ProcessState::Ready;
+            proc.wake_reason = WakeReason::None;
+        }
+    }
+}
+
 /// Send a signal to all processes in the foreground process group.
 ///
 /// Finds the running user process with the lowest PID (the foreground process)
 /// and sends the signal to all processes sharing its PGID.
 /// SIGINT (2) and SIGQUIT (3) kill the process. SIGTSTP (20) stops it.
+///
+/// After killing/stopping processes, wakes any processes blocked on keyboard
+/// or pipe I/O that may now be ready. Also wakes parents waiting for killed
+/// children.
 pub fn send_signal_to_fg(signal: u8) {
-    use core::sync::atomic::Ordering;
-
     let mut sched = SCHEDULER.lock();
 
     // Find the foreground PGID: the PGID of the lowest-PID running user process
@@ -299,17 +366,31 @@ pub fn send_signal_to_fg(signal: u8) {
     };
 
     if let Some(fg_pgid) = fg_pgid {
+        // Collect PIDs of processes we're about to kill (for waking parents)
+        let mut killed_pids: [u64; crate::process::process::MAX_PROCESSES] = [0; crate::process::process::MAX_PROCESSES];
+        let mut killed_count: usize = 0;
+
         for i in 1..crate::process::process::MAX_PROCESSES {
             if let Some(ref mut proc) = sched.processes_mut()[i] {
                 if proc.is_user && proc.pgid == fg_pgid
                     && proc.state != crate::process::process::ProcessState::Zombie
                 {
+                    // Check if signal is blocked in this process
+                    let signal_bit = 1u32 << (signal - 1);
+                    if proc.signals_blocked & signal_bit != 0 {
+                        continue; // Signal blocked, skip this process
+                    }
+
                     match signal {
                         2 | 3 => {
                             // SIGINT or SIGQUIT: kill the process
                             proc.state = crate::process::process::ProcessState::Zombie;
                             proc.exit_code = signal as u64;
                             proc.terminated_by_signal = true;
+                            if killed_count < crate::process::process::MAX_PROCESSES {
+                                killed_pids[killed_count] = proc.pid;
+                                killed_count += 1;
+                            }
                         }
                         20 => {
                             // SIGTSTP: stop the process (for WUNTRACED)
@@ -322,6 +403,7 @@ pub fn send_signal_to_fg(signal: u8) {
                             if proc.state == crate::process::process::ProcessState::Blocked
                                 && proc.wake_reason == crate::process::process::WakeReason::None
                             {
+                                log_wake(proc.pid, "send_signal_to_fg:SIGCONT");
                                 proc.state = crate::process::process::ProcessState::Ready;
                             }
                         }
@@ -330,8 +412,70 @@ pub fn send_signal_to_fg(signal: u8) {
                 }
             }
         }
+
+        // Wake parents waiting for killed children
+        for killed_pid in &killed_pids[..killed_count] {
+            for i in 1..crate::process::process::MAX_PROCESSES {
+                if let Some(ref mut proc) = sched.processes_mut()[i] {
+                    if let crate::process::process::WakeReason::WaitForChild { child_pid } = proc.wake_reason {
+                        if child_pid == *killed_pid || child_pid == 0 {
+                            log_wake(proc.pid, "send_signal_to_fg:killed_child");
+                            proc.state = crate::process::process::ProcessState::Ready;
+                            proc.wake_reason = crate::process::process::WakeReason::None;
+                        }
+                    }
+                }
+            }
+        }
     }
 
-    drop(sched);
-    crate::process::keyboard_wake();
+    // Inline wake logic (instead of calling keyboard_wake which would deadlock
+    // by trying to re-acquire the SCHEDULER lock we already hold)
+    let pipes = PIPES.lock();
+    for i in 0..crate::process::process::MAX_PROCESSES {
+        if let Some(ref proc) = sched.processes()[i] {
+            if proc.state != crate::process::process::ProcessState::Blocked {
+                continue;
+            }
+            let should_wake = match proc.wake_reason {
+                crate::process::process::WakeReason::Keyboard => true,
+                crate::process::process::WakeReason::PipeRead { pipe_idx } => {
+                    let idx = pipe_idx as usize;
+                    if idx < MAX_PIPES {
+                        if let Some(ref p) = pipes[idx] {
+                            let nread = p.nread.load(core::sync::atomic::Ordering::Relaxed);
+                            let nwrite = p.nwrite.load(core::sync::atomic::Ordering::Relaxed);
+                            nread < nwrite || !p.write_open.load(core::sync::atomic::Ordering::Relaxed)
+                        } else {
+                            false
+                        }
+                    } else {
+                        false
+                    }
+                }
+                crate::process::process::WakeReason::PipeWrite { pipe_idx } => {
+                    let idx = pipe_idx as usize;
+                    if idx < MAX_PIPES {
+                        if let Some(ref p) = pipes[idx] {
+                            let nread = p.nread.load(core::sync::atomic::Ordering::Relaxed);
+                            let nwrite = p.nwrite.load(core::sync::atomic::Ordering::Relaxed);
+                            nwrite < nread.wrapping_add(pipe::PIPE_SIZE as u32)
+                        } else {
+                            false
+                        }
+                    } else {
+                        false
+                    }
+                }
+                _ => false,
+            };
+            if should_wake {
+                if let Some(Some(ref mut proc)) = sched.processes_mut().get_mut(i) {
+                    log_wake(proc.pid, "send_signal_to_fg:inline_wake");
+                    proc.state = crate::process::process::ProcessState::Ready;
+                    proc.wake_reason = crate::process::process::WakeReason::None;
+                }
+            }
+        }
+    }
 }
