@@ -1074,6 +1074,8 @@ pub extern "C" fn shell_main(_argc: u64, _argv: u64) -> ! {
         if sys::is_error(n) || n == 0 {
             continue;
         }
+        // Clamp n to buffer length to prevent panic from corrupted return values
+        let n = if n as usize > input.len() { input.len() as i64 } else { n };
         let line = &input[..n as usize];
 
         let mut end = line.len();

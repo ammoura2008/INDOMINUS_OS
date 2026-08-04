@@ -39,7 +39,7 @@ proc.stdin.write(b"test_ctxswitch\n")
 proc.stdin.flush()
 
 # Wait for tests to complete - give more time
-time.sleep(45)
+time.sleep(60)
 
 proc.kill()
 t.join(timeout=5)

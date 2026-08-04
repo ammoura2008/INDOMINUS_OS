@@ -396,11 +396,21 @@ pub unsafe extern "C" fn syscall_entry() {
         // ── force_switch path: context switch ─────────────────────────────
         // sys_exit or sys_yield requested a context switch.
         // We need to:
-        // 1. Construct an IRET frame so the timer handler can restore us later
-        // 2. Call schedule() to switch to the next process
-        // 3. Load the new process's stack and iretq
+        // 1. Save FPU state of outgoing process
+        // 2. Construct an IRET frame so the timer handler can restore us later
+        // 3. Call schedule_force() to switch to the next process
+        // 4. Load the new process's stack, restore FPU, and iretq
 
         "mov qword ptr gs:[16], 0",             // Clear force_switch
+
+        // Save FPU/SSE state of outgoing process (CURRENT_FPU_STATE still points to it).
+        // Must happen BEFORE schedule_force updates the pointer to the incoming process.
+        "lea rax, [rip + {current_fpu_state}]",
+        "mov rax, [rax]",
+        "test rax, rax",
+        "jz .Lsyscall_no_fpu_save",
+        "fxsave [rax]",
+        ".Lsyscall_no_fpu_save:",
 
         // Save original frame base in R10 (clobbered by dispatch, safe to reuse).
         // The saved frame at [RSP] has the ORIGINAL user registers (saved at
@@ -477,6 +487,18 @@ pub unsafe extern "C" fn syscall_entry() {
         "pop r14",
         "pop r15",
 
+        // Restore FPU/SSE state of incoming process.
+        // Push/pop RAX around FXRSTOR because loading the FPU state pointer
+        // clobbers RAX, which holds the user's restored register value.
+        "push rax",
+        "lea rax, [rip + {current_fpu_state}]",
+        "mov rax, [rax]",
+        "test rax, rax",
+        "jz .Lsyscall_no_fpu_restore",
+        "fxrstor [rax]",
+        ".Lsyscall_no_fpu_restore:",
+        "pop rax",
+
         // Restore user GS before returning to Ring 3.
         // The syscall_entry swapgs'd at entry (GS_BASE ↔ KERNEL_GS_BASE).
         // We must swap back so Ring 3 sees GS_BASE=0 (user value).
@@ -526,6 +548,7 @@ pub unsafe extern "C" fn syscall_entry() {
 
         dispatch = sym syscall_dispatch,
         schedule_force = sym crate::process::context_switch::schedule_force,
+        current_fpu_state = sym crate::process::context_switch::CURRENT_FPU_STATE,
     );
 }
 
@@ -814,8 +837,10 @@ fn sys_waitpid(child_pid: u64, flags: u64) -> u64 {
 
     if is_zombie {
         // Found a zombie — reap it (free slot)
+        // Return child PID (like Linux) — 0 means "no child waited for".
+        // Exit code is stored in the process struct for retrieval via sys_waitpid.
         sched.reap_zombie(found_pid);
-        exit_code
+        found_pid as u64
     } else if flags & WNOHANG != 0 {
         0 // WNOHANG: child still running
     } else {
@@ -1386,6 +1411,8 @@ fn sys_fork(regs: *mut u64) -> u64 {
                     child.parent_generation = parent_proc.generation;
                     // Inherit process group from parent
                     child.pgid = parent_proc.pgid;
+                    // Copy FPU/SSE state so child starts with parent's register values
+                    child.fpu_state = parent_proc.fpu_state;
 
                     // CRITICAL: Increment pipe refcounts for inherited pipe FDs.
                     // Without this, when the child closes its pipe FDs, the refcount
@@ -3034,7 +3061,9 @@ fn sys_munmap(addr: u64, length: u64) -> u64 {
                         let page_virt = VirtAddr::new(region_base + j * PAGE_SIZE);
                         if let Some(phys) = vmm::translate_addr(PhysAddr::new(pml4), page_virt) {
                             vmm::unmap_page(PhysAddr::new(pml4), page_virt);
-                            crate::memory::pmm::free_frame(phys);
+                            // Use decref (not free_frame) because CoW pages may
+                            // have refcount > 1 (shared with forked children).
+                            crate::memory::pmm::decref(phys);
                         }
                     }
                     for j in i..(proc.mmap_count as usize - 1) {

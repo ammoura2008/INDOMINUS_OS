@@ -1,7 +1,7 @@
 [2J[01;01H[=3h[2J[01;01H[2J[01;01H[=3h[2J[01;01H[2J[01;01H[=3h[2J[01;01HBdsDxe: loading Boot0001 "UEFI QEMU HARDDISK QM00001 " from PciRoot(0x0)/Pci(0x1F,0x2)/Sata(0x0,0xFFFF,0x0)
 BdsDxe: starting Boot0001 "UEFI QEMU HARDDISK QM00001 " from PciRoot(0x0)/Pci(0x1F,0x2)/Sata(0x0,0xFFFF,0x0)
 [KERNEL] INDOMINUS OS -- scheduler test
-[KERNEL] Kernel phys: 0x000000000D705000 .. 0x000000000DC5A3D8
+[KERNEL] Kernel phys: 0x000000000D6FA000 .. 0x000000000DC54438
 [CPU] Detected features:
   NX (No Execute):      YES
   SMEP:                  NO
@@ -17,13 +17,14 @@ BdsDxe: starting Boot0001 "UEFI QEMU HARDDISK QM00001 " from PciRoot(0x0)/Pci(0x
   TSC Deadline Timer:    NO
   Invariant TSC:         NO
   Max PHY addr bits:     0x0000000000000028
+[CPU] FPU/SSE enabled
 [MARK] Before fixup_pic_relocations
 [MARK] After fixup_pic_relocations
 [MARK] Before switch_gdt_to_virtual
-[TSS] phys=0x000000000D7C7C20 virt=0xFFFFFFFF800C2C20
-[TSS] patched entry5=0x8000890C2C200067 entry6=0x00000000FFFFFFFF
-[GDTR] limit=0x0000000000000057 base=0xFFFFFFFF800D1018
-[TSS] verified base=0xFFFFFFFF800C2C20
+[TSS] phys=0x000000000D7BDC20 virt=0xFFFFFFFF800C3C20
+[TSS] patched entry5=0x8000890C3C200067 entry6=0x00000000FFFFFFFF
+[GDTR] limit=0x0000000000000057 base=0xFFFFFFFF800D6020
+[TSS] verified base=0xFFFFFFFF800C3C20
 [MARK] After switch_gdt_to_virtual
 [MARK] After init_heap
 [MARK] Before IDT init
@@ -34,8 +35,8 @@ BdsDxe: starting Boot0001 "UEFI QEMU HARDDISK QM00001 " from PciRoot(0x0)/Pci(0x
 [MARK] idt::init setting handlers
 [MARK] idt::init exception handlers done
 [MARK] idt::init handlers done
-[MARK] idt::init idt_phys=0x0x000000000D7D6080 idt_virt=0x0xFFFFFFFF800D1080
-[IDTR] limit=0x0000000000000FFF base=0xFFFFFFFF800D1080
+[MARK] idt::init idt_phys=0x0x000000000D7D0080 idt_virt=0x0xFFFFFFFF800D6080
+[IDTR] limit=0x0000000000000FFF base=0xFFFFFFFF800D6080
 [MARK] idt::init done
 [MARK] After IDT init
 [MARK] Before ACPI init
@@ -129,9 +130,9 @@ BdsDxe: starting Boot0001 "UEFI QEMU HARDDISK QM00001 " from PciRoot(0x0)/Pci(0x
 [UART] Serial RX handler registered on IRQ4
 [MARK] Before syscall init
 [SYSCALL] Setting up MSRs...
-[SYSCALL] LSTAR entry phys=0x000000000D7085DC virt=0xFFFFFFFF800035DC
-[SYSCALL] PER_CPU raw=0x0x000000000D7D91D8 virt=0x0xFFFFFFFF800D41D8
-[SYSCALL] KERNEL_GS_BASE readback=0x0xFFFFFFFF800D41D8
+[SYSCALL] LSTAR entry phys=0x000000000D6FD5DC virt=0xFFFFFFFF800035DC
+[SYSCALL] PER_CPU raw=0x0x000000000D7D31D8 virt=0x0xFFFFFFFF800D91D8
+[SYSCALL] KERNEL_GS_BASE readback=0x0xFFFFFFFF800D91D8
 [SYSCALL] MSRs configured
 [MARK] After syscall init
 [MARK] Before harden_identity_map
@@ -139,9 +140,9 @@ BdsDxe: starting Boot0001 "UEFI QEMU HARDDISK QM00001 " from PciRoot(0x0)/Pci(0x
 [MARK] Before process init
 [MARK] ASLR initialized
 [PROC] Initializing process subsystem...
-[PROC] stack frame: entry_phys=0x000000000D761B10 virt=0xFFFFFFFF8005CB10 sp=0xFFFFFFFFC0002360
+[PROC] stack frame: entry_phys=0x000000000D756C90 virt=0xFFFFFFFF8005CC90 sp=0xFFFFFFFFC0002360
 [SCHED] Idle process at PID 0
-[PROC] stack frame: entry_phys=0x000000000D761B60 virt=0xFFFFFFFF8005CB60 sp=0xFFFFFFFFC0004360
+[PROC] stack frame: entry_phys=0x000000000D756CE0 virt=0xFFFFFFFF8005CCE0 sp=0xFFFFFFFFC0004360
 [SCHED] Spawned kernel process PID=1
 [PROC] Process subsystem initialized
 [MARK] After process init
@@ -273,10 +274,10 @@ BdsDxe: starting Boot0001 "UEFI QEMU HARDDISK QM00001 " from PciRoot(0x0)/Pci(0x
 [T] ==================================================
 [T] -- Section 1: Read ELF from FAT --
 [T]   PASS: T6.1 Read kernel.elf from FAT: valid ELF64 header
-[T]     entry=0x0xFFFFFFFF800676F0 phnum=0x0x0000000000000007
+[T]     entry=0x0xFFFFFFFF80067870 phnum=0x0x0000000000000007
 [T]   PASS: T6.2 Non-ELF file (MZ) correctly rejected by validate_elf
 [T] -- Section 2: ELF Pipeline Verification --
-[T]     FAT ELF entry=0x0xFFFFFFFF800676F0 phnum=0x0000000000000007
+[T]     FAT ELF entry=0x0xFFFFFFFF80067870 phnum=0x0000000000000007
 [T]   PASS: T6.3 FAT→VFS→validate pipeline: kernel.elf valid (kernel binary)
 [T]     /bin/indosh not in VFS (expected if not in initrd)
 [T] -- Section 3: Error Handling --
@@ -321,7 +322,7 @@ BdsDxe: starting Boot0001 "UEFI QEMU HARDDISK QM00001 " from PciRoot(0x0)/Pci(0x
 [TEST] Phase 9.2b: ALL TESTS PASSED
 [MARK] After VFS file test
 [MARK] Before initrd load
-[INITRD] Loading initrd: 0x000000000002250A bytes
+[INITRD] Loading initrd: 0x0000000000022A52 bytes
 [INITRD] Creating file: 'hello.txt'
 [INITRD]   -> OK
 [INITRD] Creating dir: 'bin'
@@ -373,7 +374,7 @@ BdsDxe: starting Boot0001 "UEFI QEMU HARDDISK QM00001 " from PciRoot(0x0)/Pci(0x
 [T] Phase 9.7: User-Space Shell Infrastructure
 [T] ==================================================
 [T] -- Section 1: Shell Binary --
-[T]     shell size: 0x0000000000008E80
+[T]     shell size: 0x0000000000008D28
 [T]   PASS: T7.1 Shell binary is valid ELF in VFS
 [PROC] ELF loaded: entry=0x00000000002027F0, stack_top=0x00007FFFFFFF0000, stack_guard=0x00007FFFFFFE7000, pml4=0x00000000027F4000
 [SCHED] Spawned user process 2
@@ -389,7 +390,7 @@ BdsDxe: starting Boot0001 "UEFI QEMU HARDDISK QM00001 " from PciRoot(0x0)/Pci(0x
 [T]   PASS: T7.4 FAT directory listing (ls equivalent) works
 [T] -- Section 3: Error Handling --
 [T]   PASS: T7.5 Exec path not found → NotFound
-[T]     shell size: 0x0000000000008E80 bytes (1KB-64KB range)
+[T]     shell size: 0x0000000000008D28 bytes (1KB-64KB range)
 [T]   PASS: T7.6 Shell binary size sanity (1KB < size < 64KB)
 [T] ==================================================
 [T] Phase 9.7 standalone: 0x0000000000000006 passed, 0x0000000000000000 failed
@@ -410,7 +411,7 @@ BdsDxe: starting Boot0001 "UEFI QEMU HARDDISK QM00001 " from PciRoot(0x0)/Pci(0x
 [T]     init entry=0x0x0000000000201190
 [T]   PASS: T8.4 Init binary is valid loadable ELF
 [T] -- Section 3: Shell Binary --
-[T]     shell size: 0x0000000000008E80
+[T]     shell size: 0x0000000000008D28
 [T]   PASS: T8.5 Shell binary exists in initrd
 [T]     shell entry=0x0x00000000002027F0
 [T]   PASS: T8.6 Shell binary is valid loadable ELF
@@ -546,7 +547,7 @@ BdsDxe: starting Boot0001 "UEFI QEMU HARDDISK QM00001 " from PciRoot(0x0)/Pci(0x
 [T] ==================================================
 [T] Phase 13: Context-Switch Validation Suite
 [T] ==================================================
-[T]   test_ctxswitch binary size: 0x0000000000004DE0
+[T]   test_ctxswitch binary size: 0x0000000000005480
 [PROC] ELF loaded: entry=0x00000000002024E0, stack_top=0x00007FFFFFFF0000, stack_guard=0x00007FFFFFFE7000, pml4=0x0000000002818000
 [SCHED] Spawned user process 3
 [T]   Spawned test_ctxswitch PID=0x0000000000000003
@@ -559,7 +560,7 @@ BdsDxe: starting Boot0001 "UEFI QEMU HARDDISK QM00001 " from PciRoot(0x0)/Pci(0x
 [PROC] ELF loaded: entry=0x0000000000201190, stack_top=0x00007FFFFFFF0000, stack_guard=0x00007FFFFFFE7000, pml4=0x0000000002831000
 [SCHED] Spawned user process 4
 [KERNEL] Init spawned as PID=0x0000000000000004
-[KERNEL] Shell binary found: 0x0000000000008E80 bytes
+[KERNEL] Shell binary found: 0x0000000000008D28 bytes
 [PROC] ELF loaded: entry=0x00000000002027F0, stack_top=0x00007FFFFFFF0000, stack_guard=0x00007FFFFFFE7000, pml4=0x0000000002845000
 [SCHED] Spawned user process 5
 [KERNEL] Shell spawned as PID=0x0000000000000005
@@ -575,9 +576,45 @@ Indominus OS Shell v1.0
 Type 'help' for commands, 'exit' to quit.
 
 [SHELL] loop iteration
-/ $ [KBD-READ] entry r=0 w=0 e=0
-[KBD-RECHECK] r=0 w=0 e=0
-[KBD] read_line returning 0 (no data after recheck)
+!! PAGE FAULT !!
+  CR2=0x000000000020B008
+  RIP=0x00000000002020C9
+  CS=0x000000000000001B RPL=0x0000000000000003
+  err=0x0000000000000004 read user
+  CR3=0x0000000002845000 kernel=0x0000000000001000 [USER PML4]
+  RSP=0xFFFFFFFFC002FEC8 PID=99
+  frame: RAX=0x00007FFFFFFEC050 RBX=0x000000000000002F RCX=0x0000000000000630 RDX=0xFFFFFFFF800C6B51
+  frame: RSI=0x000000000020A9D0 RDI=0x0000000000207EA4 RBP=0x00007FFFFFFED4A0
+  IRET: RIP=0x00000000002020C9 CS=0x000000000000001B RFLAGS=0x0000000000010217
+  IRET: RSP=0x00007FFFFFFEBE20 SS=0x0000000000000023
+  USER FAULT: killing process
+[PMM] DECREF-FREE frame=0x0x0000000002846000
+[PMM] DECREF-FREE frame=0x0x000000000284A000
+[PMM] DECREF-FREE frame=0x0x000000000284B000
+[PMM] DECREF-FREE frame=0x0x000000000284C000
+[PMM] DECREF-FREE frame=0x0x000000000284D000
+[PMM] DECREF-FREE frame=0x0x000000000284E000
+[PMM] DECREF-FREE frame=0x0x000000000284F000
+[PMM] DECREF-FREE frame=0x0x0000000002850000
+[PMM] DECREF-FREE frame=0x0x0000000002851000
+[PMM] DECREF-FREE frame=0x0x0000000002852000
+[PMM] DECREF-FREE frame=0x0x0000000002853000
+[PMM] FREE frame=0x0x0000000002849000 @indo-kernel\src\memory\vmm.rs:560
+[PMM] FREE frame=0x0x0000000002848000 @indo-kernel\src\memory\vmm.rs:564
+[PMM] FREE frame=0x0x0000000002847000 @indo-kernel\src\memory\vmm.rs:568
+[PMM] DECREF-FREE frame=0x0x0000000002854000
+[PMM] DECREF-FREE frame=0x0x0000000002858000
+[PMM] DECREF-FREE frame=0x0x0000000002859000
+[PMM] DECREF-FREE frame=0x0x000000000285A000
+[PMM] DECREF-FREE frame=0x0x000000000285B000
+[PMM] DECREF-FREE frame=0x0x000000000285C000
+[PMM] DECREF-FREE frame=0x0x000000000285D000
+[PMM] DECREF-FREE frame=0x0x000000000285E000
+[PMM] DECREF-FREE frame=0x0x000000000285F000
+[PMM] FREE frame=0x0x0000000002857000 @indo-kernel\src\memory\vmm.rs:560
+[PMM] FREE frame=0x0x0000000002856000 @indo-kernel\src\memory\vmm.rs:564
+[PMM] FREE frame=0x0x0000000002855000 @indo-kernel\src\memory\vmm.rs:568
+[PMM] FREE frame=0x0x0000000002845000 @indo-kernel\src\memory\vmm.rs:577
   RBX = 0xaaaaaaaaaaaaaaaa OK
   RBP = 0xbbbbbbbbbbbbbbbb OK
   R8  = 0x1111111111111111 OK
@@ -601,32 +638,28 @@ Type 'help' for commands, 'exit' to quit.
   PASS: sleep()
 == Test 3: blocking read() ==
 [SYSCALL] pipe read_fd=3 write_fd=4
-[PROC] stack frame: entry_phys=0x0000000000000000 virt=0xFFFFFFFF728FB000 sp=0xFFFFFFFFC0033A00
+[PROC] stack frame: entry_phys=0x0000000000000000 virt=0xFFFFFFFF72906000 sp=0xFFFFFFFFC0031F30
 [SYSCALL] fork parent=3 child=6
-[WAKE] pid=5 -> Ready (keyboard_wake)
-[SYSCALL] exit(0) pid=6
-[WAKE] pid=3 -> Ready (wake_wait_for_child)
-[PMM] FREE frame=0x0x0000000002863000 @indo-kernel\src\memory\vmm.rs:560
-[PMM] FREE frame=0x0x0000000002862000 @indo-kernel\src\memory\vmm.rs:564
-[PMM] FREE frame=0x0x0000000002861000 @indo-kernel\src\memory\vmm.rs:568
-[PMM] DECREF-FREE frame=0x0x0000000002830000
-[PMM] FREE frame=0x0x0000000002866000 @indo-kernel\src\memory\vmm.rs:560
-[PMM] FREE frame=0x0x0000000002865000 @indo-kernel\src\memory\vmm.rs:564
-[PMM] FREE frame=0x0x0000000002864000 @indo-kernel\src\memory\vmm.rs:568
-[PMM] FREE frame=0x0x0000000002860000 @indo-kernel\src\memory\vmm.rs:577
   RBX = 0xaaaaaaaaaaaaaaaa OK
   RBP = 0xbbbbbbbbbbbbbbbb OK
   R12 = 0x5555555555555555 OK
   R13 = 0x6666666666666666 OK
-[SHELL] loop iteration
-/ $ [KBD-READ] entry r=0 w=0 e=0
-[KBD-RECHECK] r=0 w=0 e=0
-[KBD] read_line returning 0 (no data after recheck)
   R14 = 0x7777777777777777 OK
   PASS: blocking read()
 == Test 4: waitpid() ==
-[PROC] stack frame: entry_phys=0x0000000000000000 virt=0xFFFFFFFF728FB000 sp=0xFFFFFFFFC0033A00
+[PROC] stack frame: entry_phys=0x0000000000000000 virt=0xFFFFFFFF72906000 sp=0xFFFFFFFFC0033F30
 [SYSCALL] fork parent=3 child=7
+  RBX = 0xaaaaaaaaaaaaaaaa OK
+  RBP = 0xbbbbbbbbbbbbbbbb OK
+    RBX = 0xaaaaaaaaaaaaaaaa OK
+  RBP = 0xbbbbbbbbbbbbbbbb OK
+  R12 = 0x5555555555555555 OK
+  R13 = 0x6666666666666666 OK
+  R14 = 0x7777777777777777 OK
+  PASS: blocking read()
+== Test 4: waitpid() ==
+[PROC] stack frame: entry_phys=0x0000000000000000 virt=0xFFFFFFFF72906000 sp=0xFFFFFFFFC0035F30
+[SYSCALL] fork parent=6 child=8
   RBX = 0xaaaaaaaaaaaaaaaa OK
   RBP = 0xbbbbbbbbbbbbbbbb OK
   R12 = 0x5555555555555555 OK
@@ -635,14 +668,28 @@ Type 'help' for commands, 'exit' to quit.
   PASS: waitpid()
 == Test 5: timer preemption ==
 [SYSCALL] exit(42) pid=7
-[PMM] FREE frame=0x0x0000000002862000 @indo-kernel\src\memory\vmm.rs:560
-[PMM] FREE frame=0x0x0000000002861000 @indo-kernel\src\memory\vmm.rs:564
-[PMM] FREE frame=0x0x0000000002860000 @indo-kernel\src\memory\vmm.rs:568
-[PMM] DECREF-FREE frame=0x0x0000000002867000
-[PMM] FREE frame=0x0x0000000002865000 @indo-kernel\src\memory\vmm.rs:560
-[PMM] FREE frame=0x0x0000000002864000 @indo-kernel\src\memory\vmm.rs:564
-[PMM] FREE frame=0x0x0000000002863000 @indo-kernel\src\memory\vmm.rs:568
-[PMM] FREE frame=0x0x0000000002830000 @indo-kernel\src\memory\vmm.rs:577
+[SYSCALL] exit(42) pid=8
+[PMM] FREE frame=0x0x0000000002850000 @indo-kernel\src\memory\vmm.rs:560
+[PMM] FREE frame=0x0x000000000284F000 @indo-kernel\src\memory\vmm.rs:564
+[PMM] FREE frame=0x0x000000000284E000 @indo-kernel\src\memory\vmm.rs:568
+[PMM] DECREF-FREE frame=0x0x000000000284C000
+[PMM] FREE frame=0x0x0000000002853000 @indo-kernel\src\memory\vmm.rs:560
+[PMM] FREE frame=0x0x0000000002852000 @indo-kernel\src\memory\vmm.rs:564
+[PMM] FREE frame=0x0x0000000002851000 @indo-kernel\src\memory\vmm.rs:568
+[PMM] FREE frame=0x0x000000000284D000 @indo-kernel\src\memory\vmm.rs:577
+[PMM] FREE frame=0x0x0000000002858000 @indo-kernel\src\memory\vmm.rs:560
+[PMM] FREE frame=0x0x0000000002857000 @indo-kernel\src\memory\vmm.rs:564
+[PMM] FREE frame=0x0x0000000002856000 @indo-kernel\src\memory\vmm.rs:568
+[PMM] DECREF-FREE frame=0x0x0000000002830000
+[PMM] FREE frame=0x0x000000000285B000 @indo-kernel\src\memory\vmm.rs:560
+[PMM] FREE frame=0x0x000000000285A000 @indo-kernel\src\memory\vmm.rs:564
+[PMM] FREE frame=0x0x0000000002859000 @indo-kernel\src\memory\vmm.rs:568
+[PMM] FREE frame=0x0x0000000002855000 @indo-kernel\src\memory\vmm.rs:577
+R12 = 0x5555555555555555 OK
+  R13 = 0x6666666666666666 OK
+  R14 = 0x7777777777777777 OK
+  PASS: waitpid()
+== Test 5: timer preemption ==
 [SYSCALL] exit(0) pid=2
 [PMM] DECREF-FREE frame=0x0x0000000002807000
 [PMM] DECREF-FREE frame=0x0x000000000280B000
@@ -687,32 +734,54 @@ Type 'help' for commands, 'exit' to quit.
 [PMM] FREE frame=0x0x00000000027F4000 @indo-kernel\src\memory\vmm.rs:577
 [SCHED] Reaped PID=1
 [SCHED] Reaped PID=2
-  RBX = 0xaaaaaaaaaaaaaaaa OK
+[SCHED] Reaped PID=5
+  RBX FAIL: expected 0xaaaaaaaaaaaaaaaa got 0xffffffff800c5eb0
   RBP = 0xbbbbbbbbbbbbbbbb OK
   R12 = 0x5555555555555555 OK
   R13 = 0x6666666666666666 OK
   R14 = 0x7777777777777777 OK
-  PASS: timer preemption
 == Test 6: fork() ==
-[PROC] stack frame: entry_phys=0x0000000000000000 virt=0xFFFFFFFF728FB000 sp=0xFFFFFFFFC002AC00
+[PROC] stack frame: entry_phys=0x0000000000000000 virt=0xFFFFFFFF72906000 sp=0xFFFFFFFFC002B130
 [SYSCALL] fork parent=3 child=1
   RBX = 0xaaaaaaaaaaaaaaaa OK
   RBP = 0xbbbbbbbbbbbbbbbb OK
   R12 = 0x5555555555555555 OK
   R13 = 0x6666666666666666 OK
   R14 = 0x7777777777777777 OK
+  PASS: fork() parent registers
+== Test 7: signal delivery ==
+  RBXaaaaaaaaaaaaaaaa OK
+  RBP = 0xbbbbbbbbbbbbbbbb OK
+  R12 = 0x5555555555555555 OK
+  R13 = 0x6666666666666666 OK
+  R14 = 0x7777777777777777 OK
+  PASS: signal delivery
+== Test 8: multi-context-switch ==
+  RBX FAIL: expected 0xaaaaaaaaaaaaaaaa got 0xffffffff800c71a0
+  RBP = 0xbbbbbbbbbbbbbbbb OK
+  R12 = 0x5555555555555555 OK
+  R13 = 0x6666666666666666 OK
+  R14 = 0x7777777777777777 OK
+== Test 6: fork() ==
+[PROC] stack frame: entry_phys=0x0000000000000000 virt=0xFFFFFFFF72906000 sp=0xFFFFFFFFC0031F30
+[SYSCALL] fork parent=6 child=2
+  RBX = 0xaaaaaaaaaaaaaaaa OK
+  RBP = 0xbbbbbbbbbbbbbbbb OK
+  R12 = 0x5555555555555555 OK
+  R13 = 0x6666666666666666 OK
+  R14 = 0x7777777777777777 OK
   PASS: fork() child registers
-[SYSCALL] exit(0) pid=1
-[WAKE] pid=3 -> Ready (wake_wait_for_child)
-  RBX = 0xaaaaaaaaaa[PMM] FREE frame=0x0x00000000027F7000 @indo-kernel\src\memory\vmm.rs:560
-[PMM] FREE frame=0x0x00000000027F6000 @indo-kernel\src\memory\vmm.rs:564
-[PMM] FREE frame=0x0x00000000027F5000 @indo-kernel\src\memory\vmm.rs:568
-[PMM] DECREF-FREE frame=0x0x0000000002866000
-[PMM] FREE frame=0x0x00000000027FA000 @indo-kernel\src\memory\vmm.rs:560
-[PMM] FREE frame=0x0x00000000027F9000 @indo-kernel\src\memory\vmm.rs:564
-[PMM] FREE frame=0x0x00000000027F8000 @indo-kernel\src\memory\vmm.rs:568
-[PMM] FREE frame=0x0x00000000027F4000 @indo-kernel\src\memory\vmm.rs:577
-aaaaaa OK
+[SYSCALL] exit(0) pid=2
+[WAKE] pid=6 -> Ready (wake_wait_for_child)
+[PMM] FREE frame=0x0x00000000027FF000 @indo-kernel\src\memory\vmm.rs:560
+[PMM] FREE frame=0x0x00000000027FE000 @indo-kernel\src\memory\vmm.rs:564
+[PMM] FREE frame=0x0x00000000027FD000 @indo-kernel\src\memory\vmm.rs:568
+[PMM] DECREF-FREE frame=0x0x000000000285C000
+[PMM] FREE frame=0x0x0000000002802000 @indo-kernel\src\memory\vmm.rs:560
+[PMM] FREE frame=0x0x0000000002801000 @indo-kernel\src\memory\vmm.rs:564
+[PMM] FREE frame=0x0x0000000002800000 @indo-kernel\src\memory\vmm.rs:568
+[PMM] FREE frame=0x0x00000000027FC000 @indo-kernel\src\memory\vmm.rs:577
+  RBX = 0xaaaaaaaaaaaaaaaa OK
   RBP = 0xbbbbbbbbbbbbbbbb OK
   R12 = 0x5555555555555555 OK
   R13 = 0x6666666666666666 OK
@@ -726,499 +795,809 @@ aaaaaa OK
   R14 = 0x7777777777777777 OK
   PASS: signal delivery
 == Test 8: multi-context-switch ==
+  PASS: 3 context switches completed
+== Test 9: RFLAGS preservation ==
   RFLAGS before: 0x2c7
   RFLAGS after:  0x2c7
   PASS: RFLAGS user bits preserved
 == Test 10: CoW multi-generation fork ==
-[PROC] stack frame: entry_phys=0x0000000000000000 virt=0xFFFFFFFF728FB000 sp=0xFFFFFFFFC002AC00
-[SYSCALL] fork parent=3 child=2
-[PROC] stack frame: entry_phys=0x0000000000000000 virt=0xFFFFFFFF728FB000 sp=0xFFFFFFFFC0031A00
-[SYSCALL] fork parent=2 child=8
-[SYSCALL] exit(0) pid=2
-[SCHED] Re-parented PID 8 to init (PID 4)
-[WAKE] pid=3 -> Ready (wake_wait_for_child)
-[PMM] FREE frame=0x0x00000000027FC000 @indo-kernel\src\memory\vmm.rs:560
-[PMM] FREE frame=0x0x00000000027FA000 @indo-kernel\src\memory\vmm.rs:564
-[PMM] FREE frame=0x0x00000000027F9000 @indo-kernel\src\memory\vmm.rs:568
+!! PAGE FAULT !!
+  CR2=0xFFFFFFFF800C5210
+  RIP=0x0000000000203483
+  CS=0x000000000000001B RPL=0x0000000000000003
+  err=0x0000000000000007 prot_viol write user
+  CR3=0x00000000027F4000 kernel=0x0000000000001000 [USER PML4]
+  RSP=0xFFFFFFFFC00290C8 PID=99
+  frame: RAX=0xFFFFFFFF800C5210 RBX=0x00007FFFFFFEFF3F RCX=0x000000000020344C RDX=0xFFFFFFFF800C5210
+  frame: RSI=0x0000000000001000 RDI=0x0000000000000000 RBP=0x0000000000000008
+  IRET: RIP=0x0000000000203483 CS=0x000000000000001B RFLAGS=0x0000000000010283
+  IRET: RSP=0x00007FFFFFFEFF40 SS=0x0000000000000023
+  USER FAULT: killing process
+[PMM] FREE frame=0x0x00000000027F7000 @indo-kernel\src\memory\vmm.rs:560
+[PMM] FREE frame=0x0x00000000027F6000 @indo-kernel\src\memory\vmm.rs:564
+[PMM] FREE frame=0x0x00000000027F5000 @indo-kernel\src\memory\vmm.rs:568
+[PMM] DECREF-FREE frame=0x0x00000000027FC000
 [PMM] FREE frame=0x0x00000000027FF000 @indo-kernel\src\memory\vmm.rs:560
 [PMM] FREE frame=0x0x00000000027FE000 @indo-kernel\src\memory\vmm.rs:564
 [PMM] FREE frame=0x0x00000000027FD000 @indo-kernel\src\memory\vmm.rs:568
-[PMM] FREE frame=0x0x0000000002802000 @indo-kernel\src\memory\vmm.rs:560
-[PMM] FREE frame=0x0x0000000002801000 @indo-kernel\src\memory\vmm.rs:564
-[PMM] FREE frame=0x0x0000000002800000 @indo-kernel\src\memory\vmm.rs:568
-[PMM] FREE frame=0x0x00000000027F8000 @indo-kernel\src\memory\vmm.rs:577
-[PMM] FREE frame=0x0x00000000027F4000 @indo-kernel\src\syscall\mod.rs:3037
-[SYSCALL] exit(0) pid=8
+[PMM] DECREF-FREE frame=0x0x0000000002854000
+[PMM] FREE frame=0x0x00000000027FA000 @indo-kernel\src\memory\vmm.rs:560
+[PMM] FREE frame=0x0x00000000027F9000 @indo-kernel\src\memory\vmm.rs:564
+[PMM] FREE frame=0x0x00000000027F8000 @indo-kernel\src\memory\vmm.rs:568
+[PMM] FREE frame=0x0x00000000027F4000 @indo-kernel\src\memory\vmm.rs:577
+  RFLAGS before: 0x2c7
+  RFLAGS after:  0x2c7
+  PASS: RFLAGS user bits preserved
+== Test 10: CoW multi-generation fork ==
+[PROC] stack frame: entry_phys=0x0000000000000000 virt=0xFFFFFFFF72906000 sp=0xFFFFFFFFC002B130
+[SYSCALL] fork parent=6 child=5
   PASS: CoW multi-generation fork
 == Test 11: CoW fork write isolation ==
-[SYSCALL] pipe read_fd=3 write_fd=4
-[PROC] stack frame: entry_phys=0x0000000000000000 virt=0xFFFFFFFF728FB000 sp=0xFFFFFFFFC0031A00
-[SYSCALL] fork parent=3 child=9
-[SCHED] Reaped PID=8
-[PMM] FREE frame=0x0x0000000002807000 @indo-kernel\src\memory\vmm.rs:560
-[PMM] FREE frame=0x0x0000000002806000 @indo-kernel\src\memory\vmm.rs:564
-[PMM] FREE frame=0x0x0000000002805000 @indo-kernel\src\memory\vmm.rs:568
-[PMM] DECREF-FREE frame=0x0x0000000002803000
-[PMM] FREE frame=0x0x000000000280A000 @indo-kernel\src\memory\vmm.rs:560
-[PMM] FREE frame=0x0x0000000002809000 @indo-kernel\src\memory\vmm.rs:564
-[PMM] FREE frame=0x0x0000000002808000 @indo-kernel\src\memory\vmm.rs:568
-[PMM] FREE frame=0x0x000000000280D000 @indo-kernel\src\memory\vmm.rs:560
-[PMM] FREE frame=0x0x000000000280C000 @indo-kernel\src\memory\vmm.rs:564
-[PMM] FREE frame=0x0x000000000280B000 @indo-kernel\src\memory\vmm.rs:568
-[PMM] FREE frame=0x0x0000000002804000 @indo-kernel\src\memory\vmm.rs:577
+[SYSCALL] pipe read_fd=5 write_fd=6
+[PROC] stack frame: entry_phys=0x0000000000000000 virt=0xFFFFFFFF72906000 sp=0xFFFFFFFFC0031F30
+[SYSCALL] fork parent=5 child=9
+  PASS: CoW multi-generation fork
+== Test 11: CoW fork write isolation ==
+[SYSCALL] pipe read_fd=5 write_fd=6
+[PROC] stack frame: entry_phys=0x0000000000000000 virt=0xFFFFFFFF72906000 sp=0xFFFFFFFFC0033F30
+[SYSCALL] fork parent=6 child=10
 [WAKE] pid=3 -> Ready (keyboard_wake)
 [WAKE] pid=5 -> Ready (keyboard_wake)
 [SYSCALL] exit(0) pid=9
-[SCHED] Reaped PID=9
+[WAKE] pid=6 -> Ready (keyboard_wake)
+[SYSCALL] exit(0) pid=10
+[PMM] FREE frame=0x0x0000000002808000 @indo-kernel\src\memory\vmm.rs:560
+[PMM] FREE frame=0x0x0000000002807000 @indo-kernel\src\memory\vmm.rs:564
+[PMM] FREE frame=0x0x0000000002806000 @indo-kernel\src\memory\vmm.rs:568
+[PMM] DECREF-FREE frame=0x0x000000000284F000
+[PMM] FREE frame=0x0x000000000280B000 @indo-kernel\src\memory\vmm.rs:560
+[PMM] FREE frame=0x0x000000000280A000 @indo-kernel\src\memory\vmm.rs:564
+[PMM] FREE frame=0x0x0000000002809000 @indo-kernel\src\memory\vmm.rs:568
+[PMM] FREE frame=0x0x000000000280E000 @indo-kernel\src\memory\vmm.rs:560
+[PMM] FREE frame=0x0x000000000280D000 @indo-kernel\src\memory\vmm.rs:564
+[PMM] FREE frame=0x0x000000000280C000 @indo-kernel\src\memory\vmm.rs:568
+[PMM] FREE frame=0x0x0000000002805000 @indo-kernel\src\memory\vmm.rs:577
+[PMM] FREE frame=0x0x0000000002814000 @indo-kernel\src\memory\vmm.rs:560
+[PMM] FREE frame=0x0x0000000002813000 @indo-kernel\src\memory\vmm.rs:564
+[PMM] FREE frame=0x0x0000000002812000 @indo-kernel\src\memory\vmm.rs:568
+[PMM] DECREF-FREE frame=0x0x0000000002850000
+[PMM] FREE frame=0x0x0000000002817000 @indo-kernel\src\memory\vmm.rs:560
+[PMM] FREE frame=0x0x0000000002816000 @indo-kernel\src\memory\vmm.rs:564
+[PMM] FREE frame=0x0x0000000002815000 @indo-kernel\src\memory\vmm.rs:568
+[PMM] DECREF-FREE frame=0x0x0000000002803000
+[PMM] FREE frame=0x0x000000000284D000 @indo-kernel\src\memory\vmm.rs:560
+[PMM] FREE frame=0x0x000000000284C000 @indo-kernel\src\memory\vmm.rs:564
+[PMM] FREE frame=0x0x0000000002830000 @indo-kernel\src\memory\vmm.rs:568
+[PMM] FREE frame=0x0x0000000002811000 @indo-kernel\src\memory\vmm.rs:577
+[PMM] DECREF-FREE frame=0x0x0000000002804000
+  PASS: CoW fork write isolation
+== Test 12: fork stress ==
+[PROC] stack frame: entry_phys=0x0000000000000000 virt=0xFFFFFFFF72906000 sp=0xFFFFFFFFC0031F30
+[SYSCALL] fork parent=5 child=11
+  FAIL: waitpid returned error at iteration 0
+== Test 13: memory stress ==
+[PMM] DECREF-FREE frame=0x0x000000000280D000
+!! PAGE FAULT !!
+  CR2=0xFFFFFFFF800C6B50
+  RIP=0x0000000000203C36
+  CS=0x000000000000001B RPL=0x0000000000000003
+  err=0x0000000000000007 prot_viol write user
+  CR3=0x00000000027F8000 kernel=0x0000000000001000 [USER PML4]
+  RSP=0xFFFFFFFFC00290C8 PID=99
+  frame: RAX=0xFFFFFFFF800C6B50 RBX=0x00007FFFFFFEFF3F RCX=0x0000000000203C24 RDX=0xDEADBEEFCAFEBABE
+  frame: RSI=0x0000000000001000 RDI=0xFFFFFFFF800C6B50 RBP=0x000000000000000A
+  IRET: RIP=0x0000000000203C36 CS=0x000000000000001B RFLAGS=0x0000000000010203
+  IRET: RSP=0x00007FFFFFFEFF40 SS=0x0000000000000023
+  USER FAULT: killing process
+[SCHED] Re-parented PID 9 to init (PID 4)
+[SCHED] Re-parented PID 11 to init (PID 4)
+[PMM] DECREF-FREE frame=0x0x0000000002810000
+  PASS: CoW fork write isolation
+== Test 12: fork stress ==
+[PROC] stack frame: entry_phys=0x0000000000000000 virt=0xFFFFFFFF72906000 sp=0xFFFFFFFFC0033F30
+[SYSCALL] fork parent=6 child=12
 [PMM] FREE frame=0x0x00000000027FC000 @indo-kernel\src\memory\vmm.rs:560
 [PMM] FREE frame=0x0x00000000027FA000 @indo-kernel\src\memory\vmm.rs:564
 [PMM] FREE frame=0x0x00000000027F9000 @indo-kernel\src\memory\vmm.rs:568
-[PMM] DECREF-FREE frame=0x0x0000000002803000
+[PMM] DECREF-FREE frame=0x0x000000000280D000
 [PMM] FREE frame=0x0x00000000027FF000 @indo-kernel\src\memory\vmm.rs:560
 [PMM] FREE frame=0x0x00000000027FE000 @indo-kernel\src\memory\vmm.rs:564
 [PMM] FREE frame=0x0x00000000027FD000 @indo-kernel\src\memory\vmm.rs:568
-[PMM] DECREF-FREE frame=0x0x00000000027FB000
 [PMM] FREE frame=0x0x0000000002802000 @indo-kernel\src\memory\vmm.rs:560
 [PMM] FREE frame=0x0x0000000002801000 @indo-kernel\src\memory\vmm.rs:564
 [PMM] FREE frame=0x0x0000000002800000 @indo-kernel\src\memory\vmm.rs:568
 [PMM] FREE frame=0x0x00000000027F8000 @indo-kernel\src\memory\vmm.rs:577
-[PMM] FREE frame=0x0x00000000027F4000 @indo-kernel\src\syscall\mod.rs:3037
-  PASS: CoW fork write isolation
-== Test 12: fork stress ==
-[PROC] stack frame: entry_phys=0x0000000000000000 virt=0xFFFFFFFF728FB000 sp=0xFFFFFFFFC002AC00
-[SYSCALL] fork parent=3 child=8
-[SHELL] loop iteration
-/ $ [KBD-READ] entry r=0 w=0 e=0
-[KBD-RECHECK] r=0 w=0 e=0
-[KBD] read_line returning 0 (no data after recheck)
-[SYSCALL] exit(0) pid=8
-[WAKE] pid=3 -> Ready (wake_wait_for_child)
-[PMM] FREE frame=0x0x00000000027FA000 @indo-kernel\src\memory\vmm.rs:560
-[PMM] FREE frame=0x0x00000000027F9000 @indo-kernel\src\memory\vmm.rs:564
-[PMM] FREE frame=0x0x00000000027F8000 @indo-kernel\src\memory\vmm.rs:568
-[PMM] FREE frame=0x0x00000000027FD000 @indo-kernel\src\memory\vmm.rs:560
-[PMM] FREE frame=0x0x00000000027FC000 @indo-kernel\src\memory\vmm.rs:564
-[PMM] FREE frame=0x0x00000000027FB000 @indo-kernel\src\memory\vmm.rs:568
-[PMM] FREE frame=0x0x0000000002800000 @indo-kernel\src\memory\vmm.rs:560
-[PMM] FREE frame=0x0x00000000027FF000 @indo-kernel\src\memory\vmm.rs:564
-[PMM] FREE frame=0x0x00000000027FE000 @indo-kernel\src\memory\vmm.rs:568
-[PMM] FREE frame=0x0x00000000027F4000 @indo-kernel\src\memory\vmm.rs:577
-[PROC] stack frame: entry_phys=0x0000000000000000 virt=0xFFFFFFFF728FB000 sp=0xFFFFFFFFC002AC00
-[SYSCALL] fork parent=3 child=9
-[SYSCALL] exit(1) pid=9
-[WAKE] pid=3 -> Ready (wake_wait_for_child)
-[PROC] stack frame: entry_phys=0x0000000000000000 virt=0xFFFFFFFF728FB000 sp=0xFFFFFFFFC0031A00
-[SYSCALL] fork parent=3 child=10
-[PMM] FREE frame=0x0x00000000027FA000 @indo-kernel\src\memory\vmm.rs:560
-[PMM] FREE frame=0x0x00000000027F9000 @indo-kernel\src\memory\vmm.rs:564
-[PMM] FREE frame=0x0x00000000027F8000 @indo-kernel\src\memory\vmm.rs:568
-[PMM] FREE frame=0x0x00000000027FD000 @indo-kernel\src\memory\vmm.rs:560
-[PMM] FREE frame=0x0x00000000027FC000 @indo-kernel\src\memory\vmm.rs:564
-[PMM] FREE frame=0x0x00000000027FB000 @indo-kernel\src\memory\vmm.rs:568
-[PMM] FREE frame=0x0x0000000002800000 @indo-kernel\src\memory\vmm.rs:560
-[PMM] FREE frame=0x0x00000000027FF000 @indo-kernel\src\memory\vmm.rs:564
-[PMM] FREE frame=0x0x00000000027FE000 @indo-kernel\src\memory\vmm.rs:568
-[PMM] FREE frame=0x0x00000000027F4000 @indo-kernel\src\memory\vmm.rs:577
-[SYSCALL] exit(2) pid=10
-[WAKE] pid=3 -> Ready (wake_wait_for_child)
-[PMM] FREE frame=0x0x0000000002804000 @indo-kernel\src\memory\vmm.rs:560
-[PMM] FREE frame=0x0x0000000002803000 @indo-kernel\src\memory\vmm.rs:564
-[PMM] FREE frame=0x0x0000000002802000 @indo-kernel\src\memory\vmm.rs:568
-[PMM] FREE frame=0x0x0000000002807000 @indo-kernel\src\memory\vmm.rs:560
-[PMM] FREE frame=0x0x0000000002806000 @indo-kernel\src\memory\vmm.rs:564
-[PMM] FREE frame=0x0x0000000002805000 @indo-kernel\src\memory\vmm.rs:568
-[PMM] FREE frame=0x0x000000000280A000 @indo-kernel\src\memory\vmm.rs:560
-[PMM] FREE frame=0x0x0000000002809000 @indo-kernel\src\memory\vmm.rs:564
-[PMM] FREE frame=0x0x0000000002808000 @indo-kernel\src\memory\vmm.rs:568
-[PMM] FREE frame=0x0x0000000002801000 @indo-kernel\src\memory\vmm.rs:577
-[PROC] stack frame: entry_phys=0x0000000000000000 virt=0xFFFFFFFF728FB000 sp=0xFFFFFFFFC002AC00
-[SYSCALL] fork parent=3 child=11
-[SYSCALL] exit(3) pid=11
-[WAKE] pid=3 -> Ready (wake_wait_for_child)
-[PROC] stack frame: entry_phys=0x0000000000000000 virt=0xFFFFFFFF728FB000 sp=0xFFFFFFFFC0031A00
-[SYSCALL] fork parent=3 child=12
-[PMM] FREE frame=0x0x00000000027FA000 @indo-kernel\src\memory\vmm.rs:560
-[PMM] FREE frame=0x0x00000000027F9000 @indo-kernel\src\memory\vmm.rs:564
-[PMM] FREE frame=0x0x00000000027F8000 @indo-kernel\src\memory\vmm.rs:568
-[PMM] FREE frame=0x0x00000000027FD000 @indo-kernel\src\memory\vmm.rs:560
-[PMM] FREE frame=0x0x00000000027FC000 @indo-kernel\src\memory\vmm.rs:564
-[PMM] FREE frame=0x0x00000000027FB000 @indo-kernel\src\memory\vmm.rs:568
-[PMM] FREE frame=0x0x0000000002800000 @indo-kernel\src\memory\vmm.rs:560
-[PMM] FREE frame=0x0x00000000027FF000 @indo-kernel\src\memory\vmm.rs:564
-[PMM] FREE frame=0x0x00000000027FE000 @indo-kernel\src\memory\vmm.rs:568
-[PMM] FREE frame=0x0x00000000027F4000 @indo-kernel\src\memory\vmm.rs:577
-[SYSCALL] exit(4) pid=12
-[WAKE] pid=3 -> Ready (wake_wait_for_child)
-[PROC] stack frame: entry_phys=0x0000000000000000 virt=0xFFFFFFFF728FB000 sp=0xFFFFFFFFC0031A00
-[SYSCALL] fork parent=3 child=13
-[PMM] FREE frame=0x0x0000000002804000 @indo-kernel\src\memory\vmm.rs:560
-[PMM] FREE frame=0x0x0000000002803000 @indo-kernel\src\memory\vmm.rs:564
-[PMM] FREE frame=0x0x0000000002802000 @indo-kernel\src\memory\vmm.rs:568
-[PMM] FREE frame=0x0x0000000002807000 @indo-kernel\src\memory\vmm.rs:560
-[PMM] FREE frame=0x0x0000000002806000 @indo-kernel\src\memory\vmm.rs:564
-[PMM] FREE frame=0x0x0000000002805000 @indo-kernel\src\memory\vmm.rs:568
-[PMM] FREE frame=0x0x000000000280A000 @indo-kernel\src\memory\vmm.rs:560
-[PMM] FREE frame=0x0x0000000002809000 @indo-kernel\src\memory\vmm.rs:564
-[PMM] FREE frame=0x0x0000000002808000 @indo-kernel\src\memory\vmm.rs:568
-[PMM] FREE frame=0x0x0000000002801000 @indo-kernel\src\memory\vmm.rs:577
-[SYSCALL] exit(5) pid=13
-[WAKE] pid=3 -> Ready (wake_wait_for_child)
-[PMM] FREE frame=0x0x00000000027FA000 @indo-kernel\src\memory\vmm.rs:560
-[PMM] FREE frame=0x0x00000000027F9000 @indo-kernel\src\memory\vmm.rs:564
-[PMM] FREE frame=0x0x00000000027F8000 @indo-kernel\src\memory\vmm.rs:568
-[PMM] FREE frame=0x0x00000000027FD000 @indo-kernel\src\memory\vmm.rs:560
-[PMM] FREE frame=0x0x00000000027FC000 @indo-kernel\src\memory\vmm.rs:564
-[PMM] FREE frame=0x0x00000000027FB000 @indo-kernel\src\memory\vmm.rs:568
-[PMM] FREE frame=0x0x0000000002800000 @indo-kernel\src\memory\vmm.rs:560
-[PMM] FREE frame=0x0x00000000027FF000 @indo-kernel\src\memory\vmm.rs:564
-[PMM] FREE frame=0x0x00000000027FE000 @indo-kernel\src\memory\vmm.rs:568
-[PMM] FREE frame=0x0x00000000027F4000 @indo-kernel\src\memory\vmm.rs:577
-[PROC] stack frame: entry_phys=0x0000000000000000 virt=0xFFFFFFFF728FB000 sp=0xFFFFFFFFC002AC00
-[SYSCALL] fork parent=3 child=14
-[SYSCALL] exit(6) pid=14
-[WAKE] pid=3 -> Ready (wake_wait_for_child)
-[PROC] stack frame: entry_phys=0x0000000000000000 virt=0xFFFFFFFF728FB000 sp=0xFFFFFFFFC0031A00
-[SYSCALL] fork parent=3 child=15
-[PMM] FREE frame=0x0x00000000027FA000 @indo-kernel\src\memory\vmm.rs:560
-[PMM] FREE frame=0x0x00000000027F9000 @indo-kernel\src\memory\vmm.rs:564
-[PMM] FREE frame=0x0x00000000027F8000 @indo-kernel\src\memory\vmm.rs:568
-[PMM] FREE frame=0x0x00000000027FD000 @indo-kernel\src\memory\vmm.rs:560
-[PMM] FREE frame=0x0x00000000027FC000 @indo-kernel\src\memory\vmm.rs:564
-[PMM] FREE frame=0x0x00000000027FB000 @indo-kernel\src\memory\vmm.rs:568
-[PMM] FREE frame=0x0x0000000002800000 @indo-kernel\src\memory\vmm.rs:560
-[PMM] FREE frame=0x0x00000000027FF000 @indo-kernel\src\memory\vmm.rs:564
-[PMM] FREE frame=0x0x00000000027FE000 @indo-kernel\src\memory\vmm.rs:568
-[PMM] FREE frame=0x0x00000000027F4000 @indo-kernel\src\memory\vmm.rs:577
-[SYSCALL] exit(7) pid=15
-[WAKE] pid=3 -> Ready (wake_wait_for_child)
-[PMM] FREE frame=0x0x0000000002804000 @indo-kernel\src\memory\vmm.rs:560
-[PMM] FREE frame=0x0x0000000002803000 @indo-kernel\src\memory\vmm.rs:564
-[PMM] FREE frame=0x0x0000000002802000 @indo-kernel\src\memory\vmm.rs:568
-[PMM] FREE frame=0x0x0000000002807000 @indo-kernel\src\memory\vmm.rs:560
-[PMM] FREE frame=0x0x0000000002806000 @indo-kernel\src\memory\vmm.rs:564
-[PMM] FREE frame=0x0x0000000002805000 @indo-kernel\src\memory\vmm.rs:568
-[PMM] FREE frame=0x0x000000000280A000 @indo-kernel\src\memory\vmm.rs:560
-[PMM] FREE frame=0x0x0000000002809000 @indo-kernel\src\memory\vmm.rs:564
-[PMM] FREE frame=0x0x0000000002808000 @indo-kernel\src\memory\vmm.rs:568
-[PMM] FREE frame=0x0x0000000002801000 @indo-kernel\src\memory\vmm.rs:577
-[PROC] stack frame: entry_phys=0x0000000000000000 virt=0xFFFFFFFF728FB000 sp=0xFFFFFFFFC002AC00
-[SYSCALL] fork parent=3 child=16
-[SYSCALL] exit(8) pid=16
-[WAKE] pid=3 -> Ready (wake_wait_for_child)
-[PROC] stack frame: entry_phys=0x0000000000000000 virt=0xFFFFFFFF728FB000 sp=0xFFFFFFFFC0031A00
-[SYSCALL] fork parent=3 child=17
-[PMM] FREE frame=0x0x00000000027FA000 @indo-kernel\src\memory\vmm.rs:560
-[PMM] FREE frame=0x0x00000000027F9000 @indo-kernel\src\memory\vmm.rs:564
-[PMM] FREE frame=0x0x00000000027F8000 @indo-kernel\src\memory\vmm.rs:568
-[PMM] FREE frame=0x0x00000000027FD000 @indo-kernel\src\memory\vmm.rs:560
-[PMM] FREE frame=0x0x00000000027FC000 @indo-kernel\src\memory\vmm.rs:564
-[PMM] FREE frame=0x0x00000000027FB000 @indo-kernel\src\memory\vmm.rs:568
-[PMM] FREE frame=0x0x0000000002800000 @indo-kernel\src\memory\vmm.rs:560
-[PMM] FREE frame=0x0x00000000027FF000 @indo-kernel\src\memory\vmm.rs:564
-[PMM] FREE frame=0x0x00000000027FE000 @indo-kernel\src\memory\vmm.rs:568
-[PMM] FREE frame=0x0x00000000027F4000 @indo-kernel\src\memory\vmm.rs:577
-[SYSCALL] exit(9) pid=17
-[WAKE] pid=3 -> Ready (wake_wait_for_child)
-[PMM] FREE frame=0x0x0000000002804000 @indo-kernel\src\memory\vmm.rs:560
-[PMM] FREE frame=0x0x0000000002803000 @indo-kernel\src\memory\vmm.rs:564
-[PMM] FREE frame=0x0x0000000002802000 @indo-kernel\src\memory\vmm.rs:568
-[PMM] FREE frame=0x0x0000000002807000 @indo-kernel\src\memory\vmm.rs:560
-[PMM] FREE frame=0x0x0000000002806000 @indo-kernel\src\memory\vmm.rs:564
-[PMM] FREE frame=0x0x0000000002805000 @indo-kernel\src\memory\vmm.rs:568
-[PMM] FREE frame=0x0x000000000280A000 @indo-kernel\src\memory\vmm.rs:560
-[PMM] FREE frame=0x0x0000000002809000 @indo-kernel\src\memory\vmm.rs:564
-[PMM] FREE frame=0x0x0000000002808000 @indo-kernel\src\memory\vmm.rs:568
-[PMM] FREE frame=0x0x0000000002801000 @indo-kernel\src\memory\vmm.rs:577
-[PROC] stack frame: entry_phys=0x0000000000000000 virt=0xFFFFFFFF728FB000 sp=0xFFFFFFFFC002AC00
-[SYSCALL] fork parent=3 child=18
-[SYSCALL] exit(10) pid=18
-[WAKE] pid=3 -> Ready (wake_wait_for_child)
-[PROC] stack frame: entry_phys=0x0000000000000000 virt=0xFFFFFFFF728FB000 sp=0xFFFFFFFFC0031A00
-[SYSCALL] fork parent=3 child=19
-[PMM] FREE frame=0x0x00000000027FA000 @indo-kernel\src\memory\vmm.rs:560
-[PMM] FREE frame=0x0x00000000027F9000 @indo-kernel\src\memory\vmm.rs:564
-[PMM] FREE frame=0x0x00000000027F8000 @indo-kernel\src\memory\vmm.rs:568
-[PMM] FREE frame=0x0x00000000027FD000 @indo-kernel\src\memory\vmm.rs:560
-[PMM] FREE frame=0x0x00000000027FC000 @indo-kernel\src\memory\vmm.rs:564
-[PMM] FREE frame=0x0x00000000027FB000 @indo-kernel\src\memory\vmm.rs:568
-[PMM] FREE frame=0x0x0000000002800000 @indo-kernel\src\memory\vmm.rs:560
-[PMM] FREE frame=0x0x00000000027FF000 @indo-kernel\src\memory\vmm.rs:564
-[PMM] FREE frame=0x0x00000000027FE000 @indo-kernel\src\memory\vmm.rs:568
-[PMM] FREE frame=0x0x00000000027F4000 @indo-kernel\src\memory\vmm.rs:577
-[SYSCALL] exit(11) pid=19
-[WAKE] pid=3 -> Ready (wake_wait_for_child)
-[PROC] stack frame: entry_phys=0x0000000000000000 virt=0xFFFFFFFF728FB000 sp=0xFFFFFFFFC0031A00
-[SYSCALL] fork parent=3 child=20
-[PMM] FREE frame=0x0x0000000002804000 @indo-kernel\src\memory\vmm.rs:560
-[PMM] FREE frame=0x0x0000000002803000 @indo-kernel\src\memory\vmm.rs:564
-[PMM] FREE frame=0x0x0000000002802000 @indo-kernel\src\memory\vmm.rs:568
-[PMM] FREE frame=0x0x0000000002807000 @indo-kernel\src\memory\vmm.rs:560
-[PMM] FREE frame=0x0x0000000002806000 @indo-kernel\src\memory\vmm.rs:564
-[PMM] FREE frame=0x0x0000000002805000 @indo-kernel\src\memory\vmm.rs:568
-[PMM] FREE frame=0x0x000000000280A000 @indo-kernel\src\memory\vmm.rs:560
-[PMM] FREE frame=0x0x0000000002809000 @indo-kernel\src\memory\vmm.rs:564
-[PMM] FREE frame=0x0x0000000002808000 @indo-kernel\src\memory\vmm.rs:568
-[PMM] FREE frame=0x0x0000000002801000 @indo-kernel\src\memory\vmm.rs:577
-[SYSCALL] exit(12) pid=20
-[WAKE] pid=3 -> Ready (wake_wait_for_child)
-[PROC] stack frame: entry_phys=0x0000000000000000 virt=0xFFFFFFFF728FB000 sp=0xFFFFFFFFC0031A00
-[SYSCALL] fork parent=3 child=21
-[PMM] FREE frame=0x0x00000000027FA000 @indo-kernel\src\memory\vmm.rs:560
-[PMM] FREE frame=0x0x00000000027F9000 @indo-kernel\src\memory\vmm.rs:564
-[PMM] FREE frame=0x0x00000000027F8000 @indo-kernel\src\memory\vmm.rs:568
-[PMM] FREE frame=0x0x00000000027FD000 @indo-kernel\src\memory\vmm.rs:560
-[PMM] FREE frame=0x0x00000000027FC000 @indo-kernel\src\memory\vmm.rs:564
-[PMM] FREE frame=0x0x00000000027FB000 @indo-kernel\src\memory\vmm.rs:568
-[PMM] FREE frame=0x0x0000000002800000 @indo-kernel\src\memory\vmm.rs:560
-[PMM] FREE frame=0x0x00000000027FF000 @indo-kernel\src\memory\vmm.rs:564
-[PMM] FREE frame=0x0x00000000027FE000 @indo-kernel\src\memory\vmm.rs:568
-[PMM] FREE frame=0x0x00000000027F4000 @indo-kernel\src\memory\vmm.rs:577
-[SYSCALL] exit(13) pid=21
-[WAKE] pid=3 -> Ready (wake_wait_for_child)
-[PROC] stack frame: entry_phys=0x0000000000000000 virt=0xFFFFFFFF728FB000 sp=0xFFFFFFFFC0031A00
-[SYSCALL] fork parent=3 child=22
-[PMM] FREE frame=0x0x0000000002804000 @indo-kernel\src\memory\vmm.rs:560
-[PMM] FREE frame=0x0x0000000002803000 @indo-kernel\src\memory\vmm.rs:564
-[PMM] FREE frame=0x0x0000000002802000 @indo-kernel\src\memory\vmm.rs:568
-[PMM] FREE frame=0x0x0000000002807000 @indo-kernel\src\memory\vmm.rs:560
-[PMM] FREE frame=0x0x0000000002806000 @indo-kernel\src\memory\vmm.rs:564
-[PMM] FREE frame=0x0x0000000002805000 @indo-kernel\src\memory\vmm.rs:568
-[PMM] FREE frame=0x0x000000000280A000 @indo-kernel\src\memory\vmm.rs:560
-[PMM] FREE frame=0x0x0000000002809000 @indo-kernel\src\memory\vmm.rs:564
-[PMM] FREE frame=0x0x0000000002808000 @indo-kernel\src\memory\vmm.rs:568
-[PMM] FREE frame=0x0x0000000002801000 @indo-kernel\src\memory\vmm.rs:577
-[SYSCALL] exit(14) pid=22
-[WAKE] pid=3 -> Ready (wake_wait_for_child)
-[PROC] stack frame: entry_phys=0x0000000000000000 virt=0xFFFFFFFF728FB000 sp=0xFFFFFFFFC0031A00
-[SYSCALL] fork parent=3 child=23
-[PMM] FREE frame=0x0x00000000027FA000 @indo-kernel\src\memory\vmm.rs:560
-[PMM] FREE frame=0x0x00000000027F9000 @indo-kernel\src\memory\vmm.rs:564
-[PMM] FREE frame=0x0x00000000027F8000 @indo-kernel\src\memory\vmm.rs:568
-[PMM] FREE frame=0x0x00000000027FD000 @indo-kernel\src\memory\vmm.rs:560
-[PMM] FREE frame=0x0x00000000027FC000 @indo-kernel\src\memory\vmm.rs:564
-[PMM] FREE frame=0x0x00000000027FB000 @indo-kernel\src\memory\vmm.rs:568
-[PMM] FREE frame=0x0x0000000002800000 @indo-kernel\src\memory\vmm.rs:560
-[PMM] FREE frame=0x0x00000000027FF000 @indo-kernel\src\memory\vmm.rs:564
-[PMM] FREE frame=0x0x00000000027FE000 @indo-kernel\src\memory\vmm.rs:568
-[PMM] FREE frame=0x0x00000000027F4000 @indo-kernel\src\memory\vmm.rs:577
-[SYSCALL] exit(15) pid=23
-[WAKE] pid=3 -> Ready (wake_wait_for_child)
-[PROC] stack frame: entry_phys=0x0000000000000000 virt=0xFFFFFFFF728FB000 sp=0xFFFFFFFFC0031A00
-[SYSCALL] fork parent=3 child=24
-[PMM] FREE frame=0x0x0000000002804000 @indo-kernel\src\memory\vmm.rs:560
-[PMM] FREE frame=0x0x0000000002803000 @indo-kernel\src\memory\vmm.rs:564
-[PMM] FREE frame=0x0x0000000002802000 @indo-kernel\src\memory\vmm.rs:568
-[PMM] FREE frame=0x0x0000000002807000 @indo-kernel\src\memory\vmm.rs:560
-[PMM] FREE frame=0x0x0000000002806000 @indo-kernel\src\memory\vmm.rs:564
-[PMM] FREE frame=0x0x0000000002805000 @indo-kernel\src\memory\vmm.rs:568
-[PMM] FREE frame=0x0x000000000280A000 @indo-kernel\src\memory\vmm.rs:560
-[PMM] FREE frame=0x0x0000000002809000 @indo-kernel\src\memory\vmm.rs:564
-[PMM] FREE frame=0x0x0000000002808000 @indo-kernel\src\memory\vmm.rs:568
-[PMM] FREE frame=0x0x0000000002801000 @indo-kernel\src\memory\vmm.rs:577
-[SYSCALL] exit(16) pid=24
-[WAKE] pid=3 -> Ready (wake_wait_for_child)
-[PMM] FREE frame=0x0x00000000027FA000 @indo-kernel\src\memory\vmm.rs:560
-[PMM] FREE frame=0x0x00000000027F9000 @indo-kernel\src\memory\vmm.rs:564
-[PMM] FREE frame=0x0x00000000027F8000 @indo-kernel\src\memory\vmm.rs:568
-[PMM] FREE frame=0x0x00000000027FD000 @indo-kernel\src\memory\vmm.rs:560
-[PMM] FREE frame=0x0x00000000027FC000 @indo-kernel\src\memory\vmm.rs:564
-[PMM] FREE frame=0x0x00000000027FB000 @indo-kernel\src\memory\vmm.rs:568
-[PMM] FREE frame=0x0x0000000002800000 @indo-kernel\src\memory\vmm.rs:560
-[PMM] FREE frame=0x0x00000000027FF000 @indo-kernel\src\memory\vmm.rs:564
-[PMM] FREE frame=0x0x00000000027FE000 @indo-kernel\src\memory\vmm.rs:568
-[PMM] FREE frame=0x0x00000000027F4000 @indo-kernel\src\memory\vmm.rs:577
-[PROC] stack frame: entry_phys=0x0000000000000000 virt=0xFFFFFFFF728FB000 sp=0xFFFFFFFFC002AC00
-[SYSCALL] fork parent=3 child=25
-[SYSCALL] exit(17) pid=25
-[WAKE] pid=3 -> Ready (wake_wait_for_child)
-[PROC] stack frame: entry_phys=0x0000000000000000 virt=0xFFFFFFFF728FB000 sp=0xFFFFFFFFC0031A00
-[SYSCALL] fork parent=3 child=26
-[PMM] FREE frame=0x0x00000000027FA000 @indo-kernel\src\memory\vmm.rs:560
-[PMM] FREE frame=0x0x00000000027F9000 @indo-kernel\src\memory\vmm.rs:564
-[PMM] FREE frame=0x0x00000000027F8000 @indo-kernel\src\memory\vmm.rs:568
-[PMM] FREE frame=0x0x00000000027FD000 @indo-kernel\src\memory\vmm.rs:560
-[PMM] FREE frame=0x0x00000000027FC000 @indo-kernel\src\memory\vmm.rs:564
-[PMM] FREE frame=0x0x00000000027FB000 @indo-kernel\src\memory\vmm.rs:568
-[PMM] FREE frame=0x0x0000000002800000 @indo-kernel\src\memory\vmm.rs:560
-[PMM] FREE frame=0x0x00000000027FF000 @indo-kernel\src\memory\vmm.rs:564
-[PMM] FREE frame=0x0x00000000027FE000 @indo-kernel\src\memory\vmm.rs:568
-[PMM] FREE frame=0x0x00000000027F4000 @indo-kernel\src\memory\vmm.rs:577
-[SYSCALL] exit(18) pid=26
-[WAKE] pid=3 -> Ready (wake_wait_for_child)
-[PROC] stack frame: entry_phys=0x0000000000000000 virt=0xFFFFFFFF728FB000 sp=0xFFFFFFFFC0031A00
-[SYSCALL] fork parent=3 child=27
-[PMM] FREE frame=0x0x0000000002804000 @indo-kernel\src\memory\vmm.rs:560
-[PMM] FREE frame=0x0x0000000002803000 @indo-kernel\src\memory\vmm.rs:564
-[PMM] FREE frame=0x0x0000000002802000 @indo-kernel\src\memory\vmm.rs:568
-[PMM] FREE frame=0x0x0000000002807000 @indo-kernel\src\memory\vmm.rs:560
-[PMM] FREE frame=0x0x0000000002806000 @indo-kernel\src\memory\vmm.rs:564
-[PMM] FREE frame=0x0x0000000002805000 @indo-kernel\src\memory\vmm.rs:568
-[PMM] FREE frame=0x0x000000000280A000 @indo-kernel\src\memory\vmm.rs:560
-[PMM] FREE frame=0x0x0000000002809000 @indo-kernel\src\memory\vmm.rs:564
-[PMM] FREE frame=0x0x0000000002808000 @indo-kernel\src\memory\vmm.rs:568
-[PMM] FREE frame=0x0x0000000002801000 @indo-kernel\src\memory\vmm.rs:577
-[SYSCALL] exit(19) pid=27
-[WAKE] pid=3 -> Ready (wake_wait_for_child)
-  PASS: fork stress (14 cycles)
+  FAIL: waitpid returned error at iteration 0
 == Test 13: memory stress ==
-[PMM] FREE frame=0x0x0000000002802000 @indo-kernel\src\syscall\mod.rs:3037
-[PMM] FREE frame=0x0x0000000002802000 @indo-kernel\src\syscall\mod.rs:3037
-[PMM] FREE frame=0x0x0000000002802000 @indo-kernel\src\syscall\mod.rs:3037
-[PMM] FREE frame=0x0x0000000002802000 @indo-kernel\src\syscall\mod.rs:3037
-[PMM] FREE frame=0x0x0000000002802000 @indo-kernel\src\syscall\mod.rs:3037
-[PMM] FREE frame=0x0x0000000002802000 @indo-kernel\src\syscall\mod.rs:3037
-[PMM] FREE frame=0x0x0000000002802000 @indo-kernel\src\syscall\mod.rs:3037
-[PMM] FREE frame=0x0x00000000027FA000 @indo-kernel\src\memory\vmm.rs:560
-[PMM] FREE frame=0x0x00000000027F9000 @indo-kernel\src\memory\vmm.rs:564
-[PMM] FREE frame=0x0x00000000027F8000 @indo-kernel\src\memory\vmm.rs:568
-[PMM] FREE frame=0x0x00000000027FD000 @indo-kernel\src\memory\vmm.rs:560
-[PMM] FREE frame=0x0x00000000027FC000 @indo-kernel\src\memory\vmm.rs:564
-[PMM] FREE frame=0x0x00000000027FB000 @indo-kernel\src\memory\vmm.rs:568
-[PMM] DECREF-FREE frame=0x0x000000000280E000
-[PMM] FREE frame=0x0x0000000002800000 @indo-kernel\src\memory\vmm.rs:560
-[PMM] FREE frame=0x0x00000000027FF000 @indo-kernel\src\memory\vmm.rs:564
-[PMM] FREE frame=0x0x00000000027FE000 @indo-kernel\src\memory\vmm.rs:568
-[PMM] FREE frame=0x0x00000000027F4000 @indo-kernel\src\memory\vmm.rs:577
-[PMM] FREE frame=0x0x00000000027F4000 @indo-kernel\src\syscall\mod.rs:3037
-[PMM] FREE frame=0x0x00000000027F4000 @indo-kernel\src\syscall\mod.rs:3037
-[PMM] FREE frame=0x0x00000000027F4000 @indo-kernel\src\syscall\mod.rs:3037
-[PMM] FREE frame=0x0x00000000027F4000 @indo-kernel\src\syscall\mod.rs:2341
-[PMM] FREE frame=0x0x00000000027FB000 @indo-kernel\src\syscall\mod.rs:2341
-[PMM] FREE frame=0x0x00000000027FC000 @indo-kernel\src\syscall\mod.rs:2341
-[PMM] FREE frame=0x0x00000000027FD000 @indo-kernel\src\syscall\mod.rs:2341
-[PMM] FREE frame=0x0x00000000027FE000 @indo-kernel\src\syscall\mod.rs:2341
+[PMM] DECREF-FREE frame=0x0x00000000027F8000
+[PMM] DECREF-FREE frame=0x0x00000000027F8000
+[PMM] DECREF-FREE frame=0x0x00000000027F8000
+  FAIL: waitpid returned error at iteration 0
+== Test 13: memory stress ==
+[PMM] DECREF-FREE frame=0x0x00000000027F8000
+[PMM] DECREF-FREE frame=0x0x00000000027F8000
+[PMM] DECREF-FREE frame=0x0x00000000027F8000
+[PMM] DECREF-FREE frame=0x0x00000000027F8000
+[PMM] DECREF-FREE frame=0x0x00000000027F8000
+[PMM] DECREF-FREE frame=0x0x00000000027F8000
+[PMM] DECREF-FREE frame=0x0x00000000027F8000
+[PMM] DECREF-FREE frame=0x0x00000000027F8000
+[PMM] DECREF-FREE frame=0x0x00000000027F8000
+[PMM] DECREF-FREE frame=0x0x00000000027F8000
+[PMM] FREE frame=0x0x00000000027F8000 @indo-kernel\src\syscall\mod.rs:2368
+[PMM] FREE frame=0x0x00000000027FD000 @indo-kernel\src\syscall\mod.rs:2368
+[PMM] FREE frame=0x0x00000000027FE000 @indo-kernel\src\syscall\mod.rs:2368
+[PMM] FREE frame=0x0x00000000027FF000 @indo-kernel\src\syscall\mod.rs:2368
+[PMM] FREE frame=0x0x0000000002800000 @indo-kernel\src\syscall\mod.rs:2368
   PASS: memory stress
 == Test 14: pipe stress ==
-[SYSCALL] pipe read_fd=3 write_fd=5
-[WAKE] pid=5 -> Ready (keyboard_wake)
-[SHELL] loop iteration
-/ $ [KBD-READ] entry r=0 w=0 e=0
-[KBD-RECHECK] r=0 w=0 e=0
-[KBD] read_line returning 0 (no data after recheck)
-[WAKE] pid=5 -> Ready (keyboard_wake)
-[SYSCALL] pipe read_fd=3 write_fd=5
-[SYSCALL] pipe read_fd=3 write_fd=5
-[SYSCALL] pipe read_fd=3 write_fd=5
-[SYSCALL] pipe read_fd=3 write_fd=5
-[SYSCALL] pipe read_fd=3 write_fd=5
-[SYSCALL] pipe read_fd=3 write_fd=5
-[SYSCALL] pipe read_fd=3 write_fd=5
-[SYSCALL] pipe read_fd=3 write_fd=5
-[SYSCALL] pipe read_fd=3 write_fd=5
-[SYSCALL] pipe read_fd=3 write_fd=5
-[SYSCALL] pipe read_fd=3 write_fd=5
-[SYSCALL] pipe read_fd=3 write_fd=5
-[SYSCALL] pipe read_fd=3 write_fd=5
-[SYSCALL] pipe read_fd=3 write_fd=5
+[SYSCALL] pipe read_fd=5 write_fd=7
+[SYSCALL] pipe read_fd=5 write_fd=7
+[SYSCALL] pipe read_fd=5 write_fd=7
+[SYSCALL] pipe read_fd=5 write_fd=7
+[SYSCALL] pipe read_fd=5 write_fd=7
+[SYSCALL] pipe read_fd=5 write_fd=7
+[SYSCALL] pipe read_fd=5 write_fd=7
+[SYSCALL] pipe read_fd=5 write_fd=7
+  FAIL: waitpid returned error at iteration 0
+== Test 13: memory stress ==
+[PMM] DECREF-FREE frame=0x0x00000000027F8000
+[PMM] DECREF-FREE frame=0x0x00000000027F8000
+  RBX = 0xaaaaaaaaaaaaaaaa OK
+  RBP = 0xbbbbbbbbbbbbbbbb OK
+  R12 = 0x5555555555555555 OK
+  R13 = 0x6666666666666666 OK
+  R14 = 0x7777777777777777 OK
+  PASS: fork() parent registers
+== Test 7: signal delivery ==
+  RBX = 0xaaaaaaaaaaaaaaaa OK
+  RBP = 0xbbbbbbbbbbbbbbbb OK
+  R12 = 0x5555555555555555 OK
+  R13 = 0x6666666666666666 OK
+  R14 = 0x7777777777777777 OK
+  PASS: signal delivery
+== Test 8: multi-context-switch ==
+[SCHED] Reaped PID=9
+[PMM] DECREF-FREE frame=0x0x00000000027FD000
+[PMM] DECREF-FREE frame=0x0x00000000027FD000
+[PMM] DECREF-FREE frame=0x0x00000000027FD000
+[PMM] DECREF-FREE frame=0x0x00000000027FD000
+[PMM] DECREF-FREE frame=0x0x00000000027FD000
+[PMM] DECREF-FREE frame=0x0x00000000027FD000
+[PMM] DECREF-FREE frame=0x0x00000000027FD000
+[PMM] FREE frame=0x0x00000000027FD000 @indo-kernel\src\syscall\mod.rs:2368
+[PMM] FREE frame=0x0x0000000002801000 @indo-kernel\src\syscall\mod.rs:2368
+[PMM] FREE frame=0x0x0000000002802000 @indo-kernel\src\syscall\mod.rs:2368
+[PMM] FREE frame=0x0x000000000280D000 @indo-kernel\src\syscall\mod.rs:2368
+[PMM] FREE frame=0x0x000000000284C000 @indo-kernel\src\syscall\mod.rs:2368
+  PASS: memory stress
+== Test 14: pipe stress ==
+[SYSCALL] pipe read_fd=5 write_fd=7
+[SYSCALL] pipe read_fd=5 write_fd=7
+[SYSCALL] pipe read_fd=5 write_fd=7
+[SYSCALL] pipe read_fd=5 write_fd=7
+[SYSCALL] pipe read_fd=5 write_fd=7
+[SYSCALL] pipe read_fd=5 write_fd=7
+[SYSCALL] pipe read_fd=5 write_fd=7
+[SYSCALL] pipe read_fd=5 write_fd=7
+[SYSCALL] pipe read_fd=5 write_fd=7
+[SYSCALL] pipe read_fd=5 write_fd=7
+[SYSCALL] pipe read_fd=5 write_fd=7
+[SYSCALL] pipe read_fd=5 write_fd=7
+[SYSCALL] pipe read_fd=5 write_fd=7
+[SYSCALL] pipe read_fd=5 write_fd=7
+[SYSCALL] pipe read_fd=5 write_fd=7
   PASS: pipe stress
 == Test 15: CoW fork bomb ==
-[PROC] stack frame: entry_phys=0x0000000000000000 virt=0xFFFFFFFF728FB000 sp=0xFFFFFFFFC002AC00
-[SYSCALL] fork parent=3 child=28
-[SHELL] loop iteration
-/ $ [KBD-READ] entry r=0 w=0 e=0
-[KBD-RECHECK] r=0 w=0 e=0
-[KBD] read_line returning 0 (no data after recheck)
-[SYSCALL] exit(0) pid=28
-[PROC] stack frame: entry_phys=0x0000000000000000 virt=0xFFFFFFFF728FB000 sp=0xFFFFFFFFC0031A00
-[SYSCALL] fork parent=3 child=29
-[PMM] FREE frame=0x0x00000000027FE000 @indo-kernel\src\memory\vmm.rs:560
-[PMM] FREE frame=0x0x00000000027FD000 @indo-kernel\src\memory\vmm.rs:564
-[PMM] FREE frame=0x0x00000000027FC000 @indo-kernel\src\memory\vmm.rs:568
-[PMM] DECREF-FREE frame=0x0x0000000002809000
-[PMM] FREE frame=0x0x0000000002802000 @indo-kernel\src\memory\vmm.rs:560
-[PMM] FREE frame=0x0x0000000002800000 @indo-kernel\src\memory\vmm.rs:564
-[PMM] FREE frame=0x0x00000000027FF000 @indo-kernel\src\memory\vmm.rs:568
-[PMM] FREE frame=0x0x0000000002805000 @indo-kernel\src\memory\vmm.rs:560
-[PMM] FREE frame=0x0x0000000002804000 @indo-kernel\src\memory\vmm.rs:564
-[PMM] FREE frame=0x0x0000000002803000 @indo-kernel\src\memory\vmm.rs:568
-[PMM] FREE frame=0x0x0000000002808000 @indo-kernel\src\memory\vmm.rs:560
-[PMM] FREE frame=0x0x0000000002807000 @indo-kernel\src\memory\vmm.rs:564
-[PMM] FREE frame=0x0x0000000002806000 @indo-kernel\src\memory\vmm.rs:568
-[PMM] FREE frame=0x0x00000000027FB000 @indo-kernel\src\memory\vmm.rs:577
-[SYSCALL] exit(0) pid=29
-[PROC] stack frame: entry_phys=0x0000000000000000 virt=0xFFFFFFFF728FB000 sp=0xFFFFFFFFC0031A00
-[SYSCALL] fork parent=3 child=30
-[PMM] FREE frame=0x0x000000000280D000 @indo-kernel\src\memory\vmm.rs:560
-[PMM] FREE frame=0x0x000000000280C000 @indo-kernel\src\memory\vmm.rs:564
-[PMM] FREE frame=0x0x000000000280B000 @indo-kernel\src\memory\vmm.rs:568
+[PROC] stack frame: entry_phys=0x0000000000000000 virt=0xFFFFFFFF72906000 sp=0xFFFFFFFFC0033F30
+[SYSCALL] fork parent=6 child=9
+[SYSCALL] exit(0) pid=9
+[SYSCALL] pipe read_fd=5 write_fd=7
+[SYSCALL] pipe read_fd=5 write_fd=7
+[SYSCALL] pipe read_fd=5 write_fd=7
+[SYSCALL] pipe read_fd=5 write_fd=7
+[SYSCALL] pipe read_fd=5 write_fd=7
+[SYSCALL] pipe read_fd=5 write_fd=7
+[PMM] FREE frame=0x0x000000000284D000 @indo-kernel\src\memory\vmm.rs:560
+[PMM] FREE frame=0x0x000000000284C000 @indo-kernel\src\memory\vmm.rs:564
+[PMM] FREE frame=0x0x000000000280D000 @indo-kernel\src\memory\vmm.rs:568
+[PMM] DECREF-FREE frame=0x0x0000000002858000
+[PMM] FREE frame=0x0x0000000002851000 @indo-kernel\src\memory\vmm.rs:560
+[PMM] FREE frame=0x0x0000000002850000 @indo-kernel\src\memory\vmm.rs:564
+[PMM] FREE frame=0x0x000000000284F000 @indo-kernel\src\memory\vmm.rs:568
+[PMM] FREE frame=0x0x0000000002854000 @indo-kernel\src\memory\vmm.rs:560
+[PMM] FREE frame=0x0x0000000002853000 @indo-kernel\src\memory\vmm.rs:564
+[PMM] FREE frame=0x0x0000000002852000 @indo-kernel\src\memory\vmm.rs:568
+[PMM] FREE frame=0x0x0000000002857000 @indo-kernel\src\memory\vmm.rs:560
+[PMM] FREE frame=0x0x0000000002856000 @indo-kernel\src\memory\vmm.rs:564
+[PMM] FREE frame=0x0x0000000002855000 @indo-kernel\src\memory\vmm.rs:568
+[PMM] FREE frame=0x0x0000000002802000 @indo-kernel\src\memory\vmm.rs:577
+!! PAGE FAULT !!
+  CR2=0xFFFFFFFF800C9780
+  RIP=0x0000000000203C36
+  CS=0x000000000000001B RPL=0x0000000000000003
+  err=0x0000000000000007 prot_viol write user
+  CR3=0x000000000280E000 kernel=0x0000000000001000 [USER PML4]
+  RSP=0xFFFFFFFFC0031EC8 PID=99
+  frame: RAX=0xFFFFFFFF800C9780 RBX=0x00007FFFFFFEFF3F RCX=0x0000000000203C24 RDX=0xDEADBEEFCAFEBABE
+  frame: RSI=0x0000000000001000 RDI=0xFFFFFFFF800C9780 RBP=0x000000000000000A
+  IRET: RIP=0x0000000000203C36 CS=0x000000000000001B RFLAGS=0x0000000000010207
+  IRET: RSP=0x00007FFFFFFEFF40 SS=0x0000000000000023
+  USER FAULT: killing process
+[PMM] FREE frame=0x0x0000000002812000 @indo-kernel\src\memory\vmm.rs:560
+[PMM] FREE frame=0x0x0000000002811000 @indo-kernel\src\memory\vmm.rs:564
+[PMM] FREE frame=0x0x0000000002810000 @indo-kernel\src\memory\vmm.rs:568
+[PMM] DECREF-FREE frame=0x0x00000000027F8000
+[PMM] FREE frame=0x0x0000000002815000 @indo-kernel\src\memory\vmm.rs:560
+[PMM] FREE frame=0x0x0000000002814000 @indo-kernel\src\memory\vmm.rs:564
+[PMM] FREE frame=0x0x0000000002813000 @indo-kernel\src\memory\vmm.rs:568
+[PMM] DECREF-FREE frame=0x0x000000000284E000
+[PMM] FREE frame=0x0x0000000002830000 @indo-kernel\src\memory\vmm.rs:560
+[PMM] FREE frame=0x0x0000000002817000 @indo-kernel\src\memory\vmm.rs:564
+[PMM] FREE frame=0x0x0000000002816000 @indo-kernel\src\memory\vmm.rs:568
+[PMM] FREE frame=0x0x000000000280E000 @indo-kernel\src\memory\vmm.rs:577
+[PROC] stack frame: entry_phys=0x0000000000000000 virt=0xFFFFFFFF72906000 sp=0xFFFFFFFFC0031F30
+[SYSCALL] fork parent=6 child=13
+[SYSCALL] pipe read_fd=5 write_fd=7
+  PASS: pipe stress
+== Test 15: CoW fork bomb ==
+[PROC] stack frame: entry_phys=0x0000000000000000 virt=0xFFFFFFFF72906000 sp=0xFFFFFFFFC0033F30
+[SYSCALL] fork parent=11 child=14
+[SYSCALL] exit(0) pid=14
+[PMM] FREE frame=0x0x0000000002850000 @indo-kernel\src\memory\vmm.rs:560
+[PMM] FREE frame=0x0x000000000284F000 @indo-kernel\src\memory\vmm.rs:564
+[PMM] FREE frame=0x0x000000000284E000 @indo-kernel\src\memory\vmm.rs:568
+[PMM] DECREF-FREE frame=0x0x000000000285A000
+[PMM] FREE frame=0x0x0000000002853000 @indo-kernel\src\memory\vmm.rs:560
+[PMM] FREE frame=0x0x0000000002852000 @indo-kernel\src\memory\vmm.rs:564
+[PMM] FREE frame=0x0x0000000002851000 @indo-kernel\src\memory\vmm.rs:568
+[PMM] FREE frame=0x0x0000000002856000 @indo-kernel\src\memory\vmm.rs:560
+[PMM] FREE frame=0x0x0000000002855000 @indo-kernel\src\memory\vmm.rs:564
+[PMM] FREE frame=0x0x0000000002854000 @indo-kernel\src\memory\vmm.rs:568
+[PMM] FREE frame=0x0x0000000002859000 @indo-kernel\src\memory\vmm.rs:560
+[PMM] FREE frame=0x0x0000000002858000 @indo-kernel\src\memory\vmm.rs:564
+[PMM] FREE frame=0x0x0000000002857000 @indo-kernel\src\memory\vmm.rs:568
+[PMM] FREE frame=0x0x000000000284D000 @indo-kernel\src\memory\vmm.rs:577
+[PROC] stack frame: entry_phys=0x0000000000000000 virt=0xFFFFFFFF72906000 sp=0xFFFFFFFFC0033F30
+[SYSCALL] fork parent=6 child=15
+[PROC] stack frame: entry_phys=0x0000000000000000 virt=0xFFFFFFFF72906000 sp=0xFFFFFFFFC0035F30
+[SYSCALL] fork parent=11 child=16
+[PROC] stack frame: entry_phys=0x0000000000000000 virt=0xFFFFFFFF72906000 sp=0xFFFFFFFFC0037F30
+[SYSCALL] fork parent=13 child=17
+[SYSCALL] exit(0) pid=15
+[SYSCALL] exit(0) pid=16
+[PMM] FREE frame=0x0x0000000002850000 @indo-kernel\src\memory\vmm.rs:560
+[PMM] FREE frame=0x0x000000000284F000 @indo-kernel\src\memory\vmm.rs:564
+[PMM] FREE frame=0x0x000000000284E000 @indo-kernel\src\memory\vmm.rs:568
+[PMM] DECREF-FREE frame=0x0x0000000002874000
+[PMM] FREE frame=0x0x0000000002853000 @indo-kernel\src\memory\vmm.rs:560
+[PMM] FREE frame=0x0x0000000002852000 @indo-kernel\src\memory\vmm.rs:564
+[PMM] FREE frame=0x0x0000000002851000 @indo-kernel\src\memory\vmm.rs:568
+[PMM] FREE frame=0x0x0000000002856000 @indo-kernel\src\memory\vmm.rs:560
+[PMM] FREE frame=0x0x0000000002855000 @indo-kernel\src\memory\vmm.rs:564
+[PMM] FREE frame=0x0x0000000002854000 @indo-kernel\src\memory\vmm.rs:568
+[PMM] FREE frame=0x0x0000000002859000 @indo-kernel\src\memory\vmm.rs:560
+[PMM] FREE frame=0x0x0000000002858000 @indo-kernel\src\memory\vmm.rs:564
+[PMM] FREE frame=0x0x0000000002857000 @indo-kernel\src\memory\vmm.rs:568
+[PMM] FREE frame=0x0x000000000284D000 @indo-kernel\src\memory\vmm.rs:577
+[PMM] FREE frame=0x0x000000000285D000 @indo-kernel\src\memory\vmm.rs:560
+[PMM] FREE frame=0x0x000000000285C000 @indo-kernel\src\memory\vmm.rs:564
+[PMM] FREE frame=0x0x000000000285B000 @indo-kernel\src\memory\vmm.rs:568
+[PMM] DECREF-FREE frame=0x0x0000000002875000
+[PMM] FREE frame=0x0x0000000002860000 @indo-kernel\src\memory\vmm.rs:560
+[PMM] FREE frame=0x0x000000000285F000 @indo-kernel\src\memory\vmm.rs:564
+[PMM] FREE frame=0x0x000000000285E000 @indo-kernel\src\memory\vmm.rs:568
+[PMM] FREE frame=0x0x0000000002863000 @indo-kernel\src\memory\vmm.rs:560
+[PMM] FREE frame=0x0x0000000002862000 @indo-kernel\src\memory\vmm.rs:564
+[PMM] FREE frame=0x0x0000000002861000 @indo-kernel\src\memory\vmm.rs:568
+[PMM] FREE frame=0x0x0000000002866000 @indo-kernel\src\memory\vmm.rs:560
+[PMM] FREE frame=0x0x0000000002865000 @indo-kernel\src\memory\vmm.rs:564
+[PMM] FREE frame=0x0x0000000002864000 @indo-kernel\src\memory\vmm.rs:568
+[PMM] FREE frame=0x0x000000000285A000 @indo-kernel\src\memory\vmm.rs:577
+[PROC] stack frame: entry_phys=0x0000000000000000 virt=0xFFFFFFFF72906000 sp=0xFFFFFFFFC0033F30
+[SYSCALL] fork parent=6 child=18
+[PROC] stack frame: entry_phys=0x0000000000000000 virt=0xFFFFFFFF72906000 sp=0xFFFFFFFFC0037F30
+[SYSCALL] fork parent=13 child=19
+[PROC] stack frame: entry_phys=0x0000000000000000 virt=0xFFFFFFFF72906000 sp=0xFFFFFFFFC0039F30
+[SYSCALL] fork parent=17 child=20
+[SYSCALL] exit(0) pid=18
+[PMM] FREE frame=0x0x0000000002850000 @indo-kernel\src\memory\vmm.rs:560
+[PMM] FREE frame=0x0x000000000284F000 @indo-kernel\src\memory\vmm.rs:564
+[PMM] FREE frame=0x0x000000000284E000 @indo-kernel\src\memory\vmm.rs:568
+[PMM] DECREF-FREE frame=0x0x0000000002881000
+[PMM] FREE frame=0x0x0000000002853000 @indo-kernel\src\memory\vmm.rs:560
+[PMM] FREE frame=0x0x0000000002852000 @indo-kernel\src\memory\vmm.rs:564
+[PMM] FREE frame=0x0x0000000002851000 @indo-kernel\src\memory\vmm.rs:568
+[PMM] FREE frame=0x0x0000000002856000 @indo-kernel\src\memory\vmm.rs:560
+[PMM] FREE frame=0x0x0000000002855000 @indo-kernel\src\memory\vmm.rs:564
+[PMM] FREE frame=0x0x0000000002854000 @indo-kernel\src\memory\vmm.rs:568
+[PMM] FREE frame=0x0x0000000002859000 @indo-kernel\src\memory\vmm.rs:560
+[PMM] FREE frame=0x0x0000000002858000 @indo-kernel\src\memory\vmm.rs:564
+[PMM] FREE frame=0x0x0000000002857000 @indo-kernel\src\memory\vmm.rs:568
+[PMM] FREE frame=0x0x000000000284D000 @indo-kernel\src\memory\vmm.rs:577
+[SYSCALL] exit(0) pid=20
+[PMM] FREE frame=0x0x0000000002877000 @indo-kernel\src\memory\vmm.rs:560
+[PMM] FREE frame=0x0x0000000002876000 @indo-kernel\src\memory\vmm.rs:564
+[PMM] FREE frame=0x0x0000000002875000 @indo-kernel\src\memory\vmm.rs:568
+[PMM] DECREF-FREE frame=0x0x000000000284D000
+[PMM] FREE frame=0x0x000000000287A000 @indo-kernel\src\memory\vmm.rs:560
+[PMM] FREE frame=0x0x0000000002879000 @indo-kernel\src\memory\vmm.rs:564
+[PMM] FREE frame=0x0x0000000002878000 @indo-kernel\src\memory\vmm.rs:568
+[PMM] FREE frame=0x0x000000000287D000 @indo-kernel\src\memory\vmm.rs:560
+[PMM] FREE frame=0x0x000000000287C000 @indo-kernel\src\memory\vmm.rs:564
+[PMM] FREE frame=0x0x000000000287B000 @indo-kernel\src\memory\vmm.rs:568
+[PMM] FREE frame=0x0x0000000002880000 @indo-kernel\src\memory\vmm.rs:560
+[PMM] FREE frame=0x0x000000000287F000 @indo-kernel\src\memory\vmm.rs:564
+[PMM] FREE frame=0x0x000000000287E000 @indo-kernel\src\memory\vmm.rs:568
+[PMM] FREE frame=0x0x0000000002874000 @indo-kernel\src\memory\vmm.rs:577
+[SCHED] Reaped PID=9
+  FAIL: waitpid error for child 1[PROC] stack frame: entry_phys=0x0000000000000000 virt=0xFFFFFFFF72906000 sp=0xFFFFFFFFC0037F30
+[SYSCALL] fork parent=11 child=9
+  FAIL: waitpid error for child 1
+  FAIL: waitpid error for child 0
+  FAIL: waitpid error for child 1
+  FAIL: waitpid error for child 2
+[SCHED] Reaped PID=20
+[CTXSW] [16/18] fpu_basic...
+  FAIL: waitpid error for child 0
+  FAIL: waitpid error for child 1
+  FAIL: waitpid error for child 2
+  FAIL: waitpid error for child 3
+[CTXSW] [16/18] fpu_basic...
+  RFLAGS before: 0x2c7
+  RFLAGS after:  0x2c7
+  PASS: RFLAGS user bits preserved
+== Test 10: CoW multi-generation fork ==
+!! PAGE FAULT !!
+  CR2=0xFFFFFFFF800C5EB0
+  RIP=0x0000000000203483
+  CS=0x000000000000001B RPL=0x0000000000000003
+  err=0x0000000000000007 prot_viol write user
+  CR3=0x0000000002818000 kernel=0x0000000000001000 [USER PML4]
+  RSP=0xFFFFFFFFC00042F8 PID=99
+  frame: RAX=0xFFFFFFFF800C5EB0 RBX=0x00007FFFFFFEFF3F RCX=0x000000000020344C RDX=0xFFFFFFFF800C5EB0
+  frame: RSI=0x0000000000001000 RDI=0x0000000000000000 RBP=0x0000000000000008
+  IRET: RIP=0x0000000000203483 CS=0x000000000000001B RFLAGS=0x0000000000010283
+  IRET: RSP=0x00007FFFFFFEFF40 SS=0x0000000000000023
+  USER FAULT: killing process
+[SCHED] Re-parented PID 1 to init (PID 4)
+[SCHED] Re-parented PID 6 to init (PID 4)
+[SCHED] Re-parented PID 7 to init (PID 4)
+[PMM] FREE frame=0x0x000000000281C000 @indo-kernel\src\memory\vmm.rs:560
+[PMM] FREE frame=0x0x000000000281B000 @indo-kernel\src\memory\vmm.rs:564
+[PMM] FREE frame=0x0x000000000281A000 @indo-kernel\src\memory\vmm.rs:568
+[PMM] DECREF-FREE frame=0x0x0000000002877000
+[PMM] FREE frame=0x0x000000000287A000 @indo-kernel\src\memory\vmm.rs:560
+[PMM] FREE frame=0x0x0000000002879000 @indo-kernel\src\memory\vmm.rs:564
+[PMM] FREE frame=0x0x0000000002878000 @indo-kernel\src\memory\vmm.rs:568
 [PMM] DECREF-FREE frame=0x0x00000000027FB000
-[PMM] FREE frame=0x0x0000000002810000 @indo-kernel\src\memory\vmm.rs:560
-[PMM] FREE frame=0x0x000000000280F000 @indo-kernel\src\memory\vmm.rs:564
-[PMM] FREE frame=0x0x000000000280E000 @indo-kernel\src\memory\vmm.rs:568
-[PMM] FREE frame=0x0x0000000002813000 @indo-kernel\src\memory\vmm.rs:560
-[PMM] FREE frame=0x0x0000000002812000 @indo-kernel\src\memory\vmm.rs:564
-[PMM] FREE frame=0x0x0000000002811000 @indo-kernel\src\memory\vmm.rs:568
-[PMM] FREE frame=0x0x0000000002816000 @indo-kernel\src\memory\vmm.rs:560
-[PMM] FREE frame=0x0x0000000002815000 @indo-kernel\src\memory\vmm.rs:564
-[PMM] FREE frame=0x0x0000000002814000 @indo-kernel\src\memory\vmm.rs:568
-[PMM] FREE frame=0x0x000000000280A000 @indo-kernel\src\memory\vmm.rs:577
-[SYSCALL] exit(0) pid=30
-[PROC] stack frame: entry_phys=0x0000000000000000 virt=0xFFFFFFFF728FB000 sp=0xFFFFFFFFC0031A00
-[SYSCALL] fork parent=3 child=31
+[PMM] FREE frame=0x0x0000000002828000 @indo-kernel\src\memory\vmm.rs:560
+[PMM] FREE frame=0x0x0000000002827000 @indo-kernel\src\memory\vmm.rs:564
+[PMM] FREE frame=0x0x0000000002826000 @indo-kernel\src\memory\vmm.rs:568
+[PMM] FREE frame=0x0x0000000002818000 @indo-kernel\src\memory\vmm.rs:577
+[SCHED] Reaped PID=1
+[SCHED] Reaped PID=3
+
+  FAIL: waitpid error for child 2
+  FAIL: waitpid error for child 3
+[CTXSW] [16/18] fpu_basic...
+[SYSCALL] exit(0) pid=9
+[PROC] stack frame: entry_phys=0x0000000000000000 virt=0xFFFFFFFF72906000 sp=0xFFFFFFFFC0037F30
+[SYSCALL] fork parent=11 child=1
+[PMM] FREE frame=0x0x0000000002851000 @indo-kernel\src\memory\vmm.rs:560
+[PMM] FREE frame=0x0x0000000002850000 @indo-kernel\src\memory\vmm.rs:564
+[PMM] FREE frame=0x0x000000000284F000 @indo-kernel\src\memory\vmm.rs:568
+[PMM] DECREF-FREE frame=0x0x00000000027FB000
+[PMM] FREE frame=0x0x0000000002854000 @indo-kernel\src\memory\vmm.rs:560
+[PMM] FREE frame=0x0x0000000002853000 @indo-kernel\src\memory\vmm.rs:564
+[PMM] FREE frame=0x0x0000000002852000 @indo-kernel\src\memory\vmm.rs:568
+[PMM] FREE frame=0x0x0000000002857000 @indo-kernel\src\memory\vmm.rs:560
+[PMM] FREE frame=0x0x0000000002856000 @indo-kernel\src\memory\vmm.rs:564
+[PMM] FREE frame=0x0x0000000002855000 @indo-kernel\src\memory\vmm.rs:568
+[PMM] FREE frame=0x0x0000000002874000 @indo-kernel\src\memory\vmm.rs:560
+[PMM] FREE frame=0x0x0000000002859000 @indo-kernel\src\memory\vmm.rs:564
+[PMM] FREE frame=0x0x0000000002858000 @indo-kernel\src\memory\vmm.rs:568
+[PMM] FREE frame=0x0x000000000284E000 @indo-kernel\src\memory\vmm.rs:577
+  PASS: FPU basic
+[CTXSW] [17/18] fpu_isolation...
+[PROC] stack frame: entry_phys=0x0000000000000000 virt=0xFFFFFFFF72906000 sp=0xFFFFFFFFC0037F30
+[SYSCALL] fork parent=17 child=3
+  PASS: FPU basic
+[CTXSW] [17/18] fpu_isolation...
+[PROC] stack frame: entry_phys=0x0000000000000000 virt=0xFFFFFFFF72906000 sp=0xFFFFFFFFC0039F30
+[SYSCALL] fork parent=19 child=20
+[SYSCALL] exit(0) pid=1
+[SCHED] Reaped PID=7
+[PMM] FREE frame=0x0x000000000281C000 @indo-kernel\src\memory\vmm.rs:560
+[PMM] FREE frame=0x0x000000000281B000 @indo-kernel\src\memory\vmm.rs:564
+[PMM] FREE frame=0x0x000000000281A000 @indo-kernel\src\memory\vmm.rs:568
+[PMM] DECREF-FREE frame=0x0x0000000002889000
+[PMM] FREE frame=0x0x0000000002828000 @indo-kernel\src\memory\vmm.rs:560
+[PMM] FREE frame=0x0x0000000002827000 @indo-kernel\src\memory\vmm.rs:564
+[PMM] FREE frame=0x0x0000000002826000 @indo-kernel\src\memory\vmm.rs:568
+[PMM] FREE frame=0x0x0000000002879000 @indo-kernel\src\memory\vmm.rs:560
+[PMM] FREE frame=0x0x0000000002878000 @indo-kernel\src\memory\vmm.rs:564
+[PMM] FREE frame=0x0x0000000002877000 @indo-kernel\src\memory\vmm.rs:568
+[PMM] FREE frame=0x0x000000000287C000 @indo-kernel\src\memory\vmm.rs:560
+[PMM] FREE frame=0x0x000000000287B000 @indo-kernel\src\memory\vmm.rs:564
+[PMM] FREE frame=0x0x000000000287A000 @indo-kernel\src\memory\vmm.rs:568
+[PMM] FREE frame=0x0x0000000002818000 @indo-kernel\src\memory\vmm.rs:577
+  PASS: FPU basic
+[CTXSW] [17/18] fpu_isolation...
+[PROC] stack frame: entry_phys=0x0000000000000000 virt=0xFFFFFFFF72906000 sp=0xFFFFFFFFC0039F30
+[SYSCALL] fork parent=6 child=7
+[SCHED] Reaped PID=14
+  FAIL: waitpid error for child 1
+[SCHED] Reaped PID=9
+  FAIL: waitpid error for child 3
+[PMM] DECREF-FREE frame=0x0x000000000284C000
+[CTXSW] [16/18] fpu_basic...
+  FAIL: waitpid err=fffffffffffffffd
+  FAIL: FPU isolation failed
+[CTXSW] [18/18] fpu_stress...
+[PROC] stack frame: entry_phys=0x0000000000000000 virt=0xFFFFFFFF72906000 sp=0xFFFFFFFFC003BF30
+[SYSCALL] fork parent=19 child=9
+[SYSCALL] exit(0) pid=20
+[SYSCALL] exit(0) pid=3
+[WAKE] pid=17 -> Ready (wake_wait_for_child)
+[PMM] FREE frame=0x0x000000000287F000 @indo-kernel\src\memory\vmm.rs:560
+[PMM] FREE frame=0x0x000000000287E000 @indo-kernel\src\memory\vmm.rs:564
+[PMM] FREE frame=0x0x000000000287D000 @indo-kernel\src\memory\vmm.rs:568
+[PMM] FREE frame=0x0x0000000002882000 @indo-kernel\src\memory\vmm.rs:560
+[PMM] FREE frame=0x0x0000000002881000 @indo-kernel\src\memory\vmm.rs:564
+[PMM] FREE frame=0x0x0000000002880000 @indo-kernel\src\memory\vmm.rs:568
+[PMM] FREE frame=0x0x0000000002885000 @indo-kernel\src\memory\vmm.rs:560
+[PMM] FREE frame=0x0x0000000002884000 @indo-kernel\src\memory\vmm.rs:564
+[PMM] FREE frame=0x0x0000000002883000 @indo-kernel\src\memory\vmm.rs:568
+[PMM] DECREF-FREE frame=0x0x00000000027FD000
+[PMM] FREE frame=0x0x0000000002888000 @indo-kernel\src\memory\vmm.rs:560
+[PMM] FREE frame=0x0x0000000002887000 @indo-kernel\src\memory\vmm.rs:564
+[PMM] FREE frame=0x0x0000000002886000 @indo-kernel\src\memory\vmm.rs:568
+[PMM] FREE frame=0x0x0000000002874000 @indo-kernel\src\memory\vmm.rs:577
+[PMM] FREE frame=0x0x0000000002850000 @indo-kernel\src\memory\vmm.rs:560
+[PMM] FREE frame=0x0x000000000284F000 @indo-kernel\src\memory\vmm.rs:564
+[PMM] FREE frame=0x0x000000000284E000 @indo-kernel\src\memory\vmm.rs:568
+[PMM] FREE frame=0x0x0000000002853000 @indo-kernel\src\memory\vmm.rs:560
+[PMM] FREE frame=0x0x0000000002852000 @indo-kernel\src\memory\vmm.rs:564
+[PMM] FREE frame=0x0x0000000002851000 @indo-kernel\src\memory\vmm.rs:568
+[PMM] FREE frame=0x0x0000000002856000 @indo-kernel\src\memory\vmm.rs:560
+[PMM] FREE frame=0x0x0000000002855000 @indo-kernel\src\memory\vmm.rs:564
+[PMM] FREE frame=0x0x0000000002854000 @indo-kernel\src\memory\vmm.rs:568
+[PMM] FREE frame=0x0x0000000002859000 @indo-kernel\src\memory\vmm.rs:560
+[PMM] FREE frame=0x0x0000000002858000 @indo-kernel\src\memory\vmm.rs:564
+[PMM] FREE frame=0x0x0000000002857000 @indo-kernel\src\memory\vmm.rs:568
+[PMM] FREE frame=0x0x00000000027FB000 @indo-kernel\src\memory\vmm.rs:577
+  FAIL: waitpid err=fffffffffffffffd
+  FAIL: FPU isolation failed
+[CTXSW] [18/18] fpu_stress...
+[PROC] stack frame: entry_phys=0x0000000000000000 virt=0xFFFFFFFF72906000 sp=0xFFFFFFFFC0037F30
+[SYSCALL] fork parent=6 child=14
+[SYSCALL] exit(0) pid=7
+  PASS: FPU basic
+[CTXSW] [17/18] fpu_isolation...[PMM] FREE frame=0x0x000000000281C000 @indo-kernel\src\memory\vmm.rs:560
+[PMM] FREE frame=0x0x000000000281B000 @indo-kernel\src\memory\vmm.rs:564
+[PMM] FREE frame=0x0x000000000281A000 @indo-kernel\src\memory\vmm.rs:568
+[PMM] FREE frame=0x0x0000000002828000 @indo-kernel\src\memory\vmm.rs:560
+[PMM] FREE frame=0x0x0000000002827000 @indo-kernel\src\memory\vmm.rs:564
+[PMM] FREE frame=0x0x0000000002826000 @indo-kernel\src\memory\vmm.rs:568
+[PMM] FREE frame=0x0x0000000002879000 @indo-kernel\src\memory\vmm.rs:560
+[PMM] FREE frame=0x0x0000000002878000 @indo-kernel\src\memory\vmm.rs:564
+[PMM] FREE frame=0x0x0000000002877000 @indo-kernel\src\memory\vmm.rs:568
+[PMM] DECREF-FREE frame=0x0x000000000284D000
+[PMM] FREE frame=0x0x000000000287C000 @indo-kernel\src\memory\vmm.rs:560
+[PMM] FREE frame=0x0x000000000287B000 @indo-kernel\src\memory\vmm.rs:564
+[PMM] FREE frame=0x0x000000000287A000 @indo-kernel\src\memory\vmm.rs:568
+[PMM] FREE frame=0x0x0000000002818000 @indo-kernel\src\memory\vmm.rs:577
+
+[PROC] stack frame: entry_phys=0x0000000000000000 virt=0xFFFFFFFF72906000 sp=0xFFFFFFFFC0037F30
+[SYSCALL] fork parent=11 child=21
+  PASS: FPU isolation
+[CTXSW] [18/18] fpu_stress...
+[PROC] stack frame: entry_phys=0x0000000000000000 virt=0xFFFFFFFF72906000 sp=0xFFFFFFFFC003BF30
+[SYSCALL] fork parent=17 child=22
+  FAIL: FPU stress iter=0 wp=ffffffff[SYSCALL] exit(0) pid=9
+[SYSCALL] exit(0) pid=14
+[WAKE] pid=6 -> Ready (wake_wait_for_child)
+  FAIL: FPU stress iter=0 wp=fffffffffffffffd
+[CTXSW] ====================================
+[CTXSW] Results: e passed, 4 failed
+[CTXSW] SOME TESTS FAILED
+[SYSCALL] exit(1) pid=17
+[SCHED] Re-parented PID 3 to init (PID 4)
+[SCHED] Re-parented PID 22 to init (PID 4)
+[WAKE] pid=13 -> Ready (wake_wait_for_child)
+fffffffd
+[CTXSW] ====================================
+[CTXSW] Results: d passed, 5 failed
+[CTXSW] SOME TESTS FAILED
+[PMM] FREE frame=0x0x000000000288C000 @indo-kernel\src\memory\vmm.rs:560
+[PMM] FREE frame=0x0x000000000288B000 @indo-kernel\src\memory\vmm.rs:564
+[PMM] FREE frame=0x0x000000000288A000 @indo-kernel\src\memory\vmm.rs:568
+[PMM] FREE frame=0x0x000000000288F000 @indo-kernel\src\memory\vmm.rs:560
+[PMM] FREE frame=0x0x000000000288E000 @indo-kernel\src\memory\vmm.rs:564
+[PMM] FREE frame=0x0x000000000288D000 @indo-kernel\src\memory\vmm.rs:568
+[PMM] FREE frame=0x0x0000000002892000 @indo-kernel\src\memory\vmm.rs:560
+[PMM] FREE frame=0x0x0000000002891000 @indo-kernel\src\memory\vmm.rs:564
+[PMM] FREE frame=0x0x0000000002890000 @indo-kernel\src\memory\vmm.rs:568
+[PMM] DECREF-FREE frame=0x0x000000000284C000
+[PMM] FREE frame=0x0x0000000002895000 @indo-kernel\src\memory\vmm.rs:560
+[PMM] FREE frame=0x0x0000000002894000 @indo-kernel\src\memory\vmm.rs:564
+[PMM] FREE frame=0x0x0000000002893000 @indo-kernel\src\memory\vmm.rs:568
+[PMM] FREE frame=0x0x0000000002889000 @indo-kernel\src\memory\vmm.rs:577
+[PMM] FREE frame=0x0x0000000002850000 @indo-kernel\src\memory\vmm.rs:560
+[PMM] FREE frame=0x0x000000000284F000 @indo-kernel\src\memory\vmm.rs:564
+[PMM] FREE frame=0x0x000000000284E000 @indo-kernel\src\memory\vmm.rs:568
+[PMM] FREE frame=0x0x0000000002853000 @indo-kernel\src\memory\vmm.rs:560
+[PMM] FREE frame=0x0x0000000002852000 @indo-kernel\src\memory\vmm.rs:564
+[PMM] FREE frame=0x0x0000000002851000 @indo-kernel\src\memory\vmm.rs:568
+[PMM] FREE frame=0x0x0000000002856000 @indo-kernel\src\memory\vmm.rs:560
+[PMM] FREE frame=0x0x0000000002855000 @indo-kernel\src\memory\vmm.rs:564
+[PMM] FREE frame=0x0x0000000002854000 @indo-kernel\src\memory\vmm.rs:568
+[PMM] FREE frame=0x0x0000000002859000 @indo-kernel\src\memory\vmm.rs:560
+[PMM] FREE frame=0x0x0000000002858000 @indo-kernel\src\memory\vmm.rs:564
+[PMM] FREE frame=0x0x0000000002857000 @indo-kernel\src\memory\vmm.rs:568
+[PMM] FREE frame=0x0x00000000027FD000 @indo-kernel\src\memory\vmm.rs:577
+[PMM] FREE frame=0x0x000000000286A000 @indo-kernel\src\memory\vmm.rs:560
+[PMM] FREE frame=0x0x0000000002869000 @indo-kernel\src\memory\vmm.rs:564
+[PMM] FREE frame=0x0x0000000002868000 @indo-kernel\src\memory\vmm.rs:568
+[PMM] FREE frame=0x0x000000000286D000 @indo-kernel\src\memory\vmm.rs:560
+[PMM] FREE frame=0x0x000000000286C000 @indo-kernel\src\memory\vmm.rs:564
+[PMM] FREE frame=0x0x000000000286B000 @indo-kernel\src\memory\vmm.rs:568
+[PMM] FREE frame=0x0x0000000002870000 @indo-kernel\src\memory\vmm.rs:560
+[PMM] FREE frame=0x0x000000000286F000 @indo-kernel\src\memory\vmm.rs:564
+[PMM] FREE frame=0x0x000000000286E000 @indo-kernel\src\memory\vmm.rs:568
+[PMM] DECREF-FREE frame=0x0x0000000002896000
+[PMM] FREE frame=0x0x0000000002873000 @indo-kernel\src\memory\vmm.rs:560
+[PMM] FREE frame=0x0x0000000002872000 @indo-kernel\src\memory\vmm.rs:564
+[PMM] FREE frame=0x0x0000000002871000 @indo-kernel\src\memory\vmm.rs:568
+[PMM] FREE frame=0x0x0000000002867000 @indo-kernel\src\memory\vmm.rs:577
+[SYSCALL] exit(1) pid=19
+[SCHED] Re-parented PID 9 to init (PID 4)
+[SCHED] Re-parented PID 20 to init (PID 4)
+[SYSCALL] exit(0) pid=21
+[WAKE] pid=11 -> Ready (wake_wait_for_child)
+[SYSCALL] exit(0) pid=22
+[SCHED] Reaped PID=3
+[SCHED] Reaped PID=9
+[SCHED] Reaped PID=20
+[SCHED] Reaped PID=22
+[PMM] FREE frame=0x0x000000000285D000 @indo-kernel\src\memory\vmm.rs:560
+[PMM] FREE frame=0x0x000000000285C000 @indo-kernel\src\memory\vmm.rs:564
+[PMM] FREE frame=0x0x000000000285B000 @indo-kernel\src\memory\vmm.rs:568
+[PMM] FREE frame=0x0x0000000002860000 @indo-kernel\src\memory\vmm.rs:560
+[PMM] FREE frame=0x0x000000000285F000 @indo-kernel\src\memory\vmm.rs:564
+[PMM] FREE frame=0x0x000000000285E000 @indo-kernel\src\memory\vmm.rs:568
+[PMM] FREE frame=0x0x0000000002863000 @indo-kernel\src\memory\vmm.rs:560
+[PMM] FREE frame=0x0x0000000002862000 @indo-kernel\src\memory\vmm.rs:564
+[PMM] FREE frame=0x0x0000000002861000 @indo-kernel\src\memory\vmm.rs:568
+[PMM] DECREF-FREE frame=0x0x0000000002888000
+[PMM] FREE frame=0x0x0000000002866000 @indo-kernel\src\memory\vmm.rs:560
+[PMM] FREE frame=0x0x0000000002865000 @indo-kernel\src\memory\vmm.rs:564
+[PMM] FREE frame=0x0x0000000002864000 @indo-kernel\src\memory\vmm.rs:568
+[PMM] FREE frame=0x0x000000000285A000 @indo-kernel\src\memory\vmm.rs:577
+[PMM] FREE frame=0x0x000000000281C000 @indo-kernel\src\memory\vmm.rs:560
+[PMM] FREE frame=0x0x000000000281B000 @indo-kernel\src\memory\vmm.rs:564
+[PMM] FREE frame=0x0x000000000281A000 @indo-kernel\src\memory\vmm.rs:568
+[PMM] FREE frame=0x0x0000000002828000 @indo-kernel\src\memory\vmm.rs:560
+[PMM] FREE frame=0x0x0000000002827000 @indo-kernel\src\memory\vmm.rs:564
+[PMM] FREE frame=0x0x0000000002826000 @indo-kernel\src\memory\vmm.rs:568
+[PMM] FREE frame=0x0x0000000002877000 @indo-kernel\src\memory\vmm.rs:560
+[PMM] FREE frame=0x0x0000000002874000 @indo-kernel\src\memory\vmm.rs:564
+[PMM] FREE frame=0x0x000000000284D000 @indo-kernel\src\memory\vmm.rs:568
+[PMM] FREE frame=0x0x000000000287A000 @indo-kernel\src\memory\vmm.rs:560
+[PMM] FREE frame=0x0x0000000002879000 @indo-kernel\src\memory\vmm.rs:564
+[PMM] FREE frame=0x0x0000000002878000 @indo-kernel\src\memory\vmm.rs:568
+[PMM] FREE frame=0x0x0000000002818000 @indo-kernel\src\memory\vmm.rs:577
+[PMM] FREE frame=0x0x000000000287E000 @indo-kernel\src\memory\vmm.rs:560
+[PMM] FREE frame=0x0x000000000287D000 @indo-kernel\src\memory\vmm.rs:564
+[PMM] FREE frame=0x0x000000000287C000 @indo-kernel\src\memory\vmm.rs:568
+[PMM] FREE frame=0x0x0000000002881000 @indo-kernel\src\memory\vmm.rs:560
+[PMM] FREE frame=0x0x0000000002880000 @indo-kernel\src\memory\vmm.rs:564
+[PMM] FREE frame=0x0x000000000287F000 @indo-kernel\src\memory\vmm.rs:568
+[PMM] FREE frame=0x0x0000000002884000 @indo-kernel\src\memory\vmm.rs:560
+[PMM] FREE frame=0x0x0000000002883000 @indo-kernel\src\memory\vmm.rs:564
+[PMM] FREE frame=0x0x0000000002882000 @indo-kernel\src\memory\vmm.rs:568
+[PMM] DECREF-FREE frame=0x0x0000000002876000
+[PMM] FREE frame=0x0x0000000002887000 @indo-kernel\src\memory\vmm.rs:560
+[PMM] FREE frame=0x0x0000000002886000 @indo-kernel\src\memory\vmm.rs:564
+[PMM] FREE frame=0x0x0000000002885000 @indo-kernel\src\memory\vmm.rs:568
+[PMM] FREE frame=0x0x000000000287B000 @indo-kernel\src\memory\vmm.rs:577
+[PROC] stack frame: entry_phys=0x0000000000000000 virt=0xFFFFFFFF72906000 sp=0xFFFFFFFFC0031F30
+[SYSCALL] fork parent=6 child=3
+  PASS: FPU isolation
+[CTXSW] [18/18] fpu_stress...
+[PROC] stack frame: entry_phys=0x0000000000000000 virt=0xFFFFFFFF72906000 sp=0xFFFFFFFFC0033F30
+[SYSCALL] fork parent=11 child=9
+[SCHED] Reaped PID=19
+[CTXSW] [16/18] fpu_basic...
+  FAIL: FPU stress iter=1 wp=fffffffffffffffd
+[CTXSW] ====================================
+[CTXSW] Results: d passed, 5 failed
+[CTXSW] SOME TESTS FAILED
+[SYSCALL] exit(1) pid=6
+[SCHED] Re-parented PID 2 to init (PID 4)
+[SCHED] Re-parented PID 3 to init (PID 4)
+[SCHED] Re-parented PID 5 to init (PID 4)
+[SCHED] Re-parented PID 7 to init (PID 4)
+[SCHED] Re-parented PID 8 to init (PID 4)
+[SCHED] Re-parented PID 10 to init (PID 4)
+[SCHED] Re-parented PID 12 to init (PID 4)
+[SCHED] Re-parented PID 13 to init (PID 4)
+[SCHED] Re-parented PID 14 to init (PID 4)
+[SCHED] Re-parented PID 15 to init (PID 4)
+[SCHED] Re-parented PID 18 to init (PID 4)
+  PASS: FPU basic
+[CTXSW] [17/18] fpu_isolation...
+[PROC] stack frame: entry_phys=0x0000000000000000 virt=0xFFFFFFFF72906000 sp=0xFFFFFFFFC0035F30
+[SYSCALL] fork parent=13 child=19
+[PMM] FREE frame=0x0x0000000002848000 @indo-kernel\src\memory\vmm.rs:560
+[PMM] FREE frame=0x0x0000000002847000 @indo-kernel\src\memory\vmm.rs:564
+[PMM] FREE frame=0x0x0000000002846000 @indo-kernel\src\memory\vmm.rs:568
+[PMM] FREE frame=0x0x00000000027F7000 @indo-kernel\src\memory\vmm.rs:560
+[PMM] FREE frame=0x0x00000000027F6000 @indo-kernel\src\memory\vmm.rs:564
+[PMM] FREE frame=0x0x00000000027F5000 @indo-kernel\src\memory\vmm.rs:568
+[PMM] FREE frame=0x0x0000000002800000 @indo-kernel\src\memory\vmm.rs:560
+[PMM] FREE frame=0x0x00000000027FF000 @indo-kernel\src\memory\vmm.rs:564
+[PMM] FREE frame=0x0x00000000027FE000 @indo-kernel\src\memory\vmm.rs:568
+[PMM] DECREF-FREE frame=0x0x000000000285E000
+[PMM] FREE frame=0x0x000000000284B000 @indo-kernel\src\memory\vmm.rs:560
+[PMM] FREE frame=0x0x000000000284A000 @indo-kernel\src\memory\vmm.rs:564
+[PMM] FREE frame=0x0x0000000002849000 @indo-kernel\src\memory\vmm.rs:568
+[PMM] FREE frame=0x0x0000000002845000 @indo-kernel\src\memory\vmm.rs:577
+[SYSCALL] exit(0) pid=3
+[PMM] FREE frame=0x0x000000000281B000 @indo-kernel\src\memory\vmm.rs:560
+[PMM] FREE frame=0x0x000000000281A000 @indo-kernel\src\memory\vmm.rs:564
+[PMM] FREE frame=0x0x0000000002818000 @indo-kernel\src\memory\vmm.rs:568
+[PMM] FREE frame=0x0x0000000002827000 @indo-kernel\src\memory\vmm.rs:560
+[PMM] FREE frame=0x0x0000000002826000 @indo-kernel\src\memory\vmm.rs:564
+[PMM] FREE frame=0x0x000000000281C000 @indo-kernel\src\memory\vmm.rs:568
+[PMM] FREE frame=0x0x000000000284D000 @indo-kernel\src\memory\vmm.rs:560
+[PMM] FREE frame=0x0x000000000284C000 @indo-kernel\src\memory\vmm.rs:564
+[PMM] FREE frame=0x0x0000000002828000 @indo-kernel\src\memory\vmm.rs:568
+[PMM] DECREF-FREE frame=0x0x00000000027FB000
+[PMM] FREE frame=0x0x0000000002850000 @indo-kernel\src\memory\vmm.rs:560
+[PMM] FREE frame=0x0x000000000284F000 @indo-kernel\src\memory\vmm.rs:564
+[PMM] FREE frame=0x0x000000000284E000 @indo-kernel\src\memory\vmm.rs:568
+[PMM] FREE frame=0x0x00000000027FD000 @indo-kernel\src\memory\vmm.rs:577
+[SCHED] Reaped PID=2
+[SCHED] Reaped PID=3
+[SCHED] Reaped PID=5
+[SCHED] Reaped PID=6
+[SCHED] Reaped PID=7
+[SCHED] Reaped PID=8
+[SCHED] Reaped PID=10
+[SCHED] Reaped PID=12
+[SCHED] Reaped PID=14
+[SCHED] Reaped PID=15
+[SCHED] Reaped PID=18
+[SYSCALL] exit(0) pid=9
+[WAKE] pid=11 -> Ready (wake_wait_for_child)
+[PROC] stack frame: entry_phys=0x0000000000000000 virt=0xFFFFFFFF72906000 sp=0xFFFFFFFFC002FF30
+[SYSCALL] fork parent=11 child=2
+[SYSCALL] exit(0) pid=19
+[PMM] FREE frame=0x0x0000000002854000 @indo-kernel\src\memory\vmm.rs:560
+[PMM] FREE frame=0x0x0000000002853000 @indo-kernel\src\memory\vmm.rs:564
+[PMM] FREE frame=0x0x0000000002852000 @indo-kernel\src\memory\vmm.rs:568
+[PMM] FREE frame=0x0x0000000002857000 @indo-kernel\src\memory\vmm.rs:560
+[PMM] FREE frame=0x0x0000000002856000 @indo-kernel\src\memory\vmm.rs:564
+[PMM] FREE frame=0x0x0000000002855000 @indo-kernel\src\memory\vmm.rs:568
+[PMM] FREE frame=0x0x000000000285A000 @indo-kernel\src\memory\vmm.rs:560
+[PMM] FREE frame=0x0x0000000002859000 @indo-kernel\src\memory\vmm.rs:564
+[PMM] FREE frame=0x0x0000000002858000 @indo-kernel\src\memory\vmm.rs:568
+[PMM] FREE frame=0x0x000000000285D000 @indo-kernel\src\memory\vmm.rs:560
+[PMM] FREE frame=0x0x000000000285C000 @indo-kernel\src\memory\vmm.rs:564
+[PMM] FREE frame=0x0x000000000285B000 @indo-kernel\src\memory\vmm.rs:568
+[PMM] FREE frame=0x0x0000000002851000 @indo-kernel\src\memory\vmm.rs:577
+[PMM] FREE frame=0x0x0000000002862000 @indo-kernel\src\memory\vmm.rs:560
+[PMM] FREE frame=0x0x0000000002861000 @indo-kernel\src\memory\vmm.rs:564
+[PMM] FREE frame=0x0x0000000002860000 @indo-kernel\src\memory\vmm.rs:568
+[PMM] FREE frame=0x0x0000000002865000 @indo-kernel\src\memory\vmm.rs:560
+[PMM] FREE frame=0x0x0000000002864000 @indo-kernel\src\memory\vmm.rs:564
+[PMM] FREE frame=0x0x0000000002863000 @indo-kernel\src\memory\vmm.rs:568
+[PMM] FREE frame=0x0x0000000002868000 @indo-kernel\src\memory\vmm.rs:560
+[PMM] FREE frame=0x0x0000000002867000 @indo-kernel\src\memory\vmm.rs:564
+[PMM] FREE frame=0x0x0000000002866000 @indo-kernel\src\memory\vmm.rs:568
+[PMM] FREE frame=0x0x000000000286B000 @indo-kernel\src\memory\vmm.rs:560
+[PMM] FREE frame=0x0x000000000286A000 @indo-kernel\src\memory\vmm.rs:564
+[PMM] FREE frame=0x0x0000000002869000 @indo-kernel\src\memory\vmm.rs:568
+[PMM] FREE frame=0x0x000000000285F000 @indo-kernel\src\memory\vmm.rs:577
+  FAIL: waitpid err=fffffffffffffffd
+  FAIL: FPU isolation failed
+[CTXSW] [18/18] fpu_stress...
+[PROC] stack frame: entry_phys=0x0000000000000000 virt=0xFFFFFFFF72906000 sp=0xFFFFFFFFC0031F30
+[SYSCALL] fork parent=13 child=3
+[SYSCALL] exit(0) pid=2
+[WAKE] pid=11 -> Ready (wake_wait_for_child)
+[PMM] FREE frame=0x0x00000000027FB000 @indo-kernel\src\memory\vmm.rs:560
+[PMM] FREE frame=0x0x00000000027F7000 @indo-kernel\src\memory\vmm.rs:564
+[PMM] FREE frame=0x0x00000000027F6000 @indo-kernel\src\memory\vmm.rs:568
 [PMM] FREE frame=0x0x00000000027FF000 @indo-kernel\src\memory\vmm.rs:560
 [PMM] FREE frame=0x0x00000000027FE000 @indo-kernel\src\memory\vmm.rs:564
 [PMM] FREE frame=0x0x00000000027FD000 @indo-kernel\src\memory\vmm.rs:568
-[PMM] DECREF-FREE frame=0x0x00000000027FB000
-[PMM] FREE frame=0x0x0000000002803000 @indo-kernel\src\memory\vmm.rs:560
-[PMM] FREE frame=0x0x0000000002802000 @indo-kernel\src\memory\vmm.rs:564
+[PMM] FREE frame=0x0x000000000281A000 @indo-kernel\src\memory\vmm.rs:560
+[PMM] FREE frame=0x0x0000000002818000 @indo-kernel\src\memory\vmm.rs:564
 [PMM] FREE frame=0x0x0000000002800000 @indo-kernel\src\memory\vmm.rs:568
+[PMM] FREE frame=0x0x0000000002826000 @indo-kernel\src\memory\vmm.rs:560
+[PMM] FREE frame=0x0x000000000281C000 @indo-kernel\src\memory\vmm.rs:564
+[PMM] FREE frame=0x0x000000000281B000 @indo-kernel\src\memory\vmm.rs:568
+[PMM] FREE frame=0x0x00000000027F5000 @indo-kernel\src\memory\vmm.rs:577
+[PROC] stack frame: entry_phys=0x0000000000000000 virt=0xFFFFFFFF72906000 sp=0xFFFFFFFFC0031F30
+[SYSCALL] fork parent=11 child=5
+  FAIL: FPU stress iter=0 wp=fffffffffffffffd
+[CTXSW] ====================================
+[CTXSW] Results: d passed, 5 failed
+[CTXSW] SOME TESTS FAILED
+[SYSCALL] exit(1) pid=13
+[SCHED] Re-parented PID 3 to init (PID 4)
+[SCHED] Re-parented PID 17 to init (PID 4)
+[SCHED] Re-parented PID 19 to init (PID 4)
+[PMM] FREE frame=0x0x000000000280E000 @indo-kernel\src\memory\vmm.rs:560
+[PMM] FREE frame=0x0x000000000280D000 @indo-kernel\src\memory\vmm.rs:564
+[PMM] FREE frame=0x0x0000000002802000 @indo-kernel\src\memory\vmm.rs:568
+[PMM] FREE frame=0x0x0000000002812000 @indo-kernel\src\memory\vmm.rs:560
+[PMM] FREE frame=0x0x0000000002811000 @indo-kernel\src\memory\vmm.rs:564
+[PMM] FREE frame=0x0x0000000002810000 @indo-kernel\src\memory\vmm.rs:568
+[PMM] FREE frame=0x0x0000000002815000 @indo-kernel\src\memory\vmm.rs:560
+[PMM] FREE frame=0x0x0000000002814000 @indo-kernel\src\memory\vmm.rs:564
+[PMM] FREE frame=0x0x0000000002813000 @indo-kernel\src\memory\vmm.rs:568
+[PMM] DECREF-FREE frame=0x0x0000000002850000
+[PMM] FREE frame=0x0x0000000002830000 @indo-kernel\src\memory\vmm.rs:560
+[PMM] FREE frame=0x0x0000000002817000 @indo-kernel\src\memory\vmm.rs:564
+[PMM] FREE frame=0x0x0000000002816000 @indo-kernel\src\memory\vmm.rs:568
+[PMM] FREE frame=0x0x00000000027F8000 @indo-kernel\src\memory\vmm.rs:577
+[SYSCALL] exit(0) pid=3
+[SCHED] Reaped PID=3
+[SCHED] Reaped PID=13
+[SCHED] Reaped PID=17
+[SCHED] Reaped PID=19
+[PMM] FREE frame=0x0x0000000002846000 @indo-kernel\src\memory\vmm.rs:560
+[PMM] FREE frame=0x0x0000000002845000 @indo-kernel\src\memory\vmm.rs:564
+[PMM] FREE frame=0x0x0000000002828000 @indo-kernel\src\memory\vmm.rs:568
+[PMM] DECREF-FREE frame=0x0x0000000002801000
+[PMM] FREE frame=0x0x0000000002849000 @indo-kernel\src\memory\vmm.rs:560
+[PMM] FREE frame=0x0x0000000002848000 @indo-kernel\src\memory\vmm.rs:564
+[PMM] FREE frame=0x0x0000000002847000 @indo-kernel\src\memory\vmm.rs:568
+[PMM] FREE frame=0x0x000000000284C000 @indo-kernel\src\memory\vmm.rs:560
+[PMM] FREE frame=0x0x000000000284B000 @indo-kernel\src\memory\vmm.rs:564
+[PMM] FREE frame=0x0x000000000284A000 @indo-kernel\src\memory\vmm.rs:568
+[PMM] DECREF-FREE frame=0x0x0000000002875000
+[PMM] FREE frame=0x0x000000000284F000 @indo-kernel\src\memory\vmm.rs:560
+[PMM] FREE frame=0x0x000000000284E000 @indo-kernel\src\memory\vmm.rs:564
+[PMM] FREE frame=0x0x000000000284D000 @indo-kernel\src\memory\vmm.rs:568
+[PMM] FREE frame=0x0x0000000002827000 @indo-kernel\src\memory\vmm.rs:577
+  FAIL: FPU stress iter=2 wp=fffffffffffffffd
+[CTXSW] ====================================
+[CTXSW] Results: e passed, 4 failed
+[CTXSW] SOME TESTS FAILED
+[SYSCALL] exit(1) pid=11
+[SCHED] Re-parented PID 1 to init (PID 4)
+[SCHED] Re-parented PID 2 to init (PID 4)
+[SCHED] Re-parented PID 5 to init (PID 4)
+[SCHED] Re-parented PID 9 to init (PID 4)
+[SCHED] Re-parented PID 16 to init (PID 4)
+[SCHED] Re-parented PID 21 to init (PID 4)
 [PMM] FREE frame=0x0x0000000002806000 @indo-kernel\src\memory\vmm.rs:560
 [PMM] FREE frame=0x0x0000000002805000 @indo-kernel\src\memory\vmm.rs:564
 [PMM] FREE frame=0x0x0000000002804000 @indo-kernel\src\memory\vmm.rs:568
 [PMM] FREE frame=0x0x0000000002809000 @indo-kernel\src\memory\vmm.rs:560
 [PMM] FREE frame=0x0x0000000002808000 @indo-kernel\src\memory\vmm.rs:564
 [PMM] FREE frame=0x0x0000000002807000 @indo-kernel\src\memory\vmm.rs:568
-[PMM] FREE frame=0x0x00000000027FC000 @indo-kernel\src\memory\vmm.rs:577
-[SYSCALL] exit(0) pid=31
-[SCHED] Reaped PID=28
-[SCHED] Reaped PID=29
-[SCHED] Reaped PID=30
-[SCHED] Reaped PID=31
-[PMM] FREE frame=0x0x00000000027F4000 @indo-kernel\src\syscall\mod.rs:3037
-  PASS: CoW fork bomb
-[CTXSW] ====================================
-[CTXSW] Results: f passed, 0 failed
-[CTXSW] ALL TESTS PASSED
-[SYSCALL] exit(0) pid=3
-[SCHED] Re-parented PID 1 to init (PID 4)
-[SCHED] Re-parented PID 2 to init (PID 4)
-[SCHED] Re-parented PID 6 to init (PID 4)
-[SCHED] Re-parented PID 7 to init (PID 4)
-[SCHED] Re-parented PID 8 to init (PID 4)
-[SCHED] Re-parented PID 9 to init (PID 4)
-[SCHED] Re-parented PID 10 to init (PID 4)
-[SCHED] Re-parented PID 11 to init (PID 4)
-[SCHED] Re-parented PID 12 to init (PID 4)
-[SCHED] Re-parented PID 13 to init (PID 4)
-[SCHED] Re-parented PID 14 to init (PID 4)
-[SCHED] Re-parented PID 15 to init (PID 4)
-[SCHED] Re-parented PID 16 to init (PID 4)
-[SCHED] Re-parented PID 17 to init (PID 4)
-[SCHED] Re-parented PID 18 to init (PID 4)
-[SCHED] Re-parented PID 19 to init (PID 4)
-[SCHED] Re-parented PID 20 to init (PID 4)
-[SCHED] Re-parented PID 21 to init (PID 4)
-[SCHED] Re-parented PID 22 to init (PID 4)
-[SCHED] Re-parented PID 23 to init (PID 4)
-[SCHED] Re-parented PID 24 to init (PID 4)
-[SCHED] Re-parented PID 25 to init (PID 4)
-[SCHED] Re-parented PID 26 to init (PID 4)
-[SCHED] Re-parented PID 27 to init (PID 4)
-[PMM] FREE frame=0x0x000000000280D000 @indo-kernel\src\memory\vmm.rs:560
-[PMM] FREE frame=0x0x000000000280C000 @indo-kernel\src\memory\vmm.rs:564
-[PMM] FREE frame=0x0x000000000280B000 @indo-kernel\src\memory\vmm.rs:568
-[PMM] DECREF-FREE frame=0x0x00000000027FB000
-[PMM] FREE frame=0x0x0000000002810000 @indo-kernel\src\memory\vmm.rs:560
-[PMM] FREE frame=0x0x000000000280F000 @indo-kernel\src\memory\vmm.rs:564
-[PMM] FREE frame=0x0x000000000280E000 @indo-kernel\src\memory\vmm.rs:568
-[PMM] FREE frame=0x0x0000000002813000 @indo-kernel\src\memory\vmm.rs:560
-[PMM] FREE frame=0x0x0000000002812000 @indo-kernel\src\memory\vmm.rs:564
-[PMM] FREE frame=0x0x0000000002811000 @indo-kernel\src\memory\vmm.rs:568
-[PMM] DECREF-FREE frame=0x0x0000000002801000
-[PMM] FREE frame=0x0x0000000002816000 @indo-kernel\src\memory\vmm.rs:560
-[PMM] FREE frame=0x0x0000000002815000 @indo-kernel\src\memory\vmm.rs:564
-[PMM] FREE frame=0x0x0000000002814000 @indo-kernel\src\memory\vmm.rs:568
-[PMM] FREE frame=0x0x000000000280A000 @indo-kernel\src\memory\vmm.rs:577
+[PMM] FREE frame=0x0x00000000027FC000 @indo-kernel\src\memory\vmm.rs:560
+[PMM] FREE frame=0x0x00000000027FA000 @indo-kernel\src\memory\vmm.rs:564
+[PMM] FREE frame=0x0x00000000027F9000 @indo-kernel\src\memory\vmm.rs:568
+[PMM] DECREF-FREE frame=0x0x00000000027F8000
+[PMM] FREE frame=0x0x000000000280C000 @indo-kernel\src\memory\vmm.rs:560
+[PMM] FREE frame=0x0x000000000280B000 @indo-kernel\src\memory\vmm.rs:564
+[PMM] FREE frame=0x0x000000000280A000 @indo-kernel\src\memory\vmm.rs:568
+[PMM] FREE frame=0x0x0000000002803000 @indo-kernel\src\memory\vmm.rs:577
+[SCHED] Reaped PID=1
+[SCHED] Reaped PID=2
+[SCHED] Reaped PID=9
+[SCHED] Reaped PID=11
+[SCHED] Reaped PID=16
+[SCHED] Reaped PID=21
+[SYSCALL] exit(0) pid=5
+[SCHED] Reaped PID=5
 [PMM] DECREF-FREE frame=0x0x0000000002819000
 [PMM] DECREF-FREE frame=0x0x000000000281D000
 [PMM] DECREF-FREE frame=0x0x000000000281E000
@@ -1228,15 +1607,16 @@ aaaaaa OK
 [PMM] DECREF-FREE frame=0x0x0000000002822000
 [PMM] DECREF-FREE frame=0x0x0000000002823000
 [PMM] DECREF-FREE frame=0x0x0000000002824000
-[PMM] FREE frame=0x0x000000000281C000 @indo-kernel\src\memory\vmm.rs:560
-[PMM] FREE frame=0x0x000000000281B000 @indo-kernel\src\memory\vmm.rs:564
-[PMM] FREE frame=0x0x000000000281A000 @indo-kernel\src\memory\vmm.rs:568
-[PMM] FREE frame=0x0x00000000027F7000 @indo-kernel\src\memory\vmm.rs:560
-[PMM] FREE frame=0x0x00000000027F6000 @indo-kernel\src\memory\vmm.rs:564
-[PMM] FREE frame=0x0x00000000027F5000 @indo-kernel\src\memory\vmm.rs:568
-[PMM] FREE frame=0x0x00000000027FA000 @indo-kernel\src\memory\vmm.rs:560
-[PMM] FREE frame=0x0x00000000027F9000 @indo-kernel\src\memory\vmm.rs:564
-[PMM] FREE frame=0x0x00000000027F8000 @indo-kernel\src\memory\vmm.rs:568
+[PMM] FREE frame=0x0x00000000027FB000 @indo-kernel\src\memory\vmm.rs:560
+[PMM] FREE frame=0x0x00000000027F7000 @indo-kernel\src\memory\vmm.rs:564
+[PMM] FREE frame=0x0x00000000027F6000 @indo-kernel\src\memory\vmm.rs:568
+[PMM] DECREF-FREE frame=0x0x00000000027F4000
+[PMM] FREE frame=0x0x00000000027FF000 @indo-kernel\src\memory\vmm.rs:560
+[PMM] FREE frame=0x0x00000000027FE000 @indo-kernel\src\memory\vmm.rs:564
+[PMM] FREE frame=0x0x00000000027FD000 @indo-kernel\src\memory\vmm.rs:568
+[PMM] FREE frame=0x0x000000000281A000 @indo-kernel\src\memory\vmm.rs:560
+[PMM] FREE frame=0x0x0000000002818000 @indo-kernel\src\memory\vmm.rs:564
+[PMM] FREE frame=0x0x0000000002800000 @indo-kernel\src\memory\vmm.rs:568
 [PMM] DECREF-FREE frame=0x0x0000000002825000
 [PMM] DECREF-FREE frame=0x0x0000000002829000
 [PMM] DECREF-FREE frame=0x0x000000000282A000
@@ -1245,38 +1625,9 @@ aaaaaa OK
 [PMM] DECREF-FREE frame=0x0x000000000282D000
 [PMM] DECREF-FREE frame=0x0x000000000282E000
 [PMM] DECREF-FREE frame=0x0x000000000282F000
-[PMM] DECREF-FREE frame=0x0x00000000027F4000
-[PMM] FREE frame=0x0x0000000002828000 @indo-kernel\src\memory\vmm.rs:560
-[PMM] FREE frame=0x0x0000000002827000 @indo-kernel\src\memory\vmm.rs:564
-[PMM] FREE frame=0x0x0000000002826000 @indo-kernel\src\memory\vmm.rs:568
-[PMM] FREE frame=0x0x0000000002818000 @indo-kernel\src\memory\vmm.rs:577
-[SCHED] Reaped PID=1
-[SCHED] Reaped PID=2
-[SCHED] Reaped PID=3
-[SCHED] Reaped PID=6
-[SCHED] Reaped PID=7
-[SCHED] Reaped PID=8
-[SCHED] Reaped PID=9
-[SCHED] Reaped PID=10
-[SCHED] Reaped PID=11
-[SCHED] Reaped PID=12
-[SCHED] Reaped PID=13
-[SCHED] Reaped PID=14
-[SCHED] Reaped PID=15
-[SCHED] Reaped PID=16
-[SCHED] Reaped PID=17
-[SCHED] Reaped PID=18
-[SCHED] Reaped PID=19
-[SCHED] Reaped PID=20
-[SCHED] Reaped PID=21
-[SCHED] Reaped PID=22
-[SCHED] Reaped PID=23
-[SCHED] Reaped PID=24
-[SCHED] Reaped PID=25
-[SCHED] Reaped PID=26
-[SCHED] Reaped PID=27
-test_ctxswitch[WAKE] pid=5 -> Ready (keyboard_wake)
-[SHELL] loop iteration
-/ $ [KBD-READ] entry r=0 w=0 e=14
-[KBD-RECHECK] r=0 w=0 e=14
-[KBD] read_line returning 0 (no data after recheck)
+[PMM] DECREF-FREE frame=0x0x000000000280F000
+[PMM] FREE frame=0x0x0000000002826000 @indo-kernel\src\memory\vmm.rs:560
+[PMM] FREE frame=0x0x000000000281C000 @indo-kernel\src\memory\vmm.rs:564
+[PMM] FREE frame=0x0x000000000281B000 @indo-kernel\src\memory\vmm.rs:568
+[PMM] FREE frame=0x0x00000000027F5000 @indo-kernel\src\memory\vmm.rs:577
+test_ctxswitch

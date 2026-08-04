@@ -63,7 +63,13 @@ pub static mut IRET_SS: u64 = 0;
 ///
 /// Zero means "no deferred switch pending".
 #[no_mangle]
-pub static mut DEFERRED_CR3: u64 = 0;
+pub static DEFERRED_CR3: core::sync::atomic::AtomicU64 = core::sync::atomic::AtomicU64::new(0);
+
+/// Pointer to the current process's FPU/SSE state buffer (512 bytes, 16-byte aligned).
+/// Updated by schedule() on every context switch.
+/// The naked handler uses this for FXSAVE (outgoing) and FXRSTOR (incoming).
+#[no_mangle]
+pub static CURRENT_FPU_STATE: core::sync::atomic::AtomicU64 = core::sync::atomic::AtomicU64::new(0);
 
 /// Deferred process cleanup slots.
 ///
@@ -71,7 +77,7 @@ pub static mut DEFERRED_CR3: u64 = 0;
 /// `free_kernel_stack` on that stack corrupts the locals and return address.
 /// Instead, we stash dead resources here and free them at the next timer tick
 /// when we are safely on a different process's stack.
-const MAX_DEFERRED: usize = 4;
+const MAX_DEFERRED: usize = 8;
 use core::sync::atomic::{AtomicUsize, Ordering};
 static DEFERRED_COUNT: AtomicUsize = AtomicUsize::new(0);
 static DEFERRED_SLOTS: spin::Mutex<[(u64, u64, bool); MAX_DEFERRED]> =
@@ -156,6 +162,17 @@ pub fn drain_deferred_free() {
 #[unsafe(link_section = ".text")]
 pub unsafe extern "C" fn timer_interrupt_handler() {
     core::arch::naked_asm!(
+        // ── Save FPU/SSE state of outgoing process ────────────────────────
+        // FXSAVE saves 512 bytes to the buffer pointed by CURRENT_FPU_STATE.
+        // Must happen before GP register pushes (FXSAVE doesn't touch GP regs).
+        // Skipped if CURRENT_FPU_STATE is 0 (first dispatch, no outgoing process).
+        "lea rax, [rip + {current_fpu_state}]",
+        "mov rax, [rax]",
+        "test rax, rax",
+        "jz .Lno_fpu_save",
+        "fxsave [rax]",
+        ".Lno_fpu_save:",
+
         // ── Save current process's registers ─────────────────────────────
         // Canonical frame: push R15 first (highest addr) → RAX last (lowest = RSP)
         "push r15",
@@ -183,10 +200,6 @@ pub unsafe extern "C" fn timer_interrupt_handler() {
         "mov r12, rax",
 
         // ── Send EOI to LAPIC ────────────────────────────────────────────
-        // NOTE: Must use the upper-half virtual address (0xFFFFFFFFFEE000B0),
-        // NOT the physical identity-mapped address (0xFEE000B0).
-        // After schedule() switches CR3 to a user PML4, the identity map
-        // is gone, but the upper-half mapping is shared by all PML4s.
         "mov rax, 0xFFFFFFFFFEE000B0",
         "mov dword ptr [rax], 0",
 
@@ -194,13 +207,6 @@ pub unsafe extern "C" fn timer_interrupt_handler() {
         "mov rsp, r12",
 
         // ── Deferred CR3 switch (first dispatch only) ─────────────────
-        // On the first dispatch, schedule() stored the target PML4 in
-        // DEFERRED_CR3 instead of switching CR3 directly. This is because
-        // the timer handler was on the UEFI boot stack (lower-half) which
-        // becomes unmapped after a CR3 switch to user PML4.
-        //
-        // NOW RSP is on the new process's kernel stack (upper half, heap-
-        // allocated, mapped in all PML4s). It is safe to switch CR3.
         "lea rbx, [rip + {deferred_cr3}]",
         "mov rax, [rbx]",
         "test rax, rax",
@@ -210,7 +216,6 @@ pub unsafe extern "C" fn timer_interrupt_handler() {
         ".Lno_deferred_cr3:",
 
         // ── Restore new process's registers ──────────────────────────────
-        // Canonical frame: pop RAX first (lowest addr) → R15 last (highest)
         "pop rax",
         "pop rbx",
         "pop rcx",
@@ -227,11 +232,24 @@ pub unsafe extern "C" fn timer_interrupt_handler() {
         "pop r14",
         "pop r15",
 
+        // ── Restore FPU/SSE state of incoming process ────────────────────
+        // Push/pop RAX around FXRSTOR because loading the FPU state pointer
+        // clobbers RAX, which holds the user's restored register value.
+        "push rax",
+        "lea rax, [rip + {current_fpu_state}]",
+        "mov rax, [rax]",
+        "test rax, rax",
+        "jz .Lno_fpu_restore",
+        "fxrstor [rax]",
+        ".Lno_fpu_restore:",
+        "pop rax",
+
         // ── Return from interrupt ────────────────────────────────────────
         "iretq",
 
         schedule = sym crate::process::context_switch::schedule,
         deferred_cr3 = sym DEFERRED_CR3,
+        current_fpu_state = sym CURRENT_FPU_STATE,
     );
 }
 
@@ -485,11 +503,15 @@ pub unsafe extern "C" fn schedule(saved_rsp: u64) -> u64 {
                 let new_pml4 = new_proc.pml4_phys;
                 let (current_cr3, _) = x86_64::registers::control::Cr3::read();
                 if current_cr3.start_address().as_u64() != new_pml4 {
-                    DEFERRED_CR3 = new_pml4;
+                    DEFERRED_CR3.store(new_pml4, core::sync::atomic::Ordering::Relaxed);
                 }
-                let rsp0 = new_proc.kernel_stack_base + super::process::KERNEL_STACK_SIZE as u64;
-                crate::gdt::set_tss_rsp0(rsp0);
-                crate::syscall::set_kernel_rsp(rsp0);
+        let rsp0 = new_proc.kernel_stack_base + super::process::KERNEL_STACK_SIZE as u64;
+        crate::gdt::set_tss_rsp0(rsp0);
+        crate::syscall::set_kernel_rsp(rsp0);
+
+        // Update FPU state pointer for the incoming process.
+        // The naked handler reads this for FXRSTOR after GP register restore.
+        CURRENT_FPU_STATE.store(&new_proc.fpu_state as *const _ as u64, core::sync::atomic::Ordering::Relaxed);
             }
 
             #[cfg(DEBUG_KERNEL)]
@@ -571,6 +593,10 @@ pub unsafe extern "C" fn schedule(saved_rsp: u64) -> u64 {
         let rsp0 = new_proc.kernel_stack_base + super::process::KERNEL_STACK_SIZE as u64;
         crate::gdt::set_tss_rsp0(rsp0);
         crate::syscall::set_kernel_rsp(rsp0);
+
+        // Update FPU state pointer for the incoming process.
+        // The naked handler uses this for FXRSTOR after schedule() returns.
+        CURRENT_FPU_STATE.store(&new_proc.fpu_state as *const _ as u64, core::sync::atomic::Ordering::Relaxed);
     }
 
     // ── DIAGNOSTIC: dump IRET frame of process BEING RESTORED (resumed) ──
@@ -726,6 +752,9 @@ pub unsafe extern "C" fn schedule_force(saved_rsp: u64) -> u64 {
         crate::gdt::set_tss_rsp0(rsp0);
         crate::syscall::set_kernel_rsp(rsp0);
 
+        // Update FPU state pointer for the incoming process.
+        CURRENT_FPU_STATE.store(&new_proc.fpu_state as *const _ as u64, core::sync::atomic::Ordering::Relaxed);
+
         // ── Checkpoint T: TSS/RSP0 set ───────────────────────────────
         crate::serial::ddbg(b'T');
     }
@@ -812,6 +841,9 @@ pub unsafe extern "C" fn kill_process() -> u64 {
         let rsp0 = new_proc.kernel_stack_base + super::process::KERNEL_STACK_SIZE as u64;
         crate::gdt::set_tss_rsp0(rsp0);
         crate::syscall::set_kernel_rsp(rsp0);
+
+        // Update FPU state pointer for the incoming process.
+        CURRENT_FPU_STATE.store(&new_proc.fpu_state as *const _ as u64, core::sync::atomic::Ordering::Relaxed);
     }
 
     // Now safe to free the dead process's resources — we've switched CR3.
@@ -894,8 +926,22 @@ pub unsafe extern "C" fn page_fault_return_to_user() {
         "pop r14",
         "pop r15",
 
+        // Restore FPU/SSE state of incoming process.
+        // Push/pop RAX around FXRSTOR because loading the FPU state pointer
+        // clobbers RAX, which holds the user's restored register value.
+        "push rax",
+        "lea rax, [rip + {current_fpu_state}]",
+        "mov rax, [rax]",
+        "test rax, rax",
+        "jz .Lpf_no_fpu_restore",
+        "fxrstor [rax]",
+        ".Lpf_no_fpu_restore:",
+        "pop rax",
+
         // RSP now points to IRET frame: RIP, CS, RFLAGS, RSP, SS
         // Do NOT pop these — iretq reads from [RSP] directly.
         "iretq",
+
+        current_fpu_state = sym CURRENT_FPU_STATE,
     );
 }

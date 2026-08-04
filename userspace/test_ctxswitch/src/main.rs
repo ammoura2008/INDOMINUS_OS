@@ -814,6 +814,122 @@ fn test_cow_fork_bomb() -> bool {
     all_ok
 }
 
+// ── Test 16: FPU basic — float math survives yield ───────────────────────
+
+fn test_fpu_basic() -> bool {
+    write_str_nl(b"[CTXSW] [16/18] fpu_basic...");
+
+    let a: f64 = 3.14159;
+    let b: f64 = 2.71828;
+    let expected = a * b + a / b; // do some math
+
+    // Yield to cause context switch
+    sys::yield_now();
+
+    let result = a * b + a / b;
+
+    // Check bit-exact (same computation, same result)
+    let ok = to_bits(result) == to_bits(expected);
+    if !ok { write_str_nl(b"  FAIL: FPU value corrupted after yield"); }
+    if ok { write_str_nl(b"  PASS: FPU basic"); }
+    ok
+}
+
+// ── Test 17: FPU isolation — parent/child float values independent ──────
+
+fn test_fpu_isolation() -> bool {
+    write_str_nl(b"[CTXSW] [17/18] fpu_isolation...");
+
+    let parent_val: f64 = 1.23456789;
+    let child_val: f64 = 9.87654321;
+
+    let pid = sys::fork();
+    if pid == 0 {
+        // Child: compute with child_val, yield, verify
+        let r = child_val * 2.0;
+        sys::yield_now();
+        let r2 = child_val * 2.0;
+        if to_bits(r) != to_bits(r2) {
+            write_str_nl(b"  FAIL: child FPU corrupted");
+            sys::exit(1);
+        }
+        sys::exit(0);
+    }
+
+    // Parent: compute with parent_val, yield, verify
+    let r = parent_val * 3.0;
+    sys::yield_now();
+    let r2 = parent_val * 3.0;
+
+    let r_eq = to_bits(r) == to_bits(r2);
+    if !r_eq {
+        write_str(b"  FAIL: parent r="); write_hex(to_bits(r));
+        write_str(b" r2="); write_hex(to_bits(r2)); write_nl();
+    }
+
+    let result = sys::waitpid_blocking(pid as u64);
+    let wp_ok = !sys::is_error(result);
+    if !wp_ok {
+        write_str(b"  FAIL: waitpid err="); write_hex(result as u64); write_nl();
+    }
+
+    let ok = r_eq && wp_ok;
+    if ok { write_str_nl(b"  PASS: FPU isolation"); }
+    else { write_str_nl(b"  FAIL: FPU isolation failed"); }
+    ok
+}
+
+// ── Test 18: FPU stress — 10 fork+float cycles ──────────────────────────
+
+fn test_fpu_stress() -> bool {
+    write_str_nl(b"[CTXSW] [18/18] fpu_stress...");
+
+    let mut all_ok = true;
+
+    for i in 0..10u64 {
+        let val: f64 = (i as f64) * 1.1 + 0.5;
+
+        let pid = sys::fork();
+        if pid == 0 {
+            // Child: compute, yield, verify
+            let r = val * val + 1.0;
+            sys::yield_now();
+            let r2 = val * val + 1.0;
+            if to_bits(r) != to_bits(r2) {
+                write_str_nl(b"  FAIL: child FPU corrupted in stress");
+                sys::exit(1);
+            }
+            sys::exit(0);
+        }
+
+        // Parent: compute, yield, verify
+        let r = val * val + 1.0;
+        sys::yield_now();
+        let r2 = val * val + 1.0;
+
+        let r_eq = to_bits(r) == to_bits(r2);
+        let result = sys::waitpid_blocking(pid as u64);
+        let wp_ok = !sys::is_error(result);
+
+        if !r_eq || !wp_ok {
+            write_str(b"  FAIL: FPU stress iter="); write_hex(i);
+            if !r_eq { write_str(b" r="); write_hex(to_bits(r)); write_str(b" r2="); write_hex(to_bits(r2)); }
+            if !wp_ok { write_str(b" wp="); write_hex(result as u64); }
+            write_nl();
+            all_ok = false;
+            break;
+        }
+    }
+
+    if all_ok { write_str_nl(b"  PASS: FPU stress"); }
+    all_ok
+}
+
+/// Reinterpret f64 bits as u64 for exact comparison.
+fn to_bits(v: f64) -> u64 {
+    unsafe { core::mem::transmute::<f64, u64>(v) }
+}
+
 // ── Entry Point ────────────────────────────────────────────────────────────
 
 #[no_mangle]
@@ -843,6 +959,9 @@ pub extern "C" fn _start(_argc: u64, _argv: u64) -> ! {
     run_test!(test_memory_stress);
     run_test!(test_pipe_stress);
     run_test!(test_cow_fork_bomb);
+    run_test!(test_fpu_basic);
+    run_test!(test_fpu_isolation);
+    run_test!(test_fpu_stress);
 
     write_str_nl(b"[CTXSW] ====================================");
     write_str(b"[CTXSW] Results: "); write_hex(passed as u64);

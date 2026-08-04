@@ -2781,6 +2781,7 @@ pub extern "sysv64" fn kernel_main(boot_info: *const BootInfo) -> ! {
     crate::cpu::detect();
     crate::cpu::print_features();
     crate::cpu::enable_smep_smap();
+    crate::cpu::enable_fpu();
 
     let new_pml4 = crate::memory::vmm::init_kernel_page_tables(
         bi.kernel_phys_start.as_u64(),

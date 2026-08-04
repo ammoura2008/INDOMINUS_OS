@@ -163,6 +163,22 @@ pub struct Process {
     /// Number of pipe FDs currently open by this process.
     /// Used to enforce per-process pipe limits.
     pub pipe_count: u8,
+    /// FPU/SSE state (512 bytes, 16-byte aligned for FXSAVE/FXRSTOR).
+    /// Saved on every context switch. Initialized to zeroed (FNINIT state).
+    pub fpu_state: FpuState,
+}
+
+/// 512-byte FPU/SSE state buffer, 16-byte aligned for FXSAVE/FXRSTOR.
+#[derive(Clone, Copy)]
+#[repr(C, align(16))]
+pub struct FpuState {
+    pub data: [u8; 512],
+}
+
+impl FpuState {
+    pub fn new() -> Self {
+        FpuState { data: [0u8; 512] }
+    }
 }
 
 /// Maximum number of mmap regions per process.
@@ -222,6 +238,7 @@ impl Process {
             signal_handlers: [0; 32],
             pgid: 0,
             pipe_count: 0,
+            fpu_state: FpuState::new(),
         })
     }
 
@@ -277,6 +294,7 @@ impl Process {
             signal_handlers: [0; 32],
             pgid: 0,
             pipe_count: 0,
+            fpu_state: FpuState::new(),
         })
     }
 

@@ -168,6 +168,30 @@ pub fn enable_smep_smap() {
     }
 }
 
+/// Enable FPU and SSE hardware.
+///
+/// Clears CR0.EM (bit 2) to enable x87 FPU.
+/// Sets CR0.MP (bit 1) to monitor coprocessor.
+/// Executes FNINIT to reset x87 state.
+/// Sets MXCSR to mask all FP exceptions (0x1F80).
+pub fn enable_fpu() {
+    unsafe {
+        let mut cr0: u64;
+        core::arch::asm!("mov {0}, cr0", out(reg) cr0);
+        cr0 &= !(1 << 2); // Clear CR0.EM (enable FPU)
+        cr0 |= 1 << 1;    // Set CR0.MP (monitor coprocessor)
+        core::arch::asm!("mov cr0, {0}", in(reg) cr0);
+
+        // Reset x87 FPU state
+        core::arch::asm!("fninit");
+
+        // Set MXCSR to default (mask all FP exceptions: 0x1F80)
+        let mxcsr: u32 = 0x1F80;
+        core::arch::asm!("ldmxcsr [{ptr}]", ptr = in(reg) &mxcsr as *const u32);
+    }
+    crate::serial::write_str_nl("[CPU] FPU/SSE enabled");
+}
+
 /// Print detected CPU features to serial.
 pub fn print_features() {
     let f = features();
