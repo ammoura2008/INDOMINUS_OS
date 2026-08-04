@@ -16,6 +16,7 @@ members = [
     "utils",
     "test_stress",
     "test_reg",
+    "test_ctxswitch",
 ]
 resolver = "2"
 

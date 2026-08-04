@@ -1,0 +1,14 @@
+{
+  "iterations": 1,
+  "passed": 0,
+  "failed": 1,
+  "pass_rate": 0.0,
+  "results": [
+    {
+      "iteration": 1,
+      "passed": false,
+      "duration": 20.873775720596313,
+      "failure_reason": "Missing critical pattern: test1_pass"
+    }
+  ]
+}

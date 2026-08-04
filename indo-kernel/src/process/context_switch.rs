@@ -155,17 +155,6 @@ pub fn drain_deferred_free() {
     }
 }
 
-// Marker strings as static byte arrays.
-#[no_mangle]
-static TICK_MSG: [u8; 6] = *b"[TICK]";
-#[no_mangle]
-static SWITCH_MSG: [u8; 8] = *b"[SWITCH]";
-
-/// Helper: write_marker_raw(ptr, len) — writes raw bytes to serial.
-/// write_hex(value) — writes hex to serial.
-/// write_byte(byte) — writes one byte to serial.
-/// All #[no_mangle] for use from naked_asm via sym.
-
 /// The naked timer interrupt handler (vector 32).
 ///
 /// Runs with interrupts DISABLED (interrupt gate).
@@ -173,23 +162,6 @@ static SWITCH_MSG: [u8; 8] = *b"[SWITCH]";
 #[unsafe(link_section = ".text")]
 pub unsafe extern "C" fn timer_interrupt_handler() {
     core::arch::naked_asm!(
-        // ══ DIAGNOSTIC: QEMU debug port marker ═════════════════════════
-        // If this 'T' appears after [SWITCH], the timer fires from Ring 3.
-        // If it does NOT appear, the interrupt is not being delivered.
-        "mov dil, 0x54",
-        "call {ddbg_tick}",
-
-        // ── [TICK] marker ──────────────────────────────────────────────
-        "push rax",
-        "push rdi",
-        "push rsi",
-        "lea rdi, [rip + {tick_msg}]",
-        "mov rsi, {tick_len}",
-        "call {write_marker}",
-        "pop rsi",
-        "pop rdi",
-        "pop rax",
-
         // ── Save current process's registers ─────────────────────────────
         // Canonical frame: push R15 first (highest addr) → RAX last (lowest = RSP)
         "push r15",
@@ -212,13 +184,6 @@ pub unsafe extern "C" fn timer_interrupt_handler() {
         "mov rdi, rsp",
         "call {schedule}",
         // RAX = new process's saved RSP
-
-        // ── [SWITCH] marker ──────────────────────────────────────────────
-        "push rax",
-        "lea rdi, [rip + {switch_msg}]",
-        "mov rsi, {switch_len}",
-        "call {write_marker}",
-        "pop rax",
 
         // ── Save new SP into r12 BEFORE EOI ──────────────────────────────
         "mov r12, rax",
@@ -272,13 +237,7 @@ pub unsafe extern "C" fn timer_interrupt_handler() {
         "iretq",
 
         schedule = sym crate::process::context_switch::schedule,
-        write_marker = sym crate::serial::write_marker_raw,
-        ddbg_tick = sym crate::serial::ddbg,
-        tick_msg = sym TICK_MSG,
-        tick_len = const TICK_MSG.len(),
-        switch_msg = sym SWITCH_MSG,
         deferred_cr3 = sym DEFERRED_CR3,
-        switch_len = const SWITCH_MSG.len(),
     );
 }
 

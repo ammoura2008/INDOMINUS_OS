@@ -29,6 +29,7 @@ PACKAGES = [
     ("indominus-utils", "userspace/utils"),
     ("test_stress", "userspace/test_stress"),
     ("test_reg", "userspace/test_reg"),
+    ("test_ctxswitch", "userspace/test_ctxswitch"),
 ]
 
 # Additional binaries from the utils crate to copy

@@ -478,14 +478,7 @@ pub unsafe extern "C" fn syscall_entry() {
         "call {schedule_force}",
         // RAX = new process's saved RSP
 
-        // ── Checkpoint P: first instruction after schedule_force returns ──
         "mov r12, rax",
-        "push rax",
-        "push rdi",
-        "mov dil, 0x50",
-        "call {ddbg}",
-        "pop rdi",
-        "pop rax",
 
         // Send EOI to LAPIC (upper-half virtual address)
         "mov rax, 0xFFFFFFFFFEE000B0",
@@ -561,7 +554,6 @@ pub unsafe extern "C" fn syscall_entry() {
         dispatch = sym syscall_dispatch,
         schedule_force = sym crate::process::context_switch::schedule_force,
         dump_rax = sym crate::serial::dump_rax,
-        ddbg = sym crate::serial::ddbg,
     );
 }
 

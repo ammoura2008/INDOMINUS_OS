@@ -1,0 +1,584 @@
+[2J[01;01H[=3h[2J[01;01H[2J[01;01H[=3h[2J[01;01H[2J[01;01H[=3h[2J[01;01HBdsDxe: loading Boot0001 "UEFI QEMU HARDDISK QM00001 " from PciRoot(0x0)/Pci(0x1F,0x2)/Sata(0x0,0xFFFF,0x0)
+BdsDxe: starting Boot0001 "UEFI QEMU HARDDISK QM00001 " from PciRoot(0x0)/Pci(0x1F,0x2)/Sata(0x0,0xFFFF,0x0)
+[KERNEL] INDOMINUS OS -- scheduler test
+[KERNEL] Kernel phys: 0x000000000D70E000 .. 0x000000000DC543D8
+[CPU] Detected features:
+  NX (No Execute):      YES
+  SMEP:                  NO
+  SMAP:                  NO
+  PAT:                   YES
+  APIC:                  YES
+  Syscall/Sysret:        YES
+  FSGSBASE:              NO
+  SSE:                   YES
+  SSE2:                  YES
+  AVX:                   NO
+  AVX2:                  NO
+  TSC Deadline Timer:    NO
+  Invariant TSC:         NO
+  Max PHY addr bits:     0x0000000000000028
+[MARK] Before switch_gdt_to_virtual
+[TSS] phys=0x000000000D7C1C08 virt=0xFFFFFFFF800B3C08
+[TSS] patched entry5=0x8000890B3C080067 entry6=0x00000000FFFFFFFF
+[GDTR] limit=0x0000000000000057 base=0xFFFFFFFF800C2018
+[TSS] verified base=0xFFFFFFFF800B3C08
+[MARK] After switch_gdt_to_virtual
+[MARK] After init_heap
+[MARK] Before IDT init
+[MARK] idt::init start
+[IDT] RFLAGS=0x0x0000000000000046 IF=0 (DISABLED)
+[MARK] idt::init creating IDT
+[MARK] idt::init new() done
+[MARK] idt::init setting handlers
+[MARK] idt::init exception handlers done
+[MARK] idt::init handlers done
+[MARK] idt::init idt_phys=0x0x000000000D7D0080 idt_virt=0x0xFFFFFFFF800C2080
+[IDTR] limit=0x0000000000000FFF base=0xFFFFFFFF800C2080
+[MARK] idt::init done
+[MARK] After IDT init
+[MARK] Before ACPI init
+[ACPI] Searching for RSDP...
+[ACPI] Using RSDP from bootloader
+[ACPI] RSDP at 0x000000000F77E014
+[ACPI] XSDT=0x000000000F77D0E8 RSDT=0x000000000F77D074
+[ACPI] Found 0x0000000000000006 tables
+[ACPI]   FACP (rev=0x0000000000000003 len=0x00000000000000F4
+[ACPI]   APIC (rev=0x0000000000000003 len=0x0000000000000078
+[ACPI]   HPET (rev=0x0000000000000001 len=0x0000000000000038
+[ACPI]   MCFG (rev=0x0000000000000001 len=0x000000000000003C
+[ACPI]   WAET (rev=0x0000000000000001 len=0x0000000000000028
+[ACPI]   BGRT (rev=0x0000000000000001 len=0x0000000000000038
+[MARK] After ACPI init
+[MARK] Before PCI enumerate
+[PCI] Enumerating PCI bus...
+[PCI] Found 0x0000000000000006 devices
+[PCI]   0x0000000000000000:0x0000000000000000.0x0000000000000000 [Bridge Device] vendor=0x0x0000000000008086 dev=0x0x00000000000029C0
+[PCI]   0x0000000000000000:0x0000000000000001.0x0000000000000000 [Display Controller] vendor=0x0x0000000000001234 dev=0x0x0000000000001111
+[PCI]   0x0000000000000000:0x0000000000000002.0x0000000000000000 [Network Controller] vendor=0x0x0000000000008086 dev=0x0x00000000000010D3 irq=0x000000000000000B
+[PCI]   0x0000000000000000:0x000000000000001F.0x0000000000000002 [Mass Storage Controller] vendor=0x0x0000000000008086 dev=0x0x0000000000002922 irq=0x000000000000000A
+[PCI]   0x0000000000000000:0x000000000000001F.0x0000000000000003 [Serial Bus Controller] vendor=0x0x0000000000008086 dev=0x0x0000000000002930 irq=0x000000000000000A
+[PCI]   0x0000000000000000:0x000000000000001F.0x0000000000000000 [Bridge Device] vendor=0x0x0000000000008086 dev=0x0x0000000000002918
+[MARK] After PCI enumerate
+[MARK] Before AHCI init
+[AHCI] Initializing...
+[AHCI] Searching for AHCI controller...
+[AHCI] Found controller at PCI 0x0000000000000000:0x000000000000001F.0x0000000000000002
+[AHCI] ABAR=0x0x0000000081084000
+[AHCI] Bus mastering enabled
+[AHCI] ABAR mapped
+[AHCI] CAP=0x0x00000000C0141F05 ports=0x0000000000000006
+[AHCI] HBA reset OK
+[AHCI] Port 0x0000000000000000 ssts=0x0x0000000000000113 det=0x0000000000000003
+[AHCI] Port 0x0000000000000000 device detected, initializing...
+[AHCI] Port 0x0000000000000000 sectors=0x00000000000FC000 ssize=0x0000000000000200 udma=0x0000000000000005
+[AHCI] Device supports UDMA mode 0x0000000000000005 (SET FEATURES deferred)
+[AHCI] Port 0x0000000000000000 initialized OK
+[BLOCK] Registered device id=0x0000000000000000 name=ahci0
+[AHCI] Registered as device id=0x0000000000000000 sectors=0x00000000000FC000 ssize=0x0000000000000200
+[MARK] After AHCI init
+[MARK] Before block device test
+[TEST] Phase 9.1: Block device abstraction
+[BLOCK] RamDisk created: sectors=0x0000000000000008 sector_size=0x0000000000000200 total=0x0000000000001000
+[TEST]   Device properties OK
+[BLOCK] Registered device id=0x0000000000000001 name=ramdisk
+[TEST]   Registry OK
+[TEST]   Read/write verify OK
+[TEST]   Multi-sector OK
+[TEST]   Out-of-bounds check OK
+[TEST]   Buffer size check OK
+[TEST]   Registry lookup OK
+[TEST]   Unregister OK
+[TEST] Phase 9.1: ALL TESTS PASSED
+[MARK] After block device test
+[MARK] Before AHCI disk test
+[TEST] Phase 9.3: AHCI disk read
+[TEST]   Device: ahci0 sectors=0x00000000000FC000 ssize=0x0000000000000200
+[TEST]   Read sector 0 OK
+[TEST]   MBR signature OK (0x55AA)
+[TEST]   Out-of-bounds check OK
+[TEST]   Buffer size check OK
+[TEST] Phase 9.3: ALL TESTS PASSED
+[MARK] After AHCI disk test
+[MARK] Before interrupts init
+[INT] Initializing interrupt subsystem...
+[LAPIC] Mapped at phys=0x00000000FEE00000
+[LAPIC] ID: 0x0x0000000000000000
+[LAPIC] Enabled, spurious vector: 39
+[LAPIC] Timer configured: ~100 Hz periodic, vector 32
+[IOAPIC] Mapped at phys=0x00000000FEC00000
+[IOAPIC] ID: 0x0x0000000000000000
+[IOAPIC] Version: 32, max redirection entries: 24
+[IOAPIC] All IRQs masked
+[PIT] Channel 0 configured: 11931 divisor, ~100 Hz, vector 32 (IRQ0)
+[INT] PIT IRQ0 -> GSI 0x0000000000000000 -> IOAPIC entry 0x0000000000000000
+[IOAPIC] IRQ 0 -> vector 32
+[INT] KBD IRQ1 -> GSI 0x0000000000000001 -> IOAPIC entry 0x0000000000000001
+[IOAPIC] IRQ 1 -> vector 33
+[INT] COM1 IRQ4 -> GSI 0x0000000000000004 -> IOAPIC entry 0x0000000000000004
+[IOAPIC] IRQ 4 -> vector 36
+[INT] Interrupt subsystem initialized
+[MARK] After interrupts init
+[MARK] Before keyboard init
+[KBD] Initializing PS/2 keyboard driver
+[KBD] Keyboard driver initialized
+[MARK] After keyboard init
+[UART] Initializing serial RX (IRQ4)
+[UART] 16550 initialized: 115200 baud 8N1, FIFO enabled
+[UART] Serial RX handler registered on IRQ4
+[MARK] Before syscall init
+[SYSCALL] Setting up MSRs...
+[SYSCALL] LSTAR entry phys=0x000000000D71185C virt=0xFFFFFFFF8000385C
+[SYSCALL] PER_CPU raw=0x0x000000000D7D31D8 virt=0x0xFFFFFFFF800C51D8
+[SYSCALL] KERNEL_GS_BASE readback=0x0xFFFFFFFF800C51D8
+[SYSCALL] MSRs configured
+[MARK] After syscall init
+[MARK] Before harden_identity_map
+[MARK] After harden_identity_map
+[MARK] Before process init
+[MARK] ASLR initialized
+[PROC] Initializing process subsystem...
+[PROC] stack frame: entry_phys=0x000000000D762E80 virt=0xFFFFFFFF80054E80 sp=0xFFFFFFFFC0002360
+[SCHED] Idle process at PID 0
+[PROC] stack frame: entry_phys=0x000000000D762ED0 virt=0xFFFFFFFF80054ED0 sp=0xFFFFFFFFC0004360
+[SCHED] Spawned kernel process PID=1
+[PROC] Process subsystem initialized
+[MARK] After process init
+[MARK] Before VFS init
+[MARK] After VFS init
+[MARK] Before FAT32 init
+[T] ==================================================
+[T] Phase 9.4: End-to-End Verification
+[T] ==================================================
+[T] -- Section 1: AHCI Raw Sector I/O --
+[T]   PASS: T1.1 MBR read + signature 0x55AA
+[T]   PASS: T1.2 Partition boot sector + valid BPB
+[T]   PASS: T1.3 Four consecutive sector reads (LBA 1-4)
+[T]   PASS: T1.4 Scattered LBA reads OK
+[T]   PASS: T1.5 Triple read-after-read consistent (LBA 0x3F)
+[T]   PASS: T1.6 Out-of-bounds read returns error
+[T]   PASS: T1.7 Wrong buffer size returns error
+[T]   PASS: T1.8 MBR triple-read consistent + partition table
+[T]   PASS: T1.9 FAT boot sector triple-read consistent + valid BPB
+[T] -- Section 2: FAT16 Filesystem --
+[FAT] dev=ahci0 ssize=0x0000000000000200 tot=0x00000000000FC000
+[FAT] MBR partition type=0x0x0000000000000006 at LBA=0x0x000000000000003F
+[FAT] Detected: FAT16 bps=0x0000000000000200 spc=0x0000000000000010 rs=0x0000000000000001 fats=0x0000000000000002 fat_size=0x00000000000000FC total=0x00000000000FBFC1 root_entries=0x0000000000000200 root_dir_sec=0x00000000000001F9 data_start=0x0000000000000219
+[T]   PASS: T2.0 FAT16 filesystem mounted
+[FAT] dev=ahci0 ssize=0x0000000000000200 tot=0x00000000000FC000
+[FAT] MBR partition type=0x0x0000000000000006 at LBA=0x0x000000000000003F
+[FAT] Detected: FAT16 bps=0x0000000000000200 spc=0x0000000000000010 rs=0x0000000000000001 fats=0x0000000000000002 fat_size=0x00000000000000FC total=0x00000000000FBFC1 root_entries=0x0000000000000200 root_dir_sec=0x00000000000001F9 data_start=0x0000000000000219
+[T]   PASS: T2.0b FAT re-mount consistent
+[T]   PASS: T2.1 Filesystem variant: FAT16
+[T]   PASS: T2.2 Root dir: EFI, NvVars, startup.nsh present
+[T]   PASS: T2.2b Root readdir consistent (2 reads)
+[T]   PASS: T2.3 EFI/BOOT subdirectory found
+[T]   PASS: T2.4 Deep lookup: EFI/BOOT/BOOTX64.EFI
+[T]   PASS: T2.5 Read BOOTX64.EFI: MZ + consistent
+[T]   PASS: T2.6 Read kernel.elf: ELF header + consistent
+[T] -- Section 3: VFS Integration --
+[FAT] dev=ahci0 ssize=0x0000000000000200 tot=0x00000000000FC000
+[FAT] MBR partition type=0x0x0000000000000006 at LBA=0x0x000000000000003F
+[FAT] Detected: FAT16 bps=0x0000000000000200 spc=0x0000000000000010 rs=0x0000000000000001 fats=0x0000000000000002 fat_size=0x00000000000000FC total=0x00000000000FBFC1 root_entries=0x0000000000000200 root_dir_sec=0x00000000000001F9 data_start=0x0000000000000219
+[T]   PASS: T3.0 FAT16 mounted at /disk via VFS
+[T]   PASS: T3.1 VFS resolve('/disk') -> directory
+[T]   PASS: T3.2 VFS resolve('/disk/EFI') -> directory
+[T]   PASS: T3.3 VFS read startup.nsh: consistent
+[T]   PASS: T3.4 VFS readdir('/disk'): EFI + startup found
+[T]   PASS: T3.5 VFS read_file: BOOTX64.EFI consistent + MZ
+[T]   PASS: T3.6 open non-existent -> NotFound
+[T]   PASS: T3.7 VFS rejects malformed paths
+[T] -- Section 4: Regression Tests --
+[T]   Phase 9.4 standalone: 0x000000000000001A passed, 0x0000000000000000 failed
+[T]   Running Phase 9.1 regression...
+[TEST] Phase 9.1: Block device abstraction
+[BLOCK] RamDisk created: sectors=0x0000000000000008 sector_size=0x0000000000000200 total=0x0000000000001000
+[TEST]   Device properties OK
+[BLOCK] Registered device id=0x0000000000000001 name=ramdisk
+[TEST]   Registry OK
+[TEST]   Read/write verify OK
+[TEST]   Multi-sector OK
+[TEST]   Out-of-bounds check OK
+[TEST]   Buffer size check OK
+[TEST]   Registry lookup OK
+[TEST]   Unregister OK
+[TEST] Phase 9.1: ALL TESTS PASSED
+[T]   Running Phase 9.2+9.2b regression...
+[TEST] Phase 9.2: VFS file I/O
+[TEST]   Write OK
+[TEST]   Open OK
+[TEST]   Read & verify OK
+[TEST]   Readdir OK
+[TEST]   NotFound error OK
+[TEST] Phase 9.2: ALL TESTS PASSED
+[TEST] Phase 9.2b: FD semantics
+[TEST]   T1 dup2 shared offset OK
+[TEST]   T2 independent offsets OK
+[TEST]   T3 fork shared offset OK
+[TEST]   T5 no-CLOEXEC flag clear OK
+[TEST]   T4 CLOEXEC flag set OK
+[TEST]   T6 dup2 clears CLOEXEC OK
+[TEST] Phase 9.2b: ALL TESTS PASSED
+[T]   Running Phase 9.3 regression...
+[TEST] Phase 9.3: AHCI disk read
+[TEST]   Device: ahci0 sectors=0x00000000000FC000 ssize=0x0000000000000200
+[TEST]   Read sector 0 OK
+[TEST]   MBR signature OK (0x55AA)
+[TEST]   Out-of-bounds check OK
+[TEST]   Buffer size check OK
+[TEST] Phase 9.3: ALL TESTS PASSED
+[T] ==================================================
+[T] Phase 9.4 standalone: 0x000000000000001A passed, 0x0000000000000000 failed
+[T] === ALL PHASE 9.4 TESTS PASSED ===
+[T] ==================================================
+[MARK] After FAT32 init
+[MARK] Before FD+syscall test
+[T] ==================================================
+[T] Phase 9.5: FD + Syscall Integration
+[T] ==================================================
+[T] -- Section 1: Open Persistent File --
+[T]   PASS: T5.1 Open + read /disk/startup.nsh
+[T]   PASS: T5.2 Persistent read deterministic
+[T] -- Section 2: Multi-Cluster Read --
+[T]   PASS: T5.3 Multi-cluster read kernel.elf (ELF header OK)
+[T]   PASS: T5.4 Multi-cluster read consistent (ELF header)
+[T] -- Section 3: EOF Behavior --
+[T]   PASS: T5.5 Fresh open reads full content
+[T]   PASS: T5.6 Read past EOF returns 0
+[T] -- Section 4: Error Handling --
+[T]   PASS: T5.7 Open non-existent → NotFound
+[T]   PASS: T5.8 Open empty path → root dir (VFS default)
+[T]   PASS: T5.9 Open deep non-existent → error
+[T] -- Section 5: Close and Reopen --
+[T]   PASS: T5.10 Reopen reads from start
+[T] -- Section 6: Independent Opens --
+[T]   PASS: T5.11 Independent opens have independent offsets
+[T] -- Section 7: dup2 Shared Offset --
+[T]   PASS: T5.12 dup2 clone shares offset (advanced)
+[T] -- Section 8: fork FD Inheritance --
+[T]   PASS: T5.13 fork: shared file handle via Arc clone
+[T] -- Section 9: CLOEXEC Behavior --
+[T]   PASS: T5.14 CLOEXEC flag set/clear OK
+[T] -- Section 10: Regression Tests --
+[T]   Phase 9.5 standalone: 0x000000000000000E passed, 0x0000000000000000 failed
+[T] ==================================================
+[T] Phase 9.5 standalone: 0x000000000000000E passed, 0x0000000000000000 failed
+[T] === ALL PHASE 9.5 TESTS PASSED ===
+[T] ==================================================
+[MARK] After FD+syscall test
+[MARK] Before ELF persistent test
+[T] ==================================================
+[T] Phase 9.6: ELF Loading from Persistent Filesystem
+[T] ==================================================
+[T] -- Section 1: Read ELF from FAT --
+[T]   PASS: T6.1 Read kernel.elf from FAT: valid ELF64 header
+[T]     entry=0x0xFFFFFFFF8005E530 phnum=0x0x0000000000000007
+[T]   PASS: T6.2 Non-ELF file (MZ) correctly rejected by validate_elf
+[T] -- Section 2: ELF Pipeline Verification --
+[T]     FAT ELF entry=0x0xFFFFFFFF8005E530 phnum=0x0000000000000007
+[T]   PASS: T6.3 FAT→VFS→validate pipeline: kernel.elf valid (kernel binary)
+[T]     /bin/indosh not in VFS (expected if not in initrd)
+[T] -- Section 3: Error Handling --
+[T]   PASS: T6.4 Read non-existent file → NotFound
+[T]   PASS: T6.5 Truncated ELF header → error
+[T]   PASS: T6.6 Bad ELF magic → BadMagic
+[T]   PASS: T6.7 Non-executable ELF type → NotExecutable
+[T] -- Section 4: Regression Tests --
+[T]   Running Phase 9.1 regression...
+[TEST] Phase 9.1: Block device abstraction
+[BLOCK] RamDisk created: sectors=0x0000000000000008 sector_size=0x0000000000000200 total=0x0000000000001000
+[TEST]   Device properties OK
+[BLOCK] Registered device id=0x0000000000000001 name=ramdisk
+[TEST]   Registry OK
+[TEST]   Read/write verify OK
+[TEST]   Multi-sector OK
+[TEST]   Out-of-bounds check OK
+[TEST]   Buffer size check OK
+[TEST]   Registry lookup OK
+[TEST]   Unregister OK
+[TEST] Phase 9.1: ALL TESTS PASSED
+[T] ==================================================
+[T] Phase 9.6 standalone: 0x0000000000000007 passed, 0x0000000000000000 failed
+[T] === ALL PHASE 9.6 TESTS PASSED ===
+[T] ==================================================
+[MARK] After ELF persistent test
+[MARK] Before VFS file test
+[TEST] Phase 9.2: VFS file I/O
+[TEST]   Write OK
+[TEST]   Open OK
+[TEST]   Read & verify OK
+[TEST]   Readdir OK
+[TEST]   NotFound error OK
+[TEST] Phase 9.2: ALL TESTS PASSED
+[TEST] Phase 9.2b: FD semantics
+[TEST]   T1 dup2 shared offset OK
+[TEST]   T2 independent offsets OK
+[TEST]   T3 fork shared offset OK
+[TEST]   T5 no-CLOEXEC flag clear OK
+[TEST]   T4 CLOEXEC flag set OK
+[TEST]   T6 dup2 clears CLOEXEC OK
+[TEST] Phase 9.2b: ALL TESTS PASSED
+[MARK] After VFS file test
+[MARK] Before initrd load
+[INITRD] Loading initrd: 0x0000000000020752 bytes
+[INITRD] Creating file: 'hello.txt'
+[INITRD]   -> OK
+[INITRD] Creating dir: 'bin'
+[INITRD]   -> OK
+[INITRD] Creating dir: 'etc'
+[INITRD]   -> OK
+[INITRD] Creating dir: 'bin'
+[INITRD]   -> Err 0xFFFFFFFFFFFFFFEF
+[INITRD] Creating file: 'bin/cat'
+[INITRD]   -> OK
+[INITRD] Creating file: 'bin/echo'
+[INITRD]   -> OK
+[INITRD] Creating file: 'bin/false_bin'
+[INITRD]   -> OK
+[INITRD] Creating file: 'bin/indosh'
+[INITRD]   -> OK
+[INITRD] Creating file: 'bin/init'
+[INITRD]   -> OK
+[INITRD] Creating file: 'bin/ls'
+[INITRD]   -> OK
+[INITRD] Creating file: 'bin/mkdir'
+[INITRD]   -> OK
+[INITRD] Creating file: 'bin/pwd'
+[INITRD]   -> OK
+[INITRD] Creating file: 'bin/rm'
+[INITRD]   -> OK
+[INITRD] Creating file: 'bin/test_ctxswitch'
+[INITRD]   -> OK
+[INITRD] Creating file: 'bin/test_fat_write'
+[INITRD]   -> OK
+[INITRD] Creating file: 'bin/test_gs_stress'
+[INITRD]   -> OK
+[INITRD] Creating file: 'bin/test_reg'
+[INITRD]   -> OK
+[INITRD] Creating file: 'bin/test_robustness'
+[INITRD]   -> OK
+[INITRD] Creating file: 'bin/test_stress'
+[INITRD]   -> OK
+[INITRD] Creating file: 'bin/touch'
+[INITRD]   -> OK
+[INITRD] Creating file: 'bin/true_bin'
+[INITRD]   -> OK
+[INITRD] Creating dir: 'etc'
+[INITRD]   -> Err 0xFFFFFFFFFFFFFFEF
+[INITRD] Loaded 0x0000000000000012 files, 0x0000000000000004 dirs
+[MARK] After initrd load
+[MARK] Before shell infrastructure test
+[T] ==================================================
+[T] Phase 9.7: User-Space Shell Infrastructure
+[T] ==================================================
+[T] -- Section 1: Shell Binary --
+[T]     shell size: 0x0000000000008E80
+[T]   PASS: T7.1 Shell binary is valid ELF in VFS
+[PROC] ELF loaded: entry=0x00000000002027F0, stack_top=0x00007FFFFFFF0000, stack_guard=0x00007FFFFFFE7000, pml4=0x00000000027F4000
+[SCHED] Spawned user process 2
+[T]     spawn_user(shell) PID=0x0x0000000000000002
+[T]   PASS: T7.2 Shell binary loadable by spawn_user
+[T] -- Section 2: FAT File Operations (cat/ls) --
+[T]     read 0x0000000000000025 bytes from /disk/startup.nsh
+[T]   PASS: T7.3 FAT file read (cat equivalent) works
+[T]     readdir returned 0x0000000000000003 entries
+[T]       EFI
+[T]       NvVars
+[T]       startup.nsh
+[T]   PASS: T7.4 FAT directory listing (ls equivalent) works
+[T] -- Section 3: Error Handling --
+[T]   PASS: T7.5 Exec path not found → NotFound
+[T]     shell size: 0x0000000000008E80 bytes (1KB-64KB range)
+[T]   PASS: T7.6 Shell binary size sanity (1KB < size < 64KB)
+[T] ==================================================
+[T] Phase 9.7 standalone: 0x0000000000000006 passed, 0x0000000000000000 failed
+[T] === ALL PHASE 9.7 TESTS PASSED ===
+[T] ==================================================
+[MARK] After shell infrastructure test
+[MARK] Before init PID1 test
+[T] ==================================================
+[T] Phase 9.8: Init Process PID 1
+[T] ==================================================
+[T] -- Section 1: PID 1 Init Process --
+[T]     PID 1 user_rip=0x0x0000000000000000
+[T]   PASS: T8.1 PID 1 process exists
+[T] -- Section 2: Init Binary --
+[T]     init size: 0x0000000000000658
+[T]   PASS: T8.2 Init binary exists in initrd
+[T]   PASS: T8.3 Init binary is valid ELF
+[T]     init entry=0x0x0000000000201190
+[T]   PASS: T8.4 Init binary is valid loadable ELF
+[T] -- Section 3: Shell Binary --
+[T]     shell size: 0x0000000000008E80
+[T]   PASS: T8.5 Shell binary exists in initrd
+[T]     shell entry=0x0x00000000002027F0
+[T]   PASS: T8.6 Shell binary is valid loadable ELF
+[T]     active processes: 0x0000000000000003
+[T]   PASS: T8.7 Process count reflects init + children
+[T] ==================================================
+[T] Phase 9.8 standalone: 0x0000000000000007 passed, 0x0000000000000000 failed
+[T] === ALL PHASE 9.8 TESTS PASSED ===
+[T] ==================================================
+[MARK] After init PID1 test
+[MARK] Before persistence test
+[T] ==================================================
+[T] Phase 9.9: Persistence Verification
+[T] ==================================================
+[T] -- Section 1: FAT Mount Consistency --
+[FAT] dev=ahci0 ssize=0x0000000000000200 tot=0x00000000000FC000
+[FAT] MBR partition type=0x0x0000000000000006 at LBA=0x0x000000000000003F
+[FAT] Detected: FAT16 bps=0x0000000000000200 spc=0x0000000000000010 rs=0x0000000000000001 fats=0x0000000000000002 fat_size=0x00000000000000FC total=0x00000000000FBFC1 root_entries=0x0000000000000200 root_dir_sec=0x00000000000001F9 data_start=0x0000000000000219
+[T]   PASS: T9.1 FAT16 filesystem mountable and consistent
+[T] -- Section 2: Content Determinism --
+[T]     startup.nsh: 0x0000000000000025 bytes
+[T]   PASS: T9.2 startup.nsh content is readable ASCII
+[T]     BOOTX64.EFI: 0x0000000000017800 bytes
+[T]   PASS: T9.3 BOOTX64.EFI has valid MZ header (PE32+)
+[T] -- Section 3: Read Consistency --
+[T]     startup.nsh: 0x0000000000000025 bytes (consistent)
+[T]   PASS: T9.4 File size consistent across reads
+[T] -- Section 4: Directory Structure --
+[T]   PASS: T9.5 Root dir: EFI + startup.nsh present
+[T] -- Section 5: Limitations --
+[T]     FAT filesystem: FULL WRITE SUPPORT (Phase 11)
+[T]     Supports: create, write, truncate, delete on FAT16/FAT32
+[T]     Limitation: 8.3 filenames only for writes (no LFN write)
+[T]     Limitation: FAT16 root directory has fixed max entries
+[T]   PASS: T9.6 FAT write support documented
+[T] -- Section 6: Regression --
+[T]   Running Phase 9.1 regression...
+[TEST] Phase 9.1: Block device abstraction
+[BLOCK] RamDisk created: sectors=0x0000000000000008 sector_size=0x0000000000000200 total=0x0000000000001000
+[TEST]   Device properties OK
+[BLOCK] Registered device id=0x0000000000000001 name=ramdisk
+[TEST]   Registry OK
+[TEST]   Read/write verify OK
+[TEST]   Multi-sector OK
+[TEST]   Out-of-bounds check OK
+[TEST]   Buffer size check OK
+[TEST]   Registry lookup OK
+[TEST]   Unregister OK
+[TEST] Phase 9.1: ALL TESTS PASSED
+[T] ==================================================
+[T] Phase 9.9 standalone: 0x0000000000000006 passed, 0x0000000000000000 failed
+[T] === ALL PHASE 9.9 TESTS PASSED ===
+[T] ==================================================
+[MARK] After persistence test
+[MARK] Before FAT write test
+[T] ==================================================
+[T] Phase 11: FAT Write Tests
+[T] ==================================================
+[T]   test_fat_write binary size: 0x0000000000002DA0
+[PROC] ELF loaded: entry=0x00000000002017A0, stack_top=0x00007FFFFFFF0000, stack_guard=0x00007FFFFFFE7000, pml4=0x000000000280F000
+[SCHED] Spawned user process 3
+[T]   Spawned test_fat_write PID=0x0000000000000003
+[T]   PASS: test_fat_write spawned successfully
+[T] ==================================================
+[T] Phase 11: FAT Write Tests — test running in userspace
+[T] Check serial output for [FATW] PASS/FAIL results
+[T] ==================================================
+[MARK] After FAT write test
+[KERNEL] All init done.
+[KERNEL] Cleaning test PID=0x0000000000000001
+[KERNEL] Cleaning test PID=0x0000000000000002
+[KERNEL] Cleaning test PID=0x0000000000000003
+[TEST] Regression: KERNEL_GS_BASE stress test
+[TEST]   Test binary size: 0x00000000000004D0
+[PROC] ELF loaded: entry=0x0000000000201120, stack_top=0x00007FFFFFFF0000, stack_guard=0x00007FFFFFFE7000, pml4=0x00000000027F4000
+[SCHED] Spawned user process 1
+[TEST]   Spawned stress test 0x0000000000000000 as PID=0x0000000000000001
+[PROC] ELF loaded: entry=0x0000000000201120, stack_top=0x00007FFFFFFF0000, stack_guard=0x00007FFFFFFE7000, pml4=0x0000000002806000
+[SCHED] Spawned user process 2
+[TEST]   Spawned stress test 0x0000000000000001 as PID=0x0000000000000002
+[TEST]   Stress tests spawned — will run after scheduler starts
+[TEST]   If KERNEL_GS_BASE is corrupted, tests will page-fault at CR2=0x0
+[T] ==================================================
+[T] Phase 13: Context-Switch Validation Suite
+[T] ==================================================
+[T]   test_ctxswitch binary size: 0x0000000000003028
+[PROC] ELF loaded: entry=0x00000000002024D0, stack_top=0x00007FFFFFFF0000, stack_guard=0x00007FFFFFFE7000, pml4=0x0000000002818000
+[SCHED] Spawned user process 3
+[T]   Spawned test_ctxswitch PID=0x0000000000000003
+[T]   PASS: test_ctxswitch spawned successfully
+[T] ==================================================
+[T] Phase 13: Context-Switch Validation — test running in userspace
+[T] Check serial output for [CTXSW] results
+[T] ==================================================
+[KERNEL] Init binary found: 0x0000000000000658 bytes
+[PROC] ELF loaded: entry=0x0000000000201190, stack_top=0x00007FFFFFFF0000, stack_guard=0x00007FFFFFFE7000, pml4=0x000000000282F000
+[SCHED] Spawned user process 4
+[KERNEL] Init spawned as PID=0x0000000000000004
+[KERNEL] Shell binary found: 0x0000000000008E80 bytes
+[PROC] ELF loaded: entry=0x00000000002027F0, stack_top=0x00007FFFFFFF0000, stack_guard=0x00007FFFFFFE7000, pml4=0x0000000002843000
+[SCHED] Spawned user process 5
+[KERNEL] Shell spawned as PID=0x0000000000000005
+[PROC] Starting scheduler — first tick will dispatch
+[CTXSW] Context-Switch Validation Suite
+[CTXSW] ====================================
+== Test 1: yield() ==
+[SCALL] enter pid=4 num=0 a0=0x0000000000000001 a1=0x00000000002021EA a2=0x0000000000000021 rax_in=0x0000000000000000
+[INIT] Indominus OS init started
+[SCALL] exit  pid=4 num=0 result=0x0000000000000021 force_sw=0
+[SHELL] shell_main entered
+Indominus OS Shell v1.0
+Type 'help' for commands, 'exit' to quit.
+
+[SHELL] loop iteration
+/ $ [KBD-READ] entry r=0 w=0 e=0
+[KBD-RECHECK] r=0 w=0 e=0
+[KBD] read_line returning 0 (no data after recheck)
+  RBX = 0xaaaaaaaaaaaaaaaa OK
+  RBP = 0xbbbbbbbbbbbbbbbb OK
+  R8  = 0x1111111111111111 OK
+  R9  = 0x2222222222222222 OK
+  R10 = 0x3333333333333333 OK
+  R12 = 0x5555555555555555 OK
+  R13 = 0x6666666666666666 OK
+  R14 = 0x7777777777777777 OK
+  R15 = 0x8888888888888888 OK
+  PASS: yield()
+== Test 2: sleep() ==
+  RBX = 0xaaaaaaaaaaaaaaaa OK
+  RBP = 0xbbbbbbbbbbbbbbbb OK
+  R8  = 0x1111111111111111 OK
+  R9  = 0x2222222222222222 OK
+  R10 = 0x3333333333333333 OK
+  R12 = 0x5555555555555555 OK
+  R13 = 0x6666666666666666 OK
+  R14 = 0x7777777777777777 OK
+  R15 = 0x8888888888888888 OK
+  PASS: sleep()
+== Test 3: blocking read() ==
+  SKIP: pipe() known broken
+== Test 4: waitpid() ==
+  SKIP: fork() known broken
+== Test 5: timer preemption ==
+[SYSCALL] exit(0) pid=2
+[SYSCALL] exit(0) pid=1
+[SCHED] Re-parented PID 1 to init (PID 4)
+[SCHED] Re-parented PID 2 to init (PID 4)
+[SCHED] Re-parented PID 3 to init (PID 4)
+[SCHED] Re-parented PID 5 to init (PID 4)
+[SCHED] Reaped PID=1
+[SCHED] Reaped PID=2
+  RBX = 0xaaaaaaaaaaaaaaaa OK
+  RBP = 0xbbbbbbbbbbbbbbbb OK
+  R12 = 0x5555555555555555 OK
+  R13 = 0x6666666666666666 OK
+  R14 = 0x7777777777777777 OK
+  PASS: timer preemption
+== Test 6: fork() ==
+  SKIP: fork() known broken
+== Test 7: signal delivery ==
+  SKIP: signal delivery causes state corruption
+== Test 8: multi-context-switch ==
+  PASS: 3 context switches completed
+== Test 9: RFLAGS preservation ==
+  RFLAGS before: 0x2c7
+  RFLAGS after:  0x2c7
+  PASS: RFLAGS user bits preserved
+[CTXSW] ====================================
+[CTXSW] Results: 9 passed, 0 failed
+[CTXSW] ALL TESTS PASSED
+[SYSCALL] exit(0) pid=3
+[SCHED] Reaped PID=3
+test_ctxswitch

@@ -1,0 +1,51 @@
+{
+  "total_boots": 1,
+  "shell_banners": 1,
+  "all_phases_passed": 1,
+  "kernel_panics": 0,
+  "boot_timeouts": 0,
+  "total_tfes": 0,
+  "total_read_ok": 0,
+  "total_failed": 0,
+  "unique_tfes_lbas": [],
+  "phase_stats": {
+    "9.4": "1/1",
+    "9.5": "1/1",
+    "9.6": "1/1",
+    "9.7": "1/1",
+    "9.8": "1/1",
+    "9.9": "1/1"
+  },
+  "results": [
+    {
+      "boot_id": 1,
+      "timestamp": "2026-08-04T02:34:33.033116",
+      "timeout": 45,
+      "sent_input": false,
+      "shell_banner": true,
+      "help_output": false,
+      "unknown_cmd": false,
+      "kernel_panic": false,
+      "panic_message": "",
+      "all_phases_passed": true,
+      "tfes_count": 0,
+      "tfes_lbas": [],
+      "read_ok_count": 0,
+      "recovery_count": 0,
+      "recovery_successes": 0,
+      "first_failing_lba": null,
+      "phase_results": {
+        "9.4": "PASSED",
+        "9.5": "PASSED",
+        "9.6": "PASSED",
+        "9.7": "PASSED",
+        "9.8": "PASSED",
+        "9.9": "PASSED"
+      },
+      "boot_completed": false,
+      "elapsed_seconds": 45.1,
+      "log_file": "C:\\Users\\USER\\Documents\\indominux rex operating system\\tools\\boot_logs\\boot_001.log",
+      "failed_count": 0
+    }
+  ]
+}
