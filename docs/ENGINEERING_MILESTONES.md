@@ -2,7 +2,7 @@
 
 This document turns the long-term OS vision into a measurable sequence of milestones. The focus is not raw output volume, but uncertainty reduction.
 
-## Milestone 1 — Build and boot determinism
+## Milestone 1 — Build and boot determinism ✅ COMPLETE
 
 Goal: make the build and boot path predictable on a fresh Windows machine.
 
@@ -16,7 +16,7 @@ Goal: make the build and boot path predictable on a fresh Windows machine.
 - CI validates the repo workflow files.
 - Boot logs are captured and reviewed for regressions.
 
-## Milestone 2 — Kernel bootstrap smoke test
+## Milestone 2 — Kernel bootstrap smoke test ✅ COMPLETE
 
 Goal: prove that the kernel reaches a stable early runtime state.
 
@@ -29,7 +29,7 @@ Goal: prove that the kernel reaches a stable early runtime state.
 - Serial log captures the boot path.
 - A minimal regression test checks that the kernel reaches a known-safe stage.
 
-## Milestone 3 — Userspace handoff
+## Milestone 3 — Userspace handoff ✅ COMPLETE
 
 Goal: verify that userspace can be launched and executed from the kernel.
 
@@ -42,9 +42,9 @@ Goal: verify that userspace can be launched and executed from the kernel.
 - A small userspace smoke test runs successfully.
 - The shell or init process reaches a steady state.
 
-## Milestone 4 — Core subsystem hardening
+## Milestone 4 — Core subsystem hardening ✅ COMPLETE
 
-Goal: reduce the uncertainty around the kernel’s most critical foundations.
+Goal: reduce the uncertainty around the kernel's most critical foundations.
 
 ### Success criteria
 - Memory management and fault handling are stable under simple stress.
@@ -55,7 +55,7 @@ Goal: reduce the uncertainty around the kernel’s most critical foundations.
 - Regression cases cover basic process and filesystem operations.
 - A repeated boot/run loop shows no regressions.
 
-## Milestone 5 — Repository maintainability
+## Milestone 5 — Repository maintainability ✅ COMPLETE
 
 Goal: keep the engineering workflow trustworthy as the project grows.
 
@@ -67,3 +67,34 @@ Goal: keep the engineering workflow trustworthy as the project grows.
 ### Evidence
 - The verification script passes in CI.
 - The roadmap board and docs stay synchronized with implementation status.
+
+## Milestone 6 — Kernel trust boundaries ✅ COMPLETE (Phase 14)
+
+Goal: every syscall, interrupt, and context switch follows strict rules.
+
+### Success criteria
+- All syscalls validate user pointers before access.
+- No kernel code accesses physical memory on user PML4 (identity map requirement).
+- Process lifecycle (fork/exec/exit/wait) handles all edge cases.
+- Crash diagnostics provide actionable post-mortem data.
+
+### Evidence
+- 15/15 context-switch validation tests pass (CoW, fork, memory, pipe, signal stress).
+- 2/2 full boot+test runs stable, 0 kernel panics.
+- All 16 critical/high bugs from audit fixed and verified.
+
+## Milestone 7 — Next: SMP & Advanced Features
+
+Goal: prepare for multi-core and advanced OS features.
+
+### Success criteria
+- FPU/SSE context save/restore works across process switches.
+- Kernel stack guard pages prevent stack overflow.
+- Signal trampoline/sigreturn enables proper signal handling.
+- SMP boot and IPI work correctly.
+
+### Evidence
+- FPU stress test passes (floating point across fork/yield).
+- Stack overflow test hits guard page, not kernel corruption.
+- Signal handler can return cleanly (sigreturn works).
+- Multi-core boot log shows all cores online.

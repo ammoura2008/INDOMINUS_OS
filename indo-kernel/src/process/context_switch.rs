@@ -89,24 +89,18 @@ pub unsafe fn defer_free(kstack: u64, pml4: u64, is_user: bool) {
         slots[count] = (kstack, pml4, is_user);
         DEFERRED_COUNT.store(count + 1, Ordering::Relaxed);
     } else {
-        // Overflow: all deferred slots full. Free synchronously.
-        // We're on a safe (new process) stack when this is called from
-        // schedule_force, so it's safe to free directly.
-        if is_user && pml4 != 0 {
-            crate::serial::write_str("[SCHED] WARNING: deferred slots full, freeing PML4 0x");
-            crate::serial::write_hex(pml4);
-            crate::serial::write_nl();
-            // Switch to kernel PML4 to safely free user address space
-            let kernel_pml4 = crate::memory::kernel_pml4_phys();
-            let old_cr3: u64;
-            core::arch::asm!("mov {0}, cr3", out(reg) old_cr3);
-            core::arch::asm!("mov cr3, {0}", in(reg) kernel_pml4);
-            crate::memory::vmm::free_user_address_space(crate::memory::PhysAddr::new(pml4));
-            core::arch::asm!("mov cr3, {0}", in(reg) old_cr3);
-        }
-        if kstack != 0 {
-            super::process::free_kernel_stack(kstack);
-        }
+        // Overflow: all deferred slots full.  We CANNOT free synchronously
+        // because we're still on the dying process's kernel stack — freeing
+        // it would corrupt locals and the return address → triple fault.
+        // Instead, panic to halt the system. This should never happen in
+        // normal operation (MAX_DEFERRED=4 is enough for all exit paths).
+        crate::serial::write_str("[SCHED] PANIC: deferred slots full, cannot free resources safely\n");
+        crate::serial::write_str("  kstack=0x");
+        crate::serial::write_hex(kstack);
+        crate::serial::write_str(" pml4=0x");
+        crate::serial::write_hex(pml4);
+        crate::serial::write_nl();
+        loop { unsafe { core::arch::asm!("hlt"); } }
     }
 }
 
@@ -458,6 +452,13 @@ pub unsafe extern "C" fn schedule(saved_rsp: u64) -> u64 {
     // handler's kernel stack, so it's safe to free.
     crate::process::context_switch::drain_deferred_free();
 
+    // Check if any interrupt handler (serial RX, keyboard IRQ) flagged a
+    // pending wake.  If so, call keyboard_wake() now — we're in the timer
+    // handler which is a safe context for acquiring the SCHEDULER lock.
+    if crate::process::KEYBOARD_WAKE_PENDING.swap(false, core::sync::atomic::Ordering::Acquire) {
+        crate::process::keyboard_wake();
+    }
+
     #[cfg(DEBUG_KERNEL)]
     { SAVED_RSP = saved_rsp; }
 
@@ -554,11 +555,17 @@ pub unsafe extern "C" fn schedule(saved_rsp: u64) -> u64 {
     }
 
     if let Some(new_proc) = sched.current_process() {
-        let new_pml4 = new_proc.pml4_phys;
+        // Use saved_cr3 if available (the CR3 that was active when the process
+        // was last preempted).  Falls back to pml4_phys for first dispatch.
+        let target_pml4 = if new_proc.saved_cr3 != 0 {
+            new_proc.saved_cr3
+        } else {
+            new_proc.pml4_phys
+        };
 
         let (current_cr3, _) = x86_64::registers::control::Cr3::read();
-        if current_cr3.start_address().as_u64() != new_pml4 {
-            vmm::switch_page_table(crate::memory::PhysAddr::new(new_pml4));
+        if current_cr3.start_address().as_u64() != target_pml4 {
+            vmm::switch_page_table(crate::memory::PhysAddr::new(target_pml4));
         }
 
         let rsp0 = new_proc.kernel_stack_base + super::process::KERNEL_STACK_SIZE as u64;
@@ -591,11 +598,21 @@ pub unsafe extern "C" fn schedule(saved_rsp: u64) -> u64 {
     let current_pid = sched.current_pid().unwrap_or(99);
 
     if new_sp == 0 {
-        crate::serial::write_str("[SCHED] FATAL: new_sp=0 for PID=");
+        crate::serial::write_str("[SCHED] FATAL: new_sp=0 in schedule() for PID=");
         crate::serial::write_u64(current_pid);
         crate::serial::write_nl();
         sched.dump_table();
-        return 0;
+        // Fallback: return idle process SP to prevent triple fault
+        let idle_sp = sched.processes()[sched.idle_pid() as usize]
+            .as_ref()
+            .map(|p| p.stack_pointer)
+            .unwrap_or(0);
+        if idle_sp != 0 {
+            return idle_sp;
+        }
+        // Last resort: halt
+        crate::serial::write_str("[SCHED] HALT: no idle SP available\n");
+        loop { unsafe { core::arch::asm!("hlt"); } }
     }
 
     new_sp
@@ -691,11 +708,15 @@ pub unsafe extern "C" fn schedule_force(saved_rsp: u64) -> u64 {
     crate::serial::ddbg(b'D');
 
     if let Some(new_proc) = sched.current_process() {
-        let new_pml4 = new_proc.pml4_phys;
+        let target_pml4 = if new_proc.saved_cr3 != 0 {
+            new_proc.saved_cr3
+        } else {
+            new_proc.pml4_phys
+        };
 
         let (current_cr3, _) = x86_64::registers::control::Cr3::read();
-        if current_cr3.start_address().as_u64() != new_pml4 {
-            vmm::switch_page_table(crate::memory::PhysAddr::new(new_pml4));
+        if current_cr3.start_address().as_u64() != target_pml4 {
+            vmm::switch_page_table(crate::memory::PhysAddr::new(target_pml4));
         }
 
         // ── Checkpoint C: CR3 switched ───────────────────────────────
@@ -736,7 +757,16 @@ pub unsafe extern "C" fn schedule_force(saved_rsp: u64) -> u64 {
     if new_sp == 0 {
         crate::serial::write_str("[SCHED] FATAL: new_sp=0 in force_switch\n");
         sched.dump_table();
-        return 0;
+        // Fallback: return idle process SP to prevent triple fault
+        let idle_sp = sched.processes()[sched.idle_pid() as usize]
+            .as_ref()
+            .map(|p| p.stack_pointer)
+            .unwrap_or(0);
+        if idle_sp != 0 {
+            return idle_sp;
+        }
+        crate::serial::write_str("[SCHED] HALT: no idle SP available in force_switch\n");
+        loop { unsafe { core::arch::asm!("hlt"); } }
     }
 
     new_sp
@@ -768,11 +798,15 @@ pub unsafe extern "C" fn kill_process() -> u64 {
     let new_sp = sched.kill_process();
 
     if let Some(new_proc) = sched.current_process() {
-        let new_pml4 = new_proc.pml4_phys;
+        let target_pml4 = if new_proc.saved_cr3 != 0 {
+            new_proc.saved_cr3
+        } else {
+            new_proc.pml4_phys
+        };
 
         let (current_cr3, _) = x86_64::registers::control::Cr3::read();
-        if current_cr3.start_address().as_u64() != new_pml4 {
-            vmm::switch_page_table(crate::memory::PhysAddr::new(new_pml4));
+        if current_cr3.start_address().as_u64() != target_pml4 {
+            vmm::switch_page_table(crate::memory::PhysAddr::new(target_pml4));
         }
 
         let rsp0 = new_proc.kernel_stack_base + super::process::KERNEL_STACK_SIZE as u64;
@@ -826,6 +860,15 @@ pub unsafe extern "C" fn page_fault_return_to_user() {
     core::arch::naked_asm!(
         // RDI = new_sp (from kill_process)
         "mov r12, rdi",
+
+        // Safety: if r12 == 0, halt to prevent triple fault
+        "test r12, r12",
+        "jnz 1f",
+        "cli",
+        ".loop:",
+        "hlt",
+        "jmp .loop",
+        "1:",
 
         // Send EOI to LAPIC (upper-half virtual address)
         "mov rax, 0xFFFFFFFFFEE000B0",

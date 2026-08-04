@@ -81,7 +81,7 @@ fn efi_main(image: Handle, mut system_table: SystemTable<Boot>) -> Status {
 
     // ── Step 2: Parse the ELF and map it into memory ──────────────────────
     debugcon_print("[BOOT] Parsing kernel ELF\n");
-    let (kernel_phys_start, kernel_phys_end, load_offset) = load_elf(boot_services, &kernel_data)
+    let (kernel_phys_start, kernel_phys_end, load_offset, rela_dyn_vaddr, rela_dyn_size) = load_elf(boot_services, &kernel_data)
         .expect("Failed to parse and load kernel ELF");
 
     // ── Step 3: Get the kernel entry point from the ELF ───────────────────
@@ -147,6 +147,8 @@ fn efi_main(image: Handle, mut system_table: SystemTable<Boot>) -> Status {
         kernel_phys_start: PhysAddr::new(0),
         kernel_phys_end:   PhysAddr::new(0),
         kernel_virt_base:  VirtAddr::new(0),
+        rela_dyn_vaddr:    0,
+        rela_dyn_size:     0,
     };
 
     unsafe {
@@ -158,6 +160,8 @@ fn efi_main(image: Handle, mut system_table: SystemTable<Boot>) -> Status {
         BOOT_INFO_MEM.kernel_phys_start = kernel_phys_start;
         BOOT_INFO_MEM.kernel_phys_end   = kernel_phys_end;
         BOOT_INFO_MEM.kernel_virt_base  = VirtAddr::new(KERNEL_VIRT_BASE);
+        BOOT_INFO_MEM.rela_dyn_vaddr     = rela_dyn_vaddr;
+        BOOT_INFO_MEM.rela_dyn_size      = rela_dyn_size;
     }
 
     let boot_info_ptr = unsafe { &BOOT_INFO_MEM as *const BootInfo };
@@ -237,16 +241,18 @@ fn apply_relocations(
     kernel_mem_size: usize,
     base_phys: u64,
     min_vaddr: u64,
-) -> Result<(), &'static str> {
+) -> Result<(u64, u64), &'static str> {
     let e_shoff = elf_read_u64(elf_data, 40) as usize;
     let e_shentsize = elf_read_u16(elf_data, 58) as usize;
     let e_shnum = elf_read_u16(elf_data, 60) as usize;
 
     if e_shoff == 0 || e_shnum == 0 {
-        return Ok(());
+        return Ok((0, 0));
     }
 
     let mut relocated_count = 0u32;
+    let mut rela_dyn_vaddr: u64 = 0;
+    let mut rela_dyn_size: u64 = 0;
 
     for i in 0..e_shnum {
         let off = e_shoff + i * e_shentsize;
@@ -260,12 +266,17 @@ fn apply_relocations(
             continue;
         }
 
+        let sh_addr = elf_read_u64(elf_data, off + 16);
         let sh_offset = elf_read_u64(elf_data, off + 24) as usize;
         let sh_size = elf_read_u64(elf_data, off + 32) as usize;
         let sh_entsize = elf_read_u64(elf_data, off + 56) as usize;
         if sh_entsize == 0 || sh_offset + sh_size > elf_data.len() {
             continue;
         }
+        // Capture the .rela.dyn section's virtual address and size for the kernel.
+        // sh_addr is the linked virtual address of this section.
+        rela_dyn_vaddr = sh_addr;
+        rela_dyn_size = sh_size as u64;
         let count = sh_size / sh_entsize;
 
         for j in 0..count {
@@ -307,12 +318,12 @@ fn apply_relocations(
         }
     }
 
-    Ok(())
+    Ok((rela_dyn_vaddr, rela_dyn_size))
 }
 fn load_elf(
     boot_services: &BootServices,
     data: &[u8],
-) -> Result<(PhysAddr, PhysAddr, i64), &'static str> {
+) -> Result<(PhysAddr, PhysAddr, i64, u64, u64), &'static str> {
     if data.len() < 4 || &data[0..4] != b"\x7FELF" {
         return Err("Not a valid ELF file (bad magic)");
     }
@@ -416,9 +427,9 @@ fn load_elf(
     // physical load address and the linked virtual address.
     // IMPORTANT: We must patch the actual kernel memory, not the ELF data buffer.
     let kernel_mem_size = total_pages * 4096;
-    apply_relocations(data, base_phys as *mut u8, kernel_mem_size, base_phys, min_vaddr)?;
+    let (rela_dyn_vaddr, rela_dyn_size) = apply_relocations(data, base_phys as *mut u8, kernel_mem_size, base_phys, min_vaddr)?;
 
-    Ok((PhysAddr::new(phys_start), PhysAddr::new(phys_end), load_offset))
+    Ok((PhysAddr::new(phys_start), PhysAddr::new(phys_end), load_offset, rela_dyn_vaddr, rela_dyn_size))
 }
 
 fn get_elf_entry(data: &[u8]) -> Result<u64, &'static str> {

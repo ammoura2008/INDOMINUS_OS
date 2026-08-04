@@ -204,7 +204,8 @@ pub fn alloc_frame() -> Option<PhysAddr> {
                 bitmap_set(index);
                 (*REFCOUNTS.get())[index] = 1;
                 *FREE_FRAMES.get() -= 1;
-                return Some(PhysAddr::new(index as u64 * PAGE_SIZE));
+                let addr = PhysAddr::new(index as u64 * PAGE_SIZE);
+                return Some(addr);
             }
         }
         None // Out of memory
@@ -217,15 +218,43 @@ pub fn alloc_frame() -> Option<PhysAddr> {
 /// - `frame` must have been allocated by `alloc_frame()`
 /// - `frame` must not have been freed already (double-free is UB)
 /// - `frame` must be page-aligned
+#[track_caller]
 pub fn free_frame(frame: PhysAddr) {
     let index = (frame.as_u64() / PAGE_SIZE) as usize;
+    let caller = core::panic::Location::caller();
 
     unsafe {
         assert!(index != 0, "cannot free frame 0 (BIOS/IVT)");
         assert!(index < *TOTAL_FRAMES.get(), "frame address out of range");
         assert!(frame.as_u64() % PAGE_SIZE == 0, "frame not page-aligned");
-        assert!(bitmap_test(index), "double-free detected");
-        assert!((*REFCOUNTS.get())[index] == 1, "free_frame: refcount != 1 (still referenced by {} other users)", (*REFCOUNTS.get())[index]);
+        if !bitmap_test(index) {
+            crate::serial::write_str("[PMM] DOUBLE-FREE frame=0x");
+            crate::serial::write_hex(frame.as_u64());
+            crate::serial::write_str(" index=");
+            crate::serial::write_u64(index as u64);
+            crate::serial::write_str(" caller=");
+            crate::serial::write_str(caller.file());
+            crate::serial::write_str(":");
+            crate::serial::write_u64(caller.line() as u64);
+            crate::serial::write_nl();
+            panic!("double-free detected at frame 0x{:x}", frame.as_u64());
+        }
+        let rc = (*REFCOUNTS.get())[index];
+        if rc != 1 {
+            crate::serial::write_str("[PMM] BAD-REFCOUNT frame=0x");
+            crate::serial::write_hex(frame.as_u64());
+            crate::serial::write_str(" refcount=");
+            crate::serial::write_u64(rc as u64);
+            crate::serial::write_nl();
+            panic!("free_frame: refcount != 1 at frame 0x{:x}", frame.as_u64());
+        }
+        crate::serial::write_str("[PMM] FREE frame=0x");
+        crate::serial::write_hex(frame.as_u64());
+        crate::serial::write_str(" @");
+        crate::serial::write_str(caller.file());
+        crate::serial::write_str(":");
+        crate::serial::write_u64(caller.line() as u64);
+        crate::serial::write_nl();
         bitmap_clear(index);
         (*REFCOUNTS.get())[index] = 0;
         *FREE_FRAMES.get() += 1;
@@ -269,10 +298,18 @@ pub fn decref(frame: PhysAddr) {
     let index = (frame.as_u64() / PAGE_SIZE) as usize;
     unsafe {
         assert!(index < *TOTAL_FRAMES.get(), "frame address out of range");
-        assert!(bitmap_test(index), "decref on unallocated frame");
+        if !bitmap_test(index) {
+            crate::serial::write_str("[PMM] DECREF-UNALLOC frame=0x");
+            crate::serial::write_hex(frame.as_u64());
+            crate::serial::write_nl();
+            panic!("decref on unallocated frame 0x{:x}", frame.as_u64());
+        }
         assert!((*REFCOUNTS.get())[index] > 0, "decref: refcount already 0");
         (*REFCOUNTS.get())[index] -= 1;
         if (*REFCOUNTS.get())[index] == 0 {
+            crate::serial::write_str("[PMM] DECREF-FREE frame=0x");
+            crate::serial::write_hex(frame.as_u64());
+            crate::serial::write_nl();
             bitmap_clear(index);
             *FREE_FRAMES.get() += 1;
         }
@@ -327,4 +364,24 @@ pub fn mark_region_used(phys_start: u64, phys_end: u64) {
             crate::serial::write_nl();
         }
     }
+}
+
+/// Dump PMM statistics to serial — for crash diagnostics.
+/// Safe to call from interrupt/panic context (no locks acquired).
+pub fn memory_dump() {
+    use crate::serial::{write_str, write_hex, write_nl};
+    let total = unsafe { *TOTAL_FRAMES.get() };
+    let free = unsafe { *FREE_FRAMES.get() };
+    let used = total - free;
+    let total_bytes = total as u64 * PAGE_SIZE as u64;
+    let free_bytes = free as u64 * PAGE_SIZE as u64;
+    write_str("═══════ PMM DUMP ═══════\n");
+    write_str("  total_frames="); write_hex(total as u64);
+    write_str(" free_frames="); write_hex(free as u64);
+    write_str(" used_frames="); write_hex(used as u64);
+    write_nl();
+    write_str("  total_bytes="); write_hex(total_bytes);
+    write_str(" free_bytes="); write_hex(free_bytes);
+    write_nl();
+    write_str("═════════════════════════\n");
 }

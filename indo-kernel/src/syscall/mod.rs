@@ -340,33 +340,6 @@ pub fn init() {
 pub unsafe extern "C" fn syscall_entry() {
     core::arch::naked_asm!(
         // ═══════════════════════════════════════════════════════════════════
-        // DIAGNOSTIC: dump RAX at syscall entry (before any register changes)
-        // ═══════════════════════════════════════════════════════════════════
-        // Save all caller-saved registers so the diagnostic call doesn't
-        // corrupt anything the normal flow needs.
-        "push rax",
-        "push rcx",
-        "push rdx",
-        "push rsi",
-        "push rdi",
-        "push r8",
-        "push r9",
-        "push r10",
-        "push r11",
-        "mov rdi, 0x53",            // 'S' marker
-        "mov rsi, [rsp + 64]",      // RAX is at [rsp+64] (first pushed)
-        "call {dump_rax}",
-        "pop r11",
-        "pop r10",
-        "pop r9",
-        "pop r8",
-        "pop rdi",
-        "pop rsi",
-        "pop rdx",
-        "pop rcx",
-        "pop rax",
-
-        // ═══════════════════════════════════════════════════════════════════
         // PHASE 1: Switch to kernel stack and save user context
         // ═══════════════════════════════════════════════════════════════════
         "swapgs",                                // Switch to kernel GSBase
@@ -553,7 +526,6 @@ pub unsafe extern "C" fn syscall_entry() {
 
         dispatch = sym syscall_dispatch,
         schedule_force = sym crate::process::context_switch::schedule_force,
-        dump_rax = sym crate::serial::dump_rax,
     );
 }
 
@@ -625,7 +597,7 @@ pub unsafe extern "C" fn syscall_dispatch(regs: *mut u64) -> u64 {
         5 => sys_sleep(arg0),
         6 => sys_read(arg0, arg1, arg2),
         7 => sys_pipe(),
-        8 => sys_fork(),
+        8 => sys_fork(regs),
         9 => sys_exec(arg0),
         10 => sys_close(arg0),
         11 => sys_dup(arg0),
@@ -1274,16 +1246,27 @@ fn sys_pipe() -> u64 {
 /// SYS_FORK (8) — Fork the current process.
 ///
 /// Creates a copy using CoW. Child gets RAX=0, parent gets child PID.
-fn sys_fork() -> u64 {
+///
+/// `regs` points to the saved syscall frame (15 GP regs) on the kernel stack.
+/// We build the child's IRET frame from the current syscall frame and `gs:[0]`
+/// (user RSP saved at syscall entry), NOT from `proc.stack_pointer` which may
+/// hold a stale ring-0 frame from a previous context switch.
+fn sys_fork(regs: *mut u64) -> u64 {
     use crate::memory::{self, vmm, PhysAddr};
     use crate::process::process::Process;
 
-    let (parent_pid, parent_pml4, parent_sp, parent_is_user) = {
+    // Read user RSP from per-CPU data (saved at syscall entry before swapgs).
+    let user_rsp: u64;
+    unsafe {
+        core::arch::asm!("mov {0}, gs:[0]", out(reg) user_rsp);
+    }
+
+    let (parent_pid, parent_pml4, parent_is_user) = {
         let sched = crate::process::scheduler::SCHEDULER.lock();
         match sched.current_pid() {
             Some(pid) => {
                 if let Some(ref proc) = sched.processes()[pid as usize] {
-                    (pid, proc.pml4_phys, proc.stack_pointer, proc.is_user)
+                    (pid, proc.pml4_phys, proc.is_user)
                 } else {
                     return errno::ESRCH as u64;
                 }
@@ -1293,11 +1276,26 @@ fn sys_fork() -> u64 {
     };
 
     let kernel_pml4 = memory::kernel_pml4_phys();
+
+    // SAFETY: Switch to kernel PML4 (identity map) for the entire fork body.
+    // create_user_pml4() and copy_user_pages() use phys_to_virt() (identity map)
+    // to walk page tables. Heap allocations use PIC function pointers that need
+    // the identity map. The parent's user PML4 lacks the identity map (PML4[0]
+    // is not copied), so all these operations would page-fault if run there.
+    let saved_cr3: u64;
+    unsafe {
+        core::arch::asm!("mov {0}, cr3", out(reg) saved_cr3);
+        core::arch::asm!("mov cr3, {0}", in(reg) kernel_pml4);
+    }
+
     let child_pml4 = vmm::create_user_pml4(PhysAddr::new(kernel_pml4));
 
     match unsafe { vmm::copy_user_pages(PhysAddr::new(parent_pml4), child_pml4) } {
         Ok(()) => {}
-        Err(()) => return errno::ENOMEM as u64,
+        Err(()) => {
+            unsafe { core::arch::asm!("mov cr3, {0}", in(reg) saved_cr3); }
+            return errno::ENOMEM as u64;
+        }
     }
 
     let stack_base = {
@@ -1306,6 +1304,7 @@ fn sys_fork() -> u64 {
         unsafe {
             let ptr = alloc::alloc::alloc(layout);
             if ptr.is_null() {
+                unsafe { core::arch::asm!("mov cr3, {0}", in(reg) saved_cr3); }
                 return errno::ENOMEM as u64;
             }
             core::ptr::write_bytes(ptr, 0, crate::process::process::KERNEL_STACK_SIZE);
@@ -1314,14 +1313,44 @@ fn sys_fork() -> u64 {
     };
     let stack_top = stack_base + crate::process::process::KERNEL_STACK_SIZE as u64;
 
+    // Build child's saved frame from the CURRENT syscall frame (regs) and
+    // user RSP (gs:[0]), NOT from proc.stack_pointer (which may hold a stale
+    // ring-0 frame from the last context switch — causing a page fault when
+    // the child is first scheduled and iretq tries to execute at a user-space
+    // address with CS=0x08 supervisor mode).
+    //
+    // Frame layout (20 qwords = 160 bytes):
+    //   [0..15]  GP regs: RAX, RBX, RCX, RDX, RSI, RDI, RBP, R8..R15
+    //   [15..20] IRET: RIP, CS, RFLAGS, RSP, SS
     let child_sp = {
         let frame_size = 20 * 8;
         let child_frame_base = stack_top - frame_size as u64;
         unsafe {
-            let src = parent_sp as *const u64;
             let dst = child_frame_base as *mut u64;
-            core::ptr::copy_nonoverlapping(src, dst, 20);
-            (child_frame_base as *mut u64).write(0);
+
+            // GP registers — copy from current syscall frame, child RAX = 0
+            dst.add(0).write(0);                                    // RAX = 0 (fork return value for child)
+            dst.add(1).write(regs.add(1).read());                  // RBX
+            dst.add(2).write(regs.add(2).read());                  // RCX = user RIP
+            dst.add(3).write(regs.add(3).read());                  // RDX
+            dst.add(4).write(regs.add(4).read());                  // RSI
+            dst.add(5).write(regs.add(5).read());                  // RDI
+            dst.add(6).write(regs.add(6).read());                  // RBP
+            dst.add(7).write(regs.add(7).read());                  // R8
+            dst.add(8).write(regs.add(8).read());                  // R9
+            dst.add(9).write(regs.add(9).read());                  // R10
+            dst.add(10).write(regs.add(10).read());                // R11 = user RFLAGS
+            dst.add(11).write(regs.add(11).read());                // R12
+            dst.add(12).write(regs.add(12).read());                // R13
+            dst.add(13).write(regs.add(13).read());                // R14
+            dst.add(14).write(regs.add(14).read());                // R15
+
+            // IRET frame — user-mode selectors for ring-3 return
+            dst.add(15).write(regs.add(2).read());                 // RIP = user instruction pointer
+            dst.add(16).write(0x1B_u64);                           // CS  = user code selector (Ring 3)
+            dst.add(17).write(regs.add(10).read());                // RFLAGS = user RFLAGS
+            dst.add(18).write(user_rsp);                           // RSP = user stack pointer
+            dst.add(19).write(0x23_u64);                           // SS  = user data selector (Ring 3)
         }
         child_frame_base
     };
@@ -1335,8 +1364,15 @@ fn sys_fork() -> u64 {
             Some(pid) => {
                 let mut child = match Process::new_kernel(pid, 0) {
                     Some(c) => c,
-                    None => return errno::ENOMEM as u64,
+                    None => {
+                        unsafe { core::arch::asm!("mov cr3, {0}", in(reg) saved_cr3); }
+                        return errno::ENOMEM as u64;
+                    }
                 };
+                // Process::new_kernel() allocated its own kernel stack (via
+                // alloc_kernel_stack). We override it with the stack we prepared
+                // above (which has the copied parent frame). Free the leaked one.
+                let leaked_kstack = child.kernel_stack_base;
                 child.state = crate::process::ProcessState::Ready;
                 child.stack_pointer = child_sp;
                 child.kernel_stack_base = stack_base;
@@ -1370,11 +1406,24 @@ fn sys_fork() -> u64 {
                 }
 
                 sched.processes_mut()[pid as usize] = Some(child);
+                // Free the kernel stack that Process::new_kernel() allocated
+                // (we replaced it with our own stack_base above)
+                if leaked_kstack != 0 {
+                    crate::process::process::free_kernel_stack(leaked_kstack);
+                }
                 pid
             }
-            None => return errno::ENOMEM as u64,
+            None => {
+                unsafe { core::arch::asm!("mov cr3, {0}", in(reg) saved_cr3); }
+                return errno::ENOMEM as u64;
+            }
         }
     };
+
+    // Restore parent's user PML4 before returning to the syscall return path
+    unsafe {
+        core::arch::asm!("mov cr3, {0}", in(reg) saved_cr3);
+    }
 
     crate::serial::write_str("[SYSCALL] fork parent=");
     crate::serial::write_u64(parent_pid);
@@ -1398,7 +1447,8 @@ fn sys_exec(path_ptr: u64) -> u64 {
         return errno::EFAULT as u64;
     }
 
-    // Read the path string from user space
+    // Read the path string from user space (must happen on user PML4 which
+    // has the user-space memory mapped).
     let path = {
         let mut buf = Vec::new();
         let user_ptr = path_ptr as *const u8;
@@ -1438,6 +1488,20 @@ fn sys_exec(path_ptr: u64) -> u64 {
     crate::serial::write_str("[SYSCALL] exec: ");
     crate::serial::write_str(&path);
     crate::serial::write_nl();
+
+    // SAFETY: Switch to kernel PML4 for the rest of exec.
+    // create_user_pml4(), map_page(), phys_to_virt(), free_user_address_space()
+    // all use the identity map which is absent on user PML4s.
+    let kernel_pml4 = memory::kernel_pml4_phys();
+    let saved_cr3: u64;
+    unsafe {
+        core::arch::asm!("mov {0}, cr3", out(reg) saved_cr3);
+        core::arch::asm!("mov cr3, {0}", in(reg) kernel_pml4);
+    }
+
+    // Labeled block: all `return` after CR3 switch becomes `break 'exec_body`.
+    // CR3 is restored after the block.
+    let exec_result: u64 = 'exec_body: {
 
     // Close FDs marked close-on-exec before loading.
     // POSIX: only FDs with FD_CLOEXEC flag are closed on exec.
@@ -1508,11 +1572,11 @@ fn sys_exec(path_ptr: u64) -> u64 {
     // Read the ELF from VFS
     let elf_data = match crate::vfs::vfs().read_file(&path) {
         Ok(data) => data,
-        Err(e) => return e.to_errno() as u64,
+        Err(e) => break 'exec_body e.to_errno() as u64,
     };
 
     if elf_data.is_empty() {
-        return errno::ENOENT as u64;
+        break 'exec_body errno::ENOENT as u64;
     }
 
     // Get current process info
@@ -1522,15 +1586,14 @@ fn sys_exec(path_ptr: u64) -> u64 {
             if let Some(ref proc) = sched.processes()[pid as usize] {
                 (pid, proc.pml4_phys, proc.kernel_stack_base)
             } else {
-                return errno::ESRCH as u64;
+                break 'exec_body errno::ESRCH as u64;
             }
         } else {
-            return errno::ESRCH as u64;
+            break 'exec_body errno::ESRCH as u64;
         }
     };
 
     // Create a new user PML4 (don't free old one yet — atomic transition)
-    let kernel_pml4 = memory::kernel_pml4_phys();
     let new_pml4 = vmm::create_user_pml4(PhysAddr::new(kernel_pml4));
 
     // Load the ELF into the new address space
@@ -1542,7 +1605,7 @@ fn sys_exec(path_ptr: u64) -> u64 {
             crate::serial::write_nl();
             // Free the new PML4 (no user pages were loaded)
             unsafe { vmm::free_user_address_space(new_pml4); }
-            return errno::ENOEXEC as u64;
+            break 'exec_body errno::ENOEXEC as u64;
         }
     };
 
@@ -1557,7 +1620,7 @@ fn sys_exec(path_ptr: u64) -> u64 {
             Some(f) => f,
             None => {
                 unsafe { vmm::free_user_address_space(new_pml4); }
-                return errno::ENOMEM as u64;
+                break 'exec_body errno::ENOMEM as u64;
             }
         };
         vmm::map_page(
@@ -1582,7 +1645,7 @@ fn sys_exec(path_ptr: u64) -> u64 {
         Some(f) => f,
         None => {
             unsafe { vmm::free_user_address_space(new_pml4); }
-            return errno::ENOMEM as u64;
+            break 'exec_body errno::ENOMEM as u64;
         }
     };
     vmm::map_page(
@@ -1605,6 +1668,7 @@ fn sys_exec(path_ptr: u64) -> u64 {
         let mut sched = crate::process::scheduler::SCHEDULER.lock();
         if let Some(ref mut proc) = sched.processes_mut()[current_pid as usize] {
             proc.pml4_phys = new_pml4.as_u64();
+            proc.saved_cr3 = 0;
             proc.user_rip = Some(user_rip);
             proc.user_rsp = Some(user_rsp);
             proc.is_user = true;
@@ -1614,7 +1678,7 @@ fn sys_exec(path_ptr: u64) -> u64 {
             // a new user-mode IRET frame that will return to the new entry point.
             let sp = proc.stack_pointer as *mut u64;
             if sp.is_null() {
-                return errno::EINVAL as u64;
+                break 'exec_body errno::EINVAL as u64;
             }
             unsafe {
                 // [rsp+2] = RCX = user RIP (for IRET)
@@ -1646,6 +1710,25 @@ fn sys_exec(path_ptr: u64) -> u64 {
     crate::serial::write_nl();
 
     0
+    }; // end 'exec_body
+
+    // Restore CR3 to the NEW user PML4 (the old one was freed inside exec body).
+    // saved_cr3 holds the old (freed) PML4; read the updated pml4_phys instead.
+    {
+        let sched = crate::process::scheduler::SCHEDULER.lock();
+        if let Some(pid) = sched.current_pid() {
+            if let Some(ref proc) = sched.processes()[pid as usize] {
+                let new_cr3 = proc.pml4_phys;
+                unsafe { core::arch::asm!("mov cr3, {0}", in(reg) new_cr3); }
+                exec_result
+            } else {
+                // Process vanished — should not happen. Halt.
+                loop { unsafe { core::arch::asm!("hlt"); } }
+            }
+        } else {
+            loop { unsafe { core::arch::asm!("hlt"); } }
+        }
+    }
 }
 
 /// SYS_CLOSE (10) — Close a file descriptor.
@@ -2199,10 +2282,17 @@ fn sys_brk(new_brk: u64) -> u64 {
     use crate::memory::{self, vmm, PhysAddr, PAGE_SIZE};
     use x86_64::VirtAddr;
 
+    const BRK_MAX: u64 = 0x0000_7FFF_FFFF_F000;
+
+    let kernel_pml4 = crate::memory::kernel_pml4_phys();
+    let (saved_cr3, _) = x86_64::registers::control::Cr3::read();
+    if saved_cr3.start_address().as_u64() != kernel_pml4 {
+        unsafe { crate::memory::vmm::switch_page_table(crate::memory::PhysAddr::new(kernel_pml4)); }
+    }
+
     let mut sched = crate::process::scheduler::SCHEDULER.lock();
-    if let Some(pid) = sched.current_pid() {
+    let result = if let Some(pid) = sched.current_pid() {
         if let Some(ref mut proc) = sched.processes_mut()[pid as usize] {
-            // Initialize heap_start on first call (ASLR randomized)
             if proc.heap_start == 0 {
                 let heap_base = crate::aslr::randomize_heap_base();
                 proc.heap_start = heap_base;
@@ -2210,65 +2300,66 @@ fn sys_brk(new_brk: u64) -> u64 {
             }
 
             if new_brk == 0 {
-                // Query: return current heap end
-                return proc.heap_end;
-            }
+                proc.heap_end
+            } else if new_brk < proc.heap_start {
+                proc.heap_end
+            } else if new_brk > BRK_MAX {
+                errno::ENOMEM as u64
+            } else {
+                let old_end = proc.heap_end;
+                let new_end = new_brk;
 
-            if new_brk < proc.heap_start {
-                // Below heap start — invalid
-                return proc.heap_end;
-            }
-
-            let old_end = proc.heap_end;
-            let new_end = new_brk;
-
-            if new_end > old_end {
-                // Growing: map new pages
-                let pml4 = proc.pml4_phys;
-                let mut addr = old_end;
-                while addr < new_end {
-                    let page_virt = VirtAddr::new(addr);
-                    // Check if already mapped
-                    if vmm::translate_addr(PhysAddr::new(pml4), page_virt).is_none() {
-                        // Allocate a new physical frame and map it
-                        let frame = crate::memory::pmm::alloc_frame();
-                        if let Some(frame) = frame {
-                            vmm::map_page(
-                                PhysAddr::new(pml4),
-                                page_virt,
-                                frame,
-                                x86_64::structures::paging::PageTableFlags::PRESENT
-                                    | x86_64::structures::paging::PageTableFlags::WRITABLE
-                                    | x86_64::structures::paging::PageTableFlags::USER_ACCESSIBLE,
-                            );
-                        } else {
-                            // OOM: can't grow
-                            break;
+                if new_end > old_end {
+                    let pml4 = proc.pml4_phys;
+                    let mut addr = old_end;
+                    while addr < new_end {
+                        let page_virt = VirtAddr::new(addr);
+                        if vmm::translate_addr(PhysAddr::new(pml4), page_virt).is_none() {
+                            if let Some(frame) = crate::memory::pmm::alloc_frame() {
+                                vmm::map_page(
+                                    PhysAddr::new(pml4),
+                                    page_virt,
+                                    frame,
+                                    x86_64::structures::paging::PageTableFlags::PRESENT
+                                        | x86_64::structures::paging::PageTableFlags::WRITABLE
+                                        | x86_64::structures::paging::PageTableFlags::USER_ACCESSIBLE,
+                                );
+                            } else {
+                                break;
+                            }
                         }
+                        addr += PAGE_SIZE;
                     }
-                    addr += PAGE_SIZE;
-                }
-                proc.heap_end = addr;
-            } else if new_end < old_end {
-                // Shrinking: unmap pages
-                let pml4 = proc.pml4_phys;
-                let mut addr = new_end;
-                while addr < old_end {
-                    let page_virt = VirtAddr::new(addr);
-                    // Unmap and free the physical frame
-                    if let Some(phys) = vmm::translate_addr(PhysAddr::new(pml4), page_virt) {
-                        vmm::unmap_page(PhysAddr::new(pml4), page_virt);
-                        crate::memory::pmm::free_frame(phys);
+                    proc.heap_end = addr;
+                } else if new_end < old_end {
+                    let pml4 = proc.pml4_phys;
+                    let mut addr = new_end;
+                    while addr < old_end {
+                        let page_virt = VirtAddr::new(addr);
+                        if let Some(phys) = vmm::translate_addr(PhysAddr::new(pml4), page_virt) {
+                            vmm::unmap_page(PhysAddr::new(pml4), page_virt);
+                            crate::memory::pmm::free_frame(phys);
+                        }
+                        addr += PAGE_SIZE;
                     }
-                    addr += PAGE_SIZE;
+                    proc.heap_end = new_end;
                 }
-                proc.heap_end = new_end;
+                proc.heap_end
             }
-
-            return proc.heap_end;
+        } else {
+            errno::ESRCH as u64
         }
+    } else {
+        errno::ESRCH as u64
+    };
+    drop(sched);
+
+    if saved_cr3.start_address().as_u64() != kernel_pml4 {
+        unsafe { crate::memory::vmm::switch_page_table(crate::memory::PhysAddr::new(
+            saved_cr3.start_address().as_u64(),
+        )); }
     }
-    errno::ESRCH as u64
+    result
 }
 
 /// SYS_EXECVE (18) — Replace process with new ELF, passing argc/argv.
@@ -2422,20 +2513,31 @@ fn sys_execve(path_ptr: u64, argc: u64, argv_ptr: u64) -> u64 {
         return errno::ENOENT as u64;
     }
 
+    // SAFETY: Switch to kernel PML4 for the rest of execve.
+    // create_user_pml4(), map_page(), phys_to_virt(), free_user_address_space()
+    // all use the identity map which is absent on user PML4s.
+    let kernel_pml4 = memory::kernel_pml4_phys();
+    let saved_cr3: u64;
+    unsafe {
+        core::arch::asm!("mov {0}, cr3", out(reg) saved_cr3);
+        core::arch::asm!("mov cr3, {0}", in(reg) kernel_pml4);
+    }
+
+    let execve_result: u64 = 'execve_body: {
+
     let (current_pid, old_pml4_phys) = {
         let sched = crate::process::scheduler::SCHEDULER.lock();
         if let Some(pid) = sched.current_pid() {
             if let Some(ref proc) = sched.processes()[pid as usize] {
                 (pid, proc.pml4_phys)
             } else {
-                return errno::ESRCH as u64;
+                break 'execve_body errno::ESRCH as u64;
             }
         } else {
-            return errno::ESRCH as u64;
+            break 'execve_body errno::ESRCH as u64;
         }
     };
 
-    let kernel_pml4 = memory::kernel_pml4_phys();
     let new_pml4 = vmm::create_user_pml4(PhysAddr::new(kernel_pml4));
 
     let elf_image = match crate::elf::load_elf(&elf_data, new_pml4) {
@@ -2445,7 +2547,7 @@ fn sys_execve(path_ptr: u64, argc: u64, argv_ptr: u64) -> u64 {
             crate::serial::write_str(e.description());
             crate::serial::write_nl();
             unsafe { vmm::free_user_address_space(new_pml4); }
-            return errno::ENOEXEC as u64;
+            break 'execve_body errno::ENOEXEC as u64;
         }
     };
 
@@ -2457,7 +2559,7 @@ fn sys_execve(path_ptr: u64, argc: u64, argv_ptr: u64) -> u64 {
         let page_virt = x86_64::VirtAddr::new(user_stack_bottom + i * crate::memory::PAGE_SIZE);
         let frame = match vmm::PmmFrameAllocator.allocate_frame() {
             Some(f) => f,
-            None => { unsafe { vmm::free_user_address_space(new_pml4); } return errno::ENOMEM as u64; }
+            None => { unsafe { vmm::free_user_address_space(new_pml4); } break 'execve_body errno::ENOMEM as u64; }
         };
         vmm::map_page(new_pml4, page_virt, PhysAddr::new(frame.start_address().as_u64()),
             x86_64::structures::paging::PageTableFlags::PRESENT
@@ -2471,7 +2573,7 @@ fn sys_execve(path_ptr: u64, argc: u64, argv_ptr: u64) -> u64 {
     let guard_virt = x86_64::VirtAddr::new(user_stack_bottom - crate::memory::PAGE_SIZE);
     let guard_frame = match vmm::PmmFrameAllocator.allocate_frame() {
         Some(f) => f,
-        None => { unsafe { vmm::free_user_address_space(new_pml4); } return errno::ENOMEM as u64; }
+        None => { unsafe { vmm::free_user_address_space(new_pml4); } break 'execve_body errno::ENOMEM as u64; }
     };
     vmm::map_page(new_pml4, guard_virt, PhysAddr::new(guard_frame.start_address().as_u64()),
         x86_64::structures::paging::PageTableFlags::PRESENT);
@@ -2499,7 +2601,7 @@ fn sys_execve(path_ptr: u64, argc: u64, argv_ptr: u64) -> u64 {
     // to leave room for argv pointers, argc, and alignment
     let total_string_bytes: usize = argv_strings.iter().map(|s| s.len() + 1).sum();
     if total_string_bytes > 3072 {
-        return errno::E2BIG as u64;
+        break 'execve_body errno::E2BIG as u64;
     }
 
     for s in &argv_strings {
@@ -2563,7 +2665,7 @@ fn sys_execve(path_ptr: u64, argc: u64, argv_ptr: u64) -> u64 {
 
             let sp_ptr = proc.stack_pointer as *mut u64;
             if sp_ptr.is_null() {
-                return errno::EINVAL as u64;
+                break 'execve_body errno::EINVAL as u64;
             }
             unsafe {
                 sp_ptr.add(15).write(user_rip);  // RIP
@@ -2587,6 +2689,11 @@ fn sys_execve(path_ptr: u64, argc: u64, argv_ptr: u64) -> u64 {
     crate::serial::write_nl();
 
     0
+    }; // end 'execve_body
+
+    // Restore original CR3 (back to user PML4).
+    unsafe { core::arch::asm!("mov cr3, {0}", in(reg) saved_cr3); }
+    execve_result
 }
 
 /// SYS_CHDIR (19) — Change the current working directory.
@@ -2788,86 +2895,107 @@ fn sys_mmap(addr: u64, length: u64) -> u64 {
     // Round up to page boundary
     let num_pages = (length + PAGE_SIZE - 1) / PAGE_SIZE;
 
+    // Switch to kernel PML4 — vmm::map_page/translate_addr need the identity map.
+    let kernel_pml4 = crate::memory::kernel_pml4_phys();
+    let (saved_cr3, _) = x86_64::registers::control::Cr3::read();
+    if saved_cr3.start_address().as_u64() != kernel_pml4 {
+        unsafe { crate::memory::vmm::switch_page_table(crate::memory::PhysAddr::new(kernel_pml4)); }
+    }
+
     let mut sched = crate::process::scheduler::SCHEDULER.lock();
-    if let Some(pid) = sched.current_pid() {
+    let result = if let Some(pid) = sched.current_pid() {
         if let Some(ref mut proc) = sched.processes_mut()[pid as usize] {
             if proc.pml4_phys == 0 {
-                return errno::ESRCH as u64;
-            }
-
-            if proc.mmap_count as usize >= crate::process::process::MAX_MMAP_REGIONS {
-                return errno::ENOMEM as u64;
-            }
-
-            // Find the next free virtual address region
-            // Start from randomized mmap base (ASLR) and scan forward
-            let mut base = crate::aslr::randomize_mmap_base();
-            let pml4 = proc.pml4_phys;
-            'outer: loop {
-                // Check if this region overlaps with any existing mmap
-                let mut overlap = false;
-                for i in 0..proc.mmap_count as usize {
-                    let (existing_base, existing_pages) = proc.mmap_regions[i];
-                    let existing_end = existing_base + existing_pages * PAGE_SIZE;
-                    if base < existing_end && base + num_pages * PAGE_SIZE > existing_base {
-                        base = existing_end;
-                        overlap = true;
-                        break;
-                    }
-                }
-                if overlap { continue 'outer; }
-
-                // Also check against stack (leave a guard page)
-                let stack_bottom = crate::memory::USER_STACK_TOP - 5 * PAGE_SIZE;
-                if base + num_pages * PAGE_SIZE > stack_bottom {
-                    return errno::ENOMEM as u64;
-                }
-
-                // Check if all pages in the region are unmapped
-                for i in 0..num_pages {
-                    let page_virt = VirtAddr::new(base + i * PAGE_SIZE);
-                    if vmm::translate_addr(PhysAddr::new(pml4), page_virt).is_some() {
-                        base = base + (i + 1) * PAGE_SIZE;
-                        continue 'outer;
-                    }
-                }
-                break;
-            }
-
-            // Map the pages
-            for i in 0..num_pages {
-                let page_virt = VirtAddr::new(base + i * PAGE_SIZE);
-                let frame = crate::memory::pmm::alloc_frame();
-                if let Some(frame) = frame {
-                    vmm::map_page(
-                        PhysAddr::new(pml4),
-                        page_virt,
-                        frame,
-                        x86_64::structures::paging::PageTableFlags::PRESENT
-                            | x86_64::structures::paging::PageTableFlags::WRITABLE
-                            | x86_64::structures::paging::PageTableFlags::USER_ACCESSIBLE,
-                    );
-                } else {
-                    // OOM: unmap already-mapped pages
-                    for j in 0..i {
-                        let page_virt = VirtAddr::new(base + j * PAGE_SIZE);
-                        if let Some(phys) = vmm::translate_addr(PhysAddr::new(pml4), page_virt) {
-                            vmm::unmap_page(PhysAddr::new(pml4), page_virt);
-                            crate::memory::pmm::free_frame(phys);
+                errno::ESRCH as u64
+            } else if proc.mmap_count as usize >= crate::process::process::MAX_MMAP_REGIONS {
+                errno::ENOMEM as u64
+            } else {
+                // Find the next free virtual address region
+                let mut base = crate::aslr::randomize_mmap_base();
+                let pml4 = proc.pml4_phys;
+                let mut found_region = false;
+                'outer: loop {
+                    let mut overlap = false;
+                    for i in 0..proc.mmap_count as usize {
+                        let (existing_base, existing_pages) = proc.mmap_regions[i];
+                        let existing_end = existing_base + existing_pages * PAGE_SIZE;
+                        if base < existing_end && base + num_pages * PAGE_SIZE > existing_base {
+                            base = existing_end;
+                            overlap = true;
+                            break;
                         }
                     }
-                    return errno::ENOMEM as u64;
+                    if overlap { continue 'outer; }
+
+                    let stack_bottom = crate::memory::USER_STACK_TOP - 5 * PAGE_SIZE;
+                    if base + num_pages * PAGE_SIZE > stack_bottom {
+                        break;
+                    }
+
+                    for i in 0..num_pages {
+                        let page_virt = VirtAddr::new(base + i * PAGE_SIZE);
+                        if vmm::translate_addr(PhysAddr::new(pml4), page_virt).is_some() {
+                            base = base + (i + 1) * PAGE_SIZE;
+                            continue 'outer;
+                        }
+                    }
+                    found_region = true;
+                    break;
+                }
+
+                if !found_region {
+                    errno::ENOMEM as u64
+                } else {
+                    // Map the pages
+                    let mut oom = false;
+                    for i in 0..num_pages {
+                        let page_virt = VirtAddr::new(base + i * PAGE_SIZE);
+                        if let Some(frame) = crate::memory::pmm::alloc_frame() {
+                            vmm::map_page(
+                                PhysAddr::new(pml4),
+                                page_virt,
+                                frame,
+                                x86_64::structures::paging::PageTableFlags::PRESENT
+                                    | x86_64::structures::paging::PageTableFlags::WRITABLE
+                                    | x86_64::structures::paging::PageTableFlags::USER_ACCESSIBLE,
+                            );
+                        } else {
+                            // OOM: unmap already-mapped pages
+                            for j in 0..i {
+                                let page_virt = VirtAddr::new(base + j * PAGE_SIZE);
+                                if let Some(phys) = vmm::translate_addr(PhysAddr::new(pml4), page_virt) {
+                                    vmm::unmap_page(PhysAddr::new(pml4), page_virt);
+                                    crate::memory::pmm::free_frame(phys);
+                                }
+                            }
+                            oom = true;
+                            break;
+                        }
+                    }
+                    if oom {
+                        errno::ENOMEM as u64
+                    } else {
+                        proc.mmap_regions[proc.mmap_count as usize] = (base, num_pages);
+                        proc.mmap_count += 1;
+                        base
+                    }
                 }
             }
-
-            // Track the region
-            proc.mmap_regions[proc.mmap_count as usize] = (base, num_pages);
-            proc.mmap_count += 1;
-
-            return base;
+        } else {
+            errno::ESRCH as u64
         }
+    } else {
+        errno::ESRCH as u64
+    };
+    drop(sched);
+
+    // Restore original CR3 (user PML4)
+    if saved_cr3.start_address().as_u64() != kernel_pml4 {
+        unsafe { crate::memory::vmm::switch_page_table(crate::memory::PhysAddr::new(
+            saved_cr3.start_address().as_u64(),
+        )); }
     }
-    errno::ESRCH as u64
+    result
 }
 
 /// SYS_MUNMAP (23) — Unmap anonymous memory.
@@ -2885,18 +3013,23 @@ fn sys_munmap(addr: u64, length: u64) -> u64 {
     let num_pages = (length + PAGE_SIZE - 1) / PAGE_SIZE;
     let end = addr + num_pages * PAGE_SIZE;
 
+    // Switch to kernel PML4 — vmm::translate_addr/unmap_page need the identity map.
+    let kernel_pml4 = crate::memory::kernel_pml4_phys();
+    let (saved_cr3, _) = x86_64::registers::control::Cr3::read();
+    if saved_cr3.start_address().as_u64() != kernel_pml4 {
+        unsafe { crate::memory::vmm::switch_page_table(crate::memory::PhysAddr::new(kernel_pml4)); }
+    }
+
     let mut sched = crate::process::scheduler::SCHEDULER.lock();
-    if let Some(pid) = sched.current_pid() {
+    let result = if let Some(pid) = sched.current_pid() {
         if let Some(ref mut proc) = sched.processes_mut()[pid as usize] {
             let pml4 = proc.pml4_phys;
 
-            // Find and remove the mmap region
             let mut found = false;
             for i in 0..proc.mmap_count as usize {
                 let (region_base, region_pages) = proc.mmap_regions[i];
                 let region_end = region_base + region_pages * PAGE_SIZE;
                 if addr >= region_base && end <= region_end {
-                    // Found it — unmap the pages
                     for j in 0..region_pages {
                         let page_virt = VirtAddr::new(region_base + j * PAGE_SIZE);
                         if let Some(phys) = vmm::translate_addr(PhysAddr::new(pml4), page_virt) {
@@ -2904,7 +3037,6 @@ fn sys_munmap(addr: u64, length: u64) -> u64 {
                             crate::memory::pmm::free_frame(phys);
                         }
                     }
-                    // Remove from tracking array
                     for j in i..(proc.mmap_count as usize - 1) {
                         proc.mmap_regions[j] = proc.mmap_regions[j + 1];
                     }
@@ -2921,7 +3053,16 @@ fn sys_munmap(addr: u64, length: u64) -> u64 {
         }
     } else {
         errno::ESRCH as u64
+    };
+    drop(sched);
+
+    // Restore original CR3
+    if saved_cr3.start_address().as_u64() != kernel_pml4 {
+        unsafe { crate::memory::vmm::switch_page_table(crate::memory::PhysAddr::new(
+            saved_cr3.start_address().as_u64(),
+        )); }
     }
+    result
 }
 
 /// SYS_TCGETATTR (24) — Get terminal attributes.
@@ -2938,6 +3079,14 @@ fn sys_tcgetattr(fd: u64, termios_ptr: u64) -> u64 {
     // Write termios to user buffer
     let dst = termios_ptr as *mut crate::tty::Termios;
     if !is_valid_user_range(termios_ptr, core::mem::size_of::<crate::tty::Termios>() as u64) {
+        return errno::EFAULT as u64;
+    }
+    // Verify the page is actually mapped (not just in valid range)
+    let pml4 = {
+        let sched = crate::process::scheduler::SCHEDULER.lock();
+        sched.current_process().map(|p| p.pml4_phys).unwrap_or(0)
+    };
+    if pml4 == 0 || !is_user_buffer_mapped(pml4, termios_ptr, core::mem::size_of::<crate::tty::Termios>() as u64) {
         return errno::EFAULT as u64;
     }
     unsafe { core::ptr::write_volatile(dst, termios); }
@@ -2957,6 +3106,14 @@ fn sys_tcsetattr(fd: u64, _optional_actions: u64, termios_ptr: u64) -> u64 {
     if !is_valid_user_range(termios_ptr, core::mem::size_of::<crate::tty::Termios>() as u64) {
         return errno::EFAULT as u64;
     }
+    // Verify the page is actually mapped
+    let pml4 = {
+        let sched = crate::process::scheduler::SCHEDULER.lock();
+        sched.current_process().map(|p| p.pml4_phys).unwrap_or(0)
+    };
+    if pml4 == 0 || !is_user_buffer_mapped(pml4, termios_ptr, core::mem::size_of::<crate::tty::Termios>() as u64) {
+        return errno::EFAULT as u64;
+    }
     let termios = unsafe { core::ptr::read_volatile(src) };
 
     crate::tty::tty_apply_termios(&termios);
@@ -2974,16 +3131,29 @@ fn sys_sigaction(signum: u64, handler_ptr: u64, old_handler_ptr: u64) -> u64 {
 
     let sig_idx = signum as usize - 1;
 
+    // Validate handler address: must be in user space (not kernel) if non-zero
+    if handler_ptr != 0 {
+        // handler must be in user address space (< 0x0000_8000_0000_0000)
+        if handler_ptr >= 0x0000_8000_0000_0000 {
+            return errno::EINVAL as u64;
+        }
+    }
+
     let mut sched = crate::process::scheduler::SCHEDULER.lock();
     let pid = sched.current_pid().unwrap_or(0) as usize;
     if let Some(Some(ref mut proc)) = sched.processes_mut().get_mut(pid) {
+        let pml4 = proc.pml4_phys;
         // Return old handler if requested
         if old_handler_ptr != 0 {
+            if !is_valid_user_range(old_handler_ptr, 8) {
+                return errno::EFAULT as u64;
+            }
+            if !is_user_buffer_mapped(pml4, old_handler_ptr, 8) {
+                return errno::EFAULT as u64;
+            }
             let old_val = proc.signal_handlers[sig_idx];
             let dst = old_handler_ptr as *mut u64;
-            if is_valid_user_range(old_handler_ptr, 8) {
-                unsafe { core::ptr::write_volatile(dst, old_val); }
-            }
+            unsafe { core::ptr::write_volatile(dst, old_val); }
         }
         // Set new handler
         proc.signal_handlers[sig_idx] = handler_ptr;

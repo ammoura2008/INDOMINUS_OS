@@ -201,7 +201,13 @@ pub fn serial_rx_handler() {
                 crate::serial::ddbg(b'O');
             }
             let byte = inb(UART_DATA);
+            // SAFETY: Set flag instead of calling keyboard_wake() directly.
+            // The line_discipline_input function may call keyboard_wake()
+            // which acquires the SCHEDULER lock — deadlock if called from
+            // interrupt context while a process holds the lock.
+            // The timer tick handler drains this flag in a safe context.
             crate::keyboard::line_discipline_input(byte);
+            crate::process::KEYBOARD_WAKE_PENDING.store(true, core::sync::atomic::Ordering::Release);
             count += 1;
             // Safety limit: 16550 FIFO is 16 bytes max
             if count >= 16 {

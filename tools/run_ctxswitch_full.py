@@ -57,8 +57,12 @@ for line in full_output.split("\n"):
     if s and any(k in s for k in [
         "CTXSW", "ctxswitch", "== Test", "PASS:", "FAIL:", "SKIP:",
         "ALL TESTS", "Results:", "RFLAGS",
-        "PAGE FAULT", "panic", "PANIC", "fault",
-        "Phase 13",
-        "test_ctxswitch",
+        "PAGE FAULT", "panic", "PANIC", "fault", "IRET",
+        "Phase 13", "CR3", "CR2", "RSP", "RAX", "RIP",
+        "PML4", "PID", "FREE", "ALLOC", "DOUBLE",
+        "test_ctxswitch", "pf_class", "page_fault",
+        "PDPT", "PD ", "PT ", "rw", "present", "user",
+        "rsp=", "rip=", "cr2=",
+        "PMM", "0x0286", "FREE_WALK", "COW",
     ]):
         print(s)

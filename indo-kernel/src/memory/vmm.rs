@@ -600,6 +600,9 @@ pub unsafe fn copy_user_pages(
     // Track all child page table frames allocated during this call.
     // On failure, free them all to prevent physical memory leaks.
     let mut allocated_frames: alloc::vec::Vec<super::PhysAddr> = alloc::vec::Vec::new();
+    // Track data frames whose refcount was incremented.
+    // On failure, decrement them to prevent refcount leaks.
+    let mut incref_frames: alloc::vec::Vec<super::PhysAddr> = alloc::vec::Vec::new();
 
     // Switch to kernel PML4 for identity map access
     let kernel_pml4 = super::kernel_pml4_phys();
@@ -629,6 +632,8 @@ pub unsafe fn copy_user_pages(
             let child_pdpt_frame = pmm::alloc_frame().ok_or(())?;
             allocated_frames.push(super::PhysAddr::new(child_pdpt_frame.as_u64()));
             let child_pdpt_virt = phys_to_virt(child_pdpt_frame.as_u64());
+            // Zero the frame to prevent stale data in non-present entries
+            core::ptr::write_bytes(child_pdpt_virt.as_mut_ptr() as *mut u8, 0, super::PAGE_SIZE as usize);
             let child_pdpt = &mut *(child_pdpt_virt.as_mut_ptr() as *mut PageTable);
 
             // Map the child's PDPT in the child's PML4
@@ -653,6 +658,8 @@ pub unsafe fn copy_user_pages(
                 let child_pd_frame = pmm::alloc_frame().ok_or(())?;
                 allocated_frames.push(super::PhysAddr::new(child_pd_frame.as_u64()));
                 let child_pd_virt = phys_to_virt(child_pd_frame.as_u64());
+                // Zero the frame to prevent stale data in non-present entries
+                core::ptr::write_bytes(child_pd_virt.as_mut_ptr() as *mut u8, 0, super::PAGE_SIZE as usize);
                 let child_pd = &mut *(child_pd_virt.as_mut_ptr() as *mut PageTable);
 
                 child_pdpt[PageTableIndex::new(pdpt_idx)].set_addr(
@@ -676,6 +683,8 @@ pub unsafe fn copy_user_pages(
                     let child_pt_frame = pmm::alloc_frame().ok_or(())?;
                     allocated_frames.push(super::PhysAddr::new(child_pt_frame.as_u64()));
                     let child_pt_virt = phys_to_virt(child_pt_frame.as_u64());
+                    // Zero the frame to prevent stale data in non-present entries
+                    core::ptr::write_bytes(child_pt_virt.as_mut_ptr() as *mut u8, 0, super::PAGE_SIZE as usize);
                     let child_pt = &mut *(child_pt_virt.as_mut_ptr() as *mut PageTable);
 
                     child_pd[PageTableIndex::new(pd_idx)].set_addr(
@@ -694,6 +703,7 @@ pub unsafe fn copy_user_pages(
 
                         // Increment refcount on the shared physical frame
                         pmm::incref(super::PhysAddr::new(frame_phys));
+                        incref_frames.push(super::PhysAddr::new(frame_phys));
 
                         // Make the page read-only in both parent and child
                         // The page fault handler uses refcount to detect CoW
@@ -723,6 +733,11 @@ pub unsafe fn copy_user_pages(
         // Rollback: free all child page table frames allocated so far
         for frame in allocated_frames {
             pmm::free_frame(frame);
+        }
+        // Rollback: decrement refcounts on data frames we incremented.
+        // Each decref may free the frame if we were the last holder.
+        for frame in incref_frames {
+            pmm::decref(frame);
         }
     }
 
@@ -766,6 +781,16 @@ pub unsafe fn handle_cow_fault(virtual_addr: u64) -> Result<(), ()> {
 
             // Check if this is a CoW page (refcount > 1)
             let refcount = pmm::get_refcount(super::PhysAddr::new(frame_phys));
+            #[cfg(DEBUG_KERNEL)]
+            {
+                crate::serial::write_str("[COW] found PTE frame=0x");
+                crate::serial::write_hex(frame_phys);
+                crate::serial::write_str(" refcount=");
+                crate::serial::write_u64(refcount as u64);
+                crate::serial::write_str(" flags=0x");
+                crate::serial::write_hex(flags.bits());
+                crate::serial::write_nl();
+            }
             if refcount > 1 {
                 // CoW: allocate a new frame and copy
                 if let Some(new_frame) = pmm::alloc_frame() {
@@ -789,12 +814,24 @@ pub unsafe fn handle_cow_fault(virtual_addr: u64) -> Result<(), ()> {
                 } else {
                     Err(()) // OOM
                 }
+            } else if !flags.contains(PageTableFlags::WRITABLE) {
+                // refcount == 1 but not writable: other side already CoW'd this page.
+                // This process is the sole owner — just make it writable.
+                (*pte_ptr).set_flags(flags | PageTableFlags::WRITABLE);
+                Ok(())
             } else {
-                // refcount == 1: not CoW, genuine protection fault
+                // refcount == 1 and already writable: genuine protection fault
                 Err(())
             }
         }
-        None => Err(()), // Page not mapped
+        None => {
+            crate::serial::write_str("[COW] PTE not found for vaddr=0x");
+            crate::serial::write_hex(virtual_addr);
+            crate::serial::write_str(" pml4=0x");
+            crate::serial::write_hex(pml4_phys.as_u64());
+            crate::serial::write_nl();
+            Err(()) // Page not mapped
+        }
     };
 
     // Flush TLB for the faulting address

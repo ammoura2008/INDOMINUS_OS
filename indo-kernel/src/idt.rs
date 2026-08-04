@@ -166,6 +166,18 @@ pub fn init() {
         // #UD — Invalid Opcode
         idt.invalid_opcode.set_handler_addr(handler_virt!(invalid_opcode_handler));
 
+        // #NM — Device Not Available (FPU/SSE)
+        idt.device_not_available.set_handler_addr(handler_virt!(device_not_available_handler));
+
+        // #NMI — Non-Maskable Interrupt (hardware errors)
+        idt.non_maskable_interrupt.set_handler_addr(handler_virt!(nmi_handler));
+
+        // #AC — Alignment Check (unaligned memory access)
+        idt.alignment_check.set_handler_addr(handler_virt!(alignment_check_handler));
+
+        // #MC — Machine Check (fatal hardware error)
+        idt.machine_check.set_handler_addr(handler_virt!(machine_check_handler));
+
         crate::serial::write_str("[MARK] idt::init exception handlers done\n");
 
         // ── Hardware IRQ Handlers (vectors 32-47) ─────────────────────────
@@ -271,6 +283,62 @@ extern "x86-interrupt" fn invalid_opcode_handler(stack_frame: InterruptStackFram
     use crate::serial::{write_str, write_hex};
     write_str("━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━\n");
     write_str("[EXCEPTION] #UD Invalid Opcode at 0x");
+    write_hex(stack_frame.instruction_pointer.as_u64());
+    write_str(" — HALTING\n");
+    write_str("━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━\n");
+    crate::halt();
+}
+
+/// Handle Device Not Available (#NM) — FPU/SSE not present.
+/// Usually means CR0.EM is set or CR0.TS is set (FPU context switch needed).
+extern "x86-interrupt" fn device_not_available_handler(stack_frame: InterruptStackFrame) {
+    use crate::serial::{write_str, write_hex, write_nl};
+    write_str("━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━\n");
+    write_str("[EXCEPTION] #NM Device Not Available at 0x");
+    write_hex(stack_frame.instruction_pointer.as_u64());
+    write_str(" — HALTING\n");
+    write_str("  CR0=");
+    let cr0: u64;
+    unsafe { core::arch::asm!("mov {0}, cr0", out(reg) cr0); }
+    write_hex(cr0);
+    write_str(" CR4=");
+    let cr4: u64;
+    unsafe { core::arch::asm!("mov {0}, cr4", out(reg) cr4); }
+    write_hex(cr4);
+    write_nl();
+    write_str("━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━\n");
+    crate::halt();
+}
+
+/// Handle Non-Maskable Interrupt — fatal hardware error.
+extern "x86-interrupt" fn nmi_handler(stack_frame: InterruptStackFrame) {
+    use crate::serial::{write_str, write_hex, write_nl};
+    write_str("━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━\n");
+    write_str("[EXCEPTION] #NMI Non-Maskable Interrupt at 0x");
+    write_hex(stack_frame.instruction_pointer.as_u64());
+    write_str(" — HALTING\n");
+    write_str("━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━\n");
+    crate::halt();
+}
+
+/// Handle Alignment Check — unaligned memory access in ring 0.
+extern "x86-interrupt" fn alignment_check_handler(stack_frame: InterruptStackFrame, error_code: u64) {
+    use crate::serial::{write_str, write_hex, write_nl};
+    write_str("━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━\n");
+    write_str("[EXCEPTION] #AC Alignment Check at 0x");
+    write_hex(stack_frame.instruction_pointer.as_u64());
+    write_str(" error=0x");
+    write_hex(error_code);
+    write_str(" — HALTING\n");
+    write_str("━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━\n");
+    crate::halt();
+}
+
+/// Handle Machine Check — fatal hardware error (MCE).
+extern "x86-interrupt" fn machine_check_handler(stack_frame: InterruptStackFrame) -> ! {
+    use crate::serial::{write_str, write_hex, write_nl};
+    write_str("━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━\n");
+    write_str("[EXCEPTION] #MC Machine Check at 0x");
     write_hex(stack_frame.instruction_pointer.as_u64());
     write_str(" — HALTING\n");
     write_str("━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━\n");
@@ -554,8 +622,39 @@ pub unsafe extern "C" fn page_fault_handler() {
 #[no_mangle]
 unsafe extern "C" fn page_fault_classify(frame: u64, faulting_addr: u64, cs: u64) -> u64 {
     let rpl = cs & 3;
-    let rip = core::ptr::read_volatile((frame + 16 * 8) as *const u64);
+
+    // Read error code and CR3 early (needed for both CoW and diagnostics)
     let error_code = core::ptr::read_volatile((frame + 15 * 8) as *const u64);
+    let cr3_val: u64;
+    core::arch::asm!("mov {0}, cr3", out(reg) cr3_val);
+
+    // ═══ Try CoW FIRST — before any diagnostics that may fault ═══
+    // On user PML4 (no identity map), reading PML4 entries via physical
+    // addresses causes cascading page faults. CoW must be attempted before
+    // any such access.
+    let is_write = (error_code & 2) != 0;
+    const USER_SPACE_END: u64 = 0x0000_8000_0000_0000;
+    if is_write && faulting_addr < USER_SPACE_END {
+        let cow_result = crate::memory::vmm::handle_cow_fault(faulting_addr);
+        if cow_result.is_ok() {
+            return 2; // CoW handled, retry instruction
+        }
+    }
+
+    // ═══ Diagnostics (after CoW attempt — safe to fault here) ═══
+    let rip = core::ptr::read_volatile((frame + 16 * 8) as *const u64);
+
+    // Read RSP (frame pointer = GP regs base after our pushes)
+    let rsp_val: u64;
+    core::arch::asm!("mov {0}, rsp", out(reg) rsp_val);
+
+    // NOTE: We do NOT acquire SCHEDULER lock here — doing so from a page fault
+    // handler would deadlock if the fault occurred while SCHEDULER was already held.
+    // The PID is omitted from the diagnostic; the other registers are sufficient
+    // to identify the faulting process.
+    let pid: u64 = 99; // unknown — cannot safely read without lock
+
+    let kernel_pml4 = crate::memory::kernel_pml4_phys();
 
     crate::serial::write_str_nl("!! PAGE FAULT !!");
     crate::serial::write_str("  CR2="); crate::serial::write_hex(faulting_addr); crate::serial::write_nl();
@@ -567,25 +666,70 @@ unsafe extern "C" fn page_fault_classify(frame: u64, faulting_addr: u64, cs: u64
     if error_code & 2 != 0 { crate::serial::write_str(" write"); } else { crate::serial::write_str(" read"); }
     if error_code & 4 != 0 { crate::serial::write_str(" user"); }
     if error_code & 8 != 0 { crate::serial::write_str(" NX"); }
-    if error_code & 0x10 != 0 { crate::serial::write_str(" reserved"); }
+    if error_code & 0x10 != 0 { crate::serial::write_str(" ifetch"); }
     crate::serial::write_nl();
+    crate::serial::write_str("  CR3="); crate::serial::write_hex(cr3_val);
+    crate::serial::write_str(" kernel="); crate::serial::write_hex(kernel_pml4);
+    if cr3_val == kernel_pml4 {
+        crate::serial::write_str(" [KERNEL PML4]");
+    } else {
+        crate::serial::write_str(" [USER PML4]");
+    }
+    crate::serial::write_nl();
+    crate::serial::write_str("  RSP="); crate::serial::write_hex(rsp_val);
+    crate::serial::write_str(" PID="); crate::serial::write_u64(pid);
+    crate::serial::write_nl();
+    // Dump the 15 GP regs from the frame
+    crate::serial::write_str("  frame: RAX="); crate::serial::write_hex(core::ptr::read_volatile((frame + 0) as *const u64));
+    crate::serial::write_str(" RBX="); crate::serial::write_hex(core::ptr::read_volatile((frame + 8) as *const u64));
+    crate::serial::write_str(" RCX="); crate::serial::write_hex(core::ptr::read_volatile((frame + 16) as *const u64));
+    crate::serial::write_str(" RDX="); crate::serial::write_hex(core::ptr::read_volatile((frame + 24) as *const u64));
+    crate::serial::write_nl();
+    crate::serial::write_str("  frame: RSI="); crate::serial::write_hex(core::ptr::read_volatile((frame + 32) as *const u64));
+    crate::serial::write_str(" RDI="); crate::serial::write_hex(core::ptr::read_volatile((frame + 40) as *const u64));
+    crate::serial::write_str(" RBP="); crate::serial::write_hex(core::ptr::read_volatile((frame + 48) as *const u64));
+    crate::serial::write_nl();
+    // Dump the IRET frame from the fault (error_code, RIP, CS, RFLAGS, RSP, SS)
+    let iret_rip = rip;
+    let iret_cs  = core::ptr::read_volatile((frame + 17 * 8) as *const u64);
+    let iret_rfl = core::ptr::read_volatile((frame + 18 * 8) as *const u64);
+    let iret_rsp = core::ptr::read_volatile((frame + 19 * 8) as *const u64);
+    let iret_ss  = core::ptr::read_volatile((frame + 20 * 8) as *const u64);
+    crate::serial::write_str("  IRET: RIP="); crate::serial::write_hex(iret_rip);
+    crate::serial::write_str(" CS="); crate::serial::write_hex(iret_cs);
+    crate::serial::write_str(" RFLAGS="); crate::serial::write_hex(iret_rfl);
+    crate::serial::write_nl();
+    crate::serial::write_str("  IRET: RSP="); crate::serial::write_hex(iret_rsp);
+    crate::serial::write_str(" SS="); crate::serial::write_hex(iret_ss);
+    crate::serial::write_nl();
+    // Check identity map (PML4 entry 0) ONLY on kernel PML4.
+    // User PML4s don't have the identity map, so dereferencing the CR3
+    // physical address as a virtual pointer would cascade-fault.
+    if cr3_val == kernel_pml4 {
+        unsafe {
+            let pml4_ptr = cr3_val as *const u64;
+            let pml4_entry0 = core::ptr::read_volatile(pml4_ptr);
+            crate::serial::write_str("  PML4[0]="); crate::serial::write_hex(pml4_entry0);
+            if pml4_entry0 & 1 != 0 {
+                crate::serial::write_str(" PRESENT");
+            } else {
+                crate::serial::write_str(" NOT_PRESENT");
+            }
+            crate::serial::write_nl();
+        }
+    }
 
     if rpl == 3 {
-        // User-mode fault: check if it's a CoW write fault
-        let is_write = (error_code & 2) != 0;
-        if is_write {
-            // Try to handle as CoW
-            let cow_result = crate::memory::vmm::handle_cow_fault(faulting_addr);
-            if cow_result.is_ok() {
-                crate::serial::write_str_nl("  CoW: allocated private copy");
-                return 2; // CoW handled, retry instruction
-            }
-        }
-        // Not CoW or CoW failed: kill the process
+        // User-mode fault that wasn't CoW: kill the process
         crate::serial::write_str_nl("  USER FAULT: killing process");
         1
     } else {
-        crate::serial::write_str_nl("  KERNEL FAULT: halting");
+        crate::serial::write_str_nl("  KERNEL FAULT: dumping diagnostics then halting");
+        // Dump process table and PMM stats for post-mortem analysis
+        if let Some(sched) = crate::process::scheduler::SCHEDULER.try_lock() {
+            sched.process_dump();
+        }
+        crate::memory::pmm::memory_dump();
         0
     }
 }

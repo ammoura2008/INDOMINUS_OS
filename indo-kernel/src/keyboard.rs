@@ -134,7 +134,11 @@ pub fn line_discipline_input(byte: u8) {
             // Advance write index to edit index (committed line)
             LINE_W.store(LINE_E.load(Ordering::Relaxed), Ordering::Relaxed);
             // Wake blocked readers
-            crate::process::keyboard_wake();
+            // SAFETY: Set atomic flag instead of calling keyboard_wake() directly.
+            // keyboard_wake() acquires the SCHEDULER lock which can deadlock if
+            // called from interrupt context while a process holds the lock.
+            // The timer tick handler drains this flag in a safe context.
+            crate::process::KEYBOARD_WAKE_PENDING.store(true, core::sync::atomic::Ordering::Release);
         }
         0x08 | 0x7F => {
             // Backspace (0x08) or DEL (0x7F) — remove last character if available
@@ -172,7 +176,7 @@ pub fn line_discipline_input(byte: u8) {
                 // In raw mode, commit each character immediately (no line buffering)
                 if !crate::tty::is_canonical() {
                     LINE_W.store(LINE_E.load(Ordering::Relaxed), Ordering::Relaxed);
-                    crate::process::keyboard_wake();
+                    crate::process::KEYBOARD_WAKE_PENDING.store(true, core::sync::atomic::Ordering::Release);
                 }
             }
         }

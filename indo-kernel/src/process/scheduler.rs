@@ -381,6 +381,11 @@ impl Scheduler {
         if let Some(pid) = self.current_pid {
             if let Some(ref mut proc) = self.processes[pid as usize] {
                 proc.stack_pointer = sp;
+                // Save the CR3 that was active when the timer fired.
+                // This preserves the page table state for syscalls that
+                // switch CR3 mid-execution (e.g. sys_fork).
+                let (cr3, _) = x86_64::registers::control::Cr3::read();
+                proc.saved_cr3 = cr3.start_address().as_u64();
             }
         }
     }
@@ -465,8 +470,41 @@ impl Scheduler {
         &self.processes
     }
 
+    pub fn idle_pid(&self) -> Pid {
+        self.idle_pid
+    }
+
     pub fn processes_mut(&mut self) -> &mut [Option<Process>; MAX_PROCESSES] {
         &mut self.processes
+    }
+
+    /// Dump all processes to serial — for crash diagnostics.
+    /// Safe to call from interrupt/panic context (no locks acquired).
+    pub fn process_dump(&self) {
+        use crate::serial::{write_str, write_hex, write_nl};
+        write_str("═══════ PROCESS TABLE DUMP ═══════\n");
+        for (i, slot) in self.processes.iter().enumerate() {
+            if let Some(ref p) = slot {
+                write_str("  PID="); write_hex(i as u64);
+                write_str(" state=");
+                match p.state {
+                    ProcessState::Ready => write_str("Ready"),
+                    ProcessState::Running => write_str("Running"),
+                    ProcessState::Blocked => write_str("Blocked"),
+                    ProcessState::Zombie => write_str("Zombie"),
+                }
+                write_str(" parent=");
+                match p.parent_pid {
+                    Some(pp) => write_hex(pp as u64),
+                    None => write_str("none"),
+                }
+                write_str(" pml4="); write_hex(p.pml4_phys);
+                write_str(" stack="); write_hex(p.kernel_stack_base);
+                write_str(" sp="); write_hex(p.stack_pointer);
+                write_nl();
+            }
+        }
+        write_str("══════════════════════════════════\n");
     }
 
     /// Check if `child_pid` is a child of `parent_pid`.
@@ -516,11 +554,30 @@ impl Scheduler {
 
     /// Remove a process slot (set to None).
     /// Used after waitpid collects a zombie's exit code.
+    ///
+    /// IMPORTANT: This drops the Process, which calls free_user_address_space().
+    /// That function uses phys_to_virt() which requires the kernel PML4 (identity map).
+    /// The caller MUST ensure we're running with the kernel PML4 active before calling.
     pub fn reap_zombie(&mut self, pid: Pid) {
         crate::serial::write_str("[SCHED] Reaped PID=");
         crate::serial::write_u64(pid);
         crate::serial::write_nl();
-        self.processes[pid as usize] = None;
+
+        // Switch to kernel PML4 before dropping the process.
+        // Process::drop calls free_user_address_space which needs the identity map.
+        let kernel_pml4 = crate::memory::kernel_pml4_phys();
+        let (current_cr3, _) = x86_64::registers::control::Cr3::read();
+        let old_cr3 = current_cr3.start_address().as_u64();
+        if old_cr3 != kernel_pml4 {
+            unsafe { crate::memory::vmm::switch_page_table(crate::memory::PhysAddr::new(kernel_pml4)); }
+        }
+
+        self.processes[pid as usize] = None; // drops Process → frees address space
+
+        // Restore original CR3
+        if old_cr3 != kernel_pml4 {
+            unsafe { crate::memory::vmm::switch_page_table(crate::memory::PhysAddr::new(old_cr3)); }
+        }
     }
 
     /// Re-parent all live children of `old_parent` to PID 1 (init/reaper).
@@ -633,7 +690,8 @@ impl Scheduler {
                     // Signal number goes in RDI (x86-64 calling convention).
                     if let Some(ref mut proc) = self.processes[pid as usize] {
                         let sp = proc.stack_pointer;
-                        if sp == 0 { return; }
+                        let target_pml4 = proc.pml4_phys;
+                        if sp == 0 || target_pml4 == 0 { return; }
 
                         unsafe {
                             // IRET frame is at sp + 15*8 (after 15 GP register pops)
@@ -653,11 +711,31 @@ impl Scheduler {
                                 return;
                             }
 
+                            // CR3 FIX: The IRET frame is on the kernel stack (upper half,
+                            // mapped in all PML4s), so writing to it is safe with any CR3.
+                            // But the user stack write requires the TARGET process's PML4
+                            // to be active, because user pages are only mapped there.
+                            // Save current CR3 and switch to the target's PML4.
+                            let old_cr3: u64;
+                            core::arch::asm!("mov {0}, cr3", out(reg) old_cr3);
+
+                            // Only switch if we're not already on the target PML4
+                            if old_cr3 != target_pml4 {
+                                core::arch::asm!("mov cr3, {0}", in(reg) target_pml4);
+                            }
+
                             // Decrement user RSP by 8 and write orig_rip there (return address)
+                            // This write goes through the TARGET process's page tables now.
                             orig_rsp_val = orig_rsp_val.wrapping_sub(8);
                             core::ptr::write_volatile(orig_rsp_val as *mut u64, orig_rip);
 
+                            // Restore original CR3 before writing to kernel stack
+                            if old_cr3 != target_pml4 {
+                                core::arch::asm!("mov cr3, {0}", in(reg) old_cr3);
+                            }
+
                             // Update IRET frame: set RIP = handler, RSP = modified
+                            // (kernel stack — safe with any CR3)
                             core::ptr::write_volatile(iret_base as *mut u64, handler_addr);
                             core::ptr::write_volatile((iret_base + 24) as *mut u64, orig_rsp_val);
 

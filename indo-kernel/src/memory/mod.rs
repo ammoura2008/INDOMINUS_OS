@@ -92,6 +92,73 @@ pub unsafe fn phys_to_kernel_virt(phys: u64) -> u64 {
     phys.wrapping_add(KERNEL_VIRT_BASE).wrapping_sub(kps)
 }
 
+/// Fix up all PIC-relocated addresses in the kernel binary.
+///
+/// After the bootloader applies R_X86_64_RELATIVE relocations, all function
+/// pointers and data pointers in the kernel contain **physical addresses**:
+/// `*P = (base_phys - min_vaddr) + r_addend`.
+///
+/// User PML4s lack the identity map, so those physical addresses are NOT
+/// accessible when running on a user PML4 — any `call *GOT(%rip)` through
+/// a PIC-relocated GOT entry faults.
+///
+/// This function converts every R_X86_64_RELATIVE target from its physical
+/// address to the corresponding kernel virtual address:
+///   `virt = phys - KERNEL_PHYS_START + KERNEL_VIRT_BASE`
+///
+/// After this fixup, ALL kernel function/data pointers contain virtual
+/// addresses from the upper half (0xFFFFFFFF80000000+), which are mapped
+/// in every PML4 (both kernel and user). No identity-map dependency remains.
+///
+/// # When to call
+/// Exactly once in `kernel_main()`, immediately after `set_kernel_phys_start()`
+/// and before any other initialisation that might dereference a relocated pointer.
+///
+/// # Safety
+/// Must be called exactly once, after `KERNEL_PHYS_START` has been set and
+/// the kernel PML4 is active (so the virtual addresses in .rela.dyn are mapped).
+/// `rela_dyn_vaddr` is the linked virtual address of the .rela.dyn section.
+/// `rela_dyn_size` is its size in bytes.
+pub unsafe fn fixup_pic_relocations(rela_dyn_vaddr: u64, rela_dyn_size: u64) {
+    let kps = KERNEL_PHYS_START;
+    if kps == 0 || rela_dyn_vaddr == 0 || rela_dyn_size == 0 {
+        return; // Not initialized, or no relocations
+    }
+
+    let start = rela_dyn_vaddr;
+    let total = rela_dyn_size;
+    const ENTRY_SIZE: u64 = 24; // sizeof(Elf64_Rela) = 8+8+8
+
+    let num_entries = total / ENTRY_SIZE;
+
+    for i in 0..num_entries {
+        let entry_addr = (start + i * ENTRY_SIZE) as *const u8;
+
+        // Read RELA entry: { r_offset(8), r_info(8), r_addend(8) }
+        let r_offset = core::ptr::read_volatile(entry_addr as *const u64);
+        let r_info   = core::ptr::read_volatile(entry_addr.add(8) as *const u64);
+
+        let rel_type = (r_info & 0xFFFF_FFFF) as u32;
+
+        // Only fix up R_X86_64_RELATIVE (type 8).
+        if rel_type != 8 {
+            continue;
+        }
+
+        // r_offset is the virtual address of the 8-byte location to patch.
+        let target = r_offset as *mut u64;
+
+        // Read the current value — physical address from the bootloader.
+        let current = core::ptr::read_volatile(target);
+
+        // Convert physical → virtual:
+        //   new = current - KERNEL_PHYS_START + KERNEL_VIRT_BASE
+        let new_val = current.wrapping_sub(kps).wrapping_add(KERNEL_VIRT_BASE);
+
+        core::ptr::write_volatile(target, new_val);
+    }
+}
+
 /// Virtual base address of the kernel heap.
 /// The heap starts here and grows upward (toward higher addresses).
 pub const KERNEL_HEAP_BASE: u64 = 0xFFFF_FFFF_C000_0000;
@@ -116,19 +183,91 @@ pub const USER_HEAP_MAX_SIZE: u64 = 256 * 1024 * 1024;
 pub const USER_MMAP_BASE: u64 = 0x0000_2000_0000_0000;
 
 // ─────────────────────────────────────────────────────────────────────────────
-// Global heap allocator
+// Global heap allocator — CR3-safe wrapper
 // ─────────────────────────────────────────────────────────────────────────────
 
-/// The kernel's global heap allocator.
+/// Wrapper around `LockedHeap` that switches CR3 to the kernel PML4 before
+/// dispatching to the inner allocator.
 ///
-/// Uses `linked_list_allocator` which maintains a linked list of free regions.
-/// This is a simple, correct allocator suitable for early kernel development.
+/// **After fixup_pic_relocations():** All kernel pointers now contain virtual
+/// addresses (upper half), so this wrapper is no longer strictly required for
+/// correctness.  We keep it as a **defence-in-depth** layer: if any pointer
+/// somehow still contains a physical address, the identity-map switch ensures
+/// it resolves correctly.
 ///
-/// Protected by a spinlock because:
-/// - Multiple code paths may allocate concurrently (interrupts, future SMP)
-/// - The lock is held briefly (no sleeping in allocation)
+/// **Interrupt safety:** We DISABLE interrupts for the entire duration of
+/// operating on the kernel PML4.  This prevents the timer from firing while
+/// on kernel PML4, which would save a physical RIP.  With interrupts disabled,
+/// the timer is deferred until we restore the original CR3 and re-enable
+/// interrupts.
+struct Cr3SafeHeap {
+    inner: LockedHeap,
+}
+
+// SAFETY: Cr3SafeHeap delegates to LockedHeap which is a proper GlobalAlloc.
+// The CR3 switch with interrupts disabled is transparent to the caller.
+unsafe impl core::alloc::GlobalAlloc for Cr3SafeHeap {
+    unsafe fn alloc(&self, layout: core::alloc::Layout) -> *mut u8 {
+        let kernel_pml4 = kernel_pml4_phys();
+        let (saved_cr3, _) = x86_64::registers::control::Cr3::read();
+        let saved = saved_cr3.start_address().as_u64();
+
+        if saved != kernel_pml4 {
+            // Disable interrupts, switch to kernel PML4, do allocation,
+            // switch back — all atomically w.r.t. timer.
+            core::arch::asm!("cli");
+            x86_64::registers::control::Cr3::write(
+                x86_64::structures::paging::PhysFrame::containing_address(
+                    x86_64::PhysAddr::new(kernel_pml4),
+                ),
+                x86_64::registers::control::Cr3Flags::empty(),
+            );
+            let result = self.inner.alloc(layout);
+            x86_64::registers::control::Cr3::write(
+                x86_64::structures::paging::PhysFrame::containing_address(
+                    x86_64::PhysAddr::new(saved),
+                ),
+                x86_64::registers::control::Cr3Flags::empty(),
+            );
+            // Do NOT re-enable interrupts here.  SYSCALL clears IF via SFMASK,
+            // so most callers expect IF=0.  Let the caller manage interrupts.
+            result
+        } else {
+            // Already on kernel PML4 — no switch needed.
+            self.inner.alloc(layout)
+        }
+    }
+
+    unsafe fn dealloc(&self, ptr: *mut u8, layout: core::alloc::Layout) {
+        let kernel_pml4 = kernel_pml4_phys();
+        let (saved_cr3, _) = x86_64::registers::control::Cr3::read();
+        let saved = saved_cr3.start_address().as_u64();
+
+        if saved != kernel_pml4 {
+            core::arch::asm!("cli");
+            x86_64::registers::control::Cr3::write(
+                x86_64::structures::paging::PhysFrame::containing_address(
+                    x86_64::PhysAddr::new(kernel_pml4),
+                ),
+                x86_64::registers::control::Cr3Flags::empty(),
+            );
+            self.inner.dealloc(ptr, layout);
+            x86_64::registers::control::Cr3::write(
+                x86_64::structures::paging::PhysFrame::containing_address(
+                    x86_64::PhysAddr::new(saved),
+                ),
+                x86_64::registers::control::Cr3Flags::empty(),
+            );
+        } else {
+            self.inner.dealloc(ptr, layout);
+        }
+    }
+}
+
 #[global_allocator]
-static HEAP_ALLOCATOR: LockedHeap = LockedHeap::empty();
+static HEAP_ALLOCATOR: Cr3SafeHeap = Cr3SafeHeap {
+    inner: LockedHeap::empty(),
+};
 
 /// Initialize the kernel heap allocator.
 ///
@@ -141,9 +280,9 @@ pub unsafe fn init_heap(heap_start: u64, heap_size: u64) {
     // Safety: the spinlock byte should be 0 (unlocked) since this is the first
     // access. If it's nonzero due to stale memory from the bootloader or PMM,
     // force-unlock before initializing.
-    let lock_ptr = core::ptr::addr_of!(HEAP_ALLOCATOR) as *mut u8;
+    let lock_ptr = core::ptr::addr_of!(HEAP_ALLOCATOR.inner) as *mut u8;
     core::ptr::write_volatile(lock_ptr, 0);
-    HEAP_ALLOCATOR.lock().init(heap_start as *mut u8, heap_size as usize);
+    HEAP_ALLOCATOR.inner.lock().init(heap_start as *mut u8, heap_size as usize);
 }
 
 /// Allocate memory on the kernel heap.

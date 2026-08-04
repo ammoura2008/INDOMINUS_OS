@@ -45,9 +45,9 @@ Instead of relying on many external extensions, future versions aim to integrate
 
 ## Current Status
 
-**Phase:** Phase 10D complete (Process & Shell Robustness)
-**Stability:** 3/3 boots pass all 6 test phases, 0 kernel panics, 0 TFES errors
-**AHCI:** Root cause identified and fixed (PORT_IS_TFES bit 0→30), all sector reads succeed on first attempt
+**Phase:** Phase 14 complete (TITAN FORGE — Kernel Hardening)
+**Stability:** 2/2 full boot+test runs pass, 15/15 context-switch tests, 0 kernel panics
+**Tests:** 80+ kernel tests + 15 userspace context-switch tests (CoW, fork, memory, pipe, signal stress)
 
 ### What Works
 
@@ -55,29 +55,30 @@ Instead of relying on many external extensions, future versions aim to integrate
 |-----------|--------|---------|
 | UEFI Boot | Complete | Custom bootloader, GPT partitioning, RSDP passthrough |
 | GDT/TSS | Complete | Virtual-address GDT, per-CPU TSS, Ring 0/3 transitions |
-| IDT | Complete | 256 vectors, exception handlers, keyboard IRQ |
-| PMM | Complete | Bitmap allocator, reference counting, frame 0 protection |
-| VMM | Complete | 4-level page tables, CoW, guard pages, identity-map hardening |
+| IDT | Complete | 256 vectors, exception handlers (#DE/#UD/#NM/#NMI/#AC/#MC), keyboard IRQ |
+| PMM | Complete | Bitmap allocator, reference counting, frame 0 protection, crash diagnostics |
+| VMM | Complete | 4-level page tables, CoW, guard pages, identity-map hardening, CR3-safe ops |
 | Kernel Heap | Complete | Linked-list allocator, 4 MiB initial |
 | ACPI | Complete | RSDP/XSDT/RSDT parsing, MADT, HPET, MCFG, WAET, BGRT |
 | PCI | Complete | Full bus enumeration, BAR parsing, 6 devices detected |
 | LAPIC/IOAPIC | Complete | Dynamic routing from MADT, timer at ~100 Hz |
 | PIT Timer | Complete | Channel 0, 100 Hz periodic, vector 32 |
-| Keyboard | Complete | PS/2 driver, ring buffer, interrupt-driven |
+| Keyboard | Complete | PS/2 driver, ring buffer, interrupt-driven, deferred wake via atomic flag |
 | Serial Input | Complete | UART IRQ4, IOAPIC vector 36, line discipline, shell input |
 | AHCI/SATA | Complete | AHCI driver, DMA reads, TFES recovery, UDMA support |
-| FAT16 | Complete | Read-only filesystem, BPB parsing, cluster chain traversal |
-| Syscalls | Complete | 16 syscalls, negative-errno convention, bounds-checked |
+| FAT16 | Complete | Read/write filesystem, BPB parsing, cluster chain traversal |
+| Syscalls | Complete | 30 syscalls, negative-errno convention, bounds-checked, CR3-safe |
 | ELF Loader | Complete | ELF64 parser, NX enforcement, kernel-space mapping protection |
-| Process Mgmt | Complete | Spawn, fork, exec, exit, waitpid, zombie reaping |
-| Scheduler | Complete | Preemptive round-robin, 5-tick quantum (50ms) |
+| Process Mgmt | Complete | Spawn, fork, exec, exit, waitpid, zombie reaping, CoW multi-generation |
+| Scheduler | Complete | Preemptive round-robin, 5-tick quantum (50ms), idle process fallback |
 | VFS | Complete | RAM filesystem, FAT16 mount, path resolution, file operations |
 | Block Devices | Complete | BlockDevice trait, AHCI disk, device registry, Arc<dyn BlockDevice> |
 | File Descriptors | Complete | FD table, open/close/read/write/dup/dup2/lseek, ref-counted, O_CLOEXEC |
 | Initrd | Complete | cpio newc parser, security-hardened |
 | Pipe IPC | Complete | Ring buffer, blocking read/write, spin::Mutex, AtomicU16 refcount |
 | Shell | Complete | Real shell with ls, cat, exec, pid, fork, exit commands |
-| User Programs | Complete | init (PID 1 reaper), shell, stress tests |
+| User Programs | Complete | init (PID 1 reaper), shell, 15 context-switch validation tests |
+| Memory Diagnostics | Complete | process_dump(), memory_dump() on kernel fault, PMM statistics |
 
 ---
 

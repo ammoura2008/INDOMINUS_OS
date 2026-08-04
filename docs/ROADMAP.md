@@ -16,9 +16,9 @@
 
 ---
 
-## Current Status (as of Phase 13.6)
+## Current Status (as of Phase 14)
 
-**Completed through:** Phase 13.6 (Memory Protection / ASLR)
+**Completed through:** Phase 14 (TITAN FORGE — Kernel Hardening)
 
 | Actual Phase | Roadmap Phase | Status | Key Deliverable |
 |-------------|--------------|--------|-----------------|
@@ -52,8 +52,10 @@
 | 12.12 | Phase 12 | ✅ DONE | Security hardening + audit |
 | 12.13 | Phase 12 | ✅ DONE | Full regression (3/3 boots, 0 TFES) |
 | 13.1 | Phase 13 | ✅ DONE | brk() page mapping, sys_mmap/munmap, heap growth |
+| 13.2-13.6 | Phase 13 | ✅ DONE | Context switch validation, CoW, fork, signals, pipes |
+| 14 | Phase 14 | ✅ DONE | TITAN FORGE: 16 critical/high bug fixes, 15 userspace tests |
 
-**Total tests:** 65/65 passing + 3/3 boot regression (Phase 13.1)
+**Total tests:** 80+ kernel tests + 15 userspace context-switch tests (Phase 14)
 
 ## Phase Overview
 

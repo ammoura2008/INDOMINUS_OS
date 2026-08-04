@@ -2790,6 +2790,16 @@ pub extern "sysv64" fn kernel_main(boot_info: *const BootInfo) -> ! {
         crate::memory::vmm::switch_page_table(new_pml4);
         crate::memory::set_kernel_pml4_phys(new_pml4.as_u64());
     }
+
+    // ── Fix up PIC relocations ──────────────────────────────────────────────
+    // The bootloader wrote physical addresses into the kernel's GOT/data.
+    // Now that the higher-half is mapped, convert them to virtual addresses.
+    write_str_nl("[MARK] Before fixup_pic_relocations");
+    unsafe {
+        crate::memory::fixup_pic_relocations(bi.rela_dyn_vaddr, bi.rela_dyn_size);
+    }
+    write_str_nl("[MARK] After fixup_pic_relocations");
+
     // Now the kernel higher-half is mapped. Switch GDTR to virtual address
     // so it survives CR3 switches to user PML4s (which lack the identity map).
     write_str_nl("[MARK] Before switch_gdt_to_virtual");
@@ -2938,8 +2948,8 @@ pub extern "sysv64" fn kernel_main(boot_info: *const BootInfo) -> ! {
         }
     }
 
-    // test_reg disabled — superseded by test_ctxswitch (Phase 13).
-    // test_reg's fork test hits a pre-existing PAGE FAULT that kills the kernel.
+    // test_reg disabled — fork test causes kernel page fault at CR2 in lower half.
+    // Superseded by test_ctxswitch (Phase 13) which has equivalent coverage.
     // phase12_register_test();
 
     // Regression: KERNEL_GS_BASE preservation across context switches.
@@ -2965,7 +2975,10 @@ pub extern "sysv64" fn kernel_main(boot_info: *const BootInfo) -> ! {
                     write_nl();
                 }
                 None => {
-                    write_str_nl("[KERNEL] FAILED to spawn init (no slot)");
+                    write_str_nl("[KERNEL] FATAL: FAILED to spawn init (no slot or OOM)");
+                    write_str_nl("[KERNEL] Without init, orphaned processes cannot be reaped.");
+                    write_str_nl("[KERNEL] HALTING.");
+                    loop { unsafe { core::arch::asm!("hlt"); } }
                 }
             }
         }

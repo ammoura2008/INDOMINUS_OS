@@ -32,6 +32,7 @@ userspace/target/
 out_*.txt
 test_b*.txt
 qemu_output.txt
+ctxswitch_full_output.txt
 
 # ──────────────────────────────────────────────────────
 # Generated / temporary

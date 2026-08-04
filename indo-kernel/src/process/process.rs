@@ -104,6 +104,11 @@ pub struct Process {
     pub kernel_stack_base: u64,
     /// Per-process page table (phys address). Kernel processes share the boot PML4.
     pub pml4_phys: u64,
+    /// CR3 that was active when this process was last preempted by a timer.
+    /// Used by the scheduler to restore the correct page table on resume.
+    /// For syscalls like sys_fork that switch to kernel PML4 mid-execution,
+    /// this preserves the kernel PML4 so the syscall can finish correctly.
+    pub saved_cr3: u64,
     /// User-mode entry point (virtual address in user space). None for kernel processes.
     pub user_rip: Option<u64>,
     /// User-mode initial stack pointer. None for kernel processes.
@@ -189,6 +194,7 @@ impl Process {
             stack_pointer: sp,
             kernel_stack_base: stack_base,
             pml4_phys: pml4,
+            saved_cr3: 0,
             user_rip: None,
             user_rsp: None,
             exit_code: 0,
@@ -243,6 +249,7 @@ impl Process {
             stack_pointer: sp,
             kernel_stack_base: stack_base,
             pml4_phys: pml4,
+            saved_cr3: 0,
             user_rip: Some(user_rip),
             user_rsp: Some(user_rsp),
             exit_code: 0,

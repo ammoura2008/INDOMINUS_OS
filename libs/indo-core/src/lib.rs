@@ -302,6 +302,14 @@ pub struct BootInfo {
     /// Virtual address the kernel was linked to start at.
     /// This is the address the kernel expects its code to live at.
     pub kernel_virt_base: VirtAddr,
+
+    /// Virtual address of the .rela.dyn section in the loaded kernel image.
+    /// Used by fixup_pic_relocations() to convert physical → virtual pointers.
+    /// Zero if no relocations present.
+    pub rela_dyn_vaddr: u64,
+
+    /// Size in bytes of the .rela.dyn section.
+    pub rela_dyn_size: u64,
 }
 
 /// Current boot protocol version. Increment on any breaking change.

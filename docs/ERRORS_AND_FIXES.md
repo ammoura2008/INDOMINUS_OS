@@ -4,6 +4,53 @@ This document records every error, bug, gap, and problem encountered during INDO
 
 ---
 
+## 17. Phase 14 — TITAN FORGE (Kernel Hardening)
+
+### Overview
+Comprehensive kernel audit and hardening pass. Found and fixed 16 critical/high bugs across all subsystems. Added 6 new userspace tests. The kernel went from "works when everything goes right" to "works because every subsystem follows strict rules."
+
+### Critical Fixes (5)
+
+| # | Bug | Location | Impact | Fix |
+|---|-----|----------|--------|-----|
+| 1 | `schedule()` returns 0 → triple fault | `context_switch.rs` | If no ready process, kernel jumps to address 0 | Falls back to idle process SP; if none, halts with `hlt` loop |
+| 2 | `defer_free` overflow frees on dying stack | `context_switch.rs:85-99` | Freeing a frame while still using its stack corrupts locals/return address → triple fault | Halts instead of synchronous free when defer ring is full |
+| 3 | `reap_zombie` frees PML4 with wrong CR3 | `scheduler.rs:524-549` | `Process::drop` calls `free_user_address_space` which walks page tables; if CR3 is wrong, cascading page faults | Switches to kernel PML4 before drop, restores original CR3 after |
+| 4 | Page fault handler deadlocks on SCHEDULER lock | `idt.rs:583-599` | Acquiring `SCHEDULER.lock()` from page fault handler deadlocks if fault occurred while SCHEDULER was already held | Removed lock; PID set to constant 99 (diagnostic only) |
+| 5 | `sys_exec` restores freed CR3 | `syscall/mod.rs:1715-1730` | After exec frees old PML4, `saved_cr3` still points to freed memory → page fault on return | Reads updated `pml4_phys` from scheduler instead of stale `saved_cr3` |
+
+### High Fixes (11)
+
+| # | Bug | Location | Impact | Fix |
+|---|-----|----------|--------|-----|
+| 6 | `sys_brk` no upper bound | `syscall/mod.rs:2263-2341` | Heap could grow into kernel/stack space → memory corruption | Added `BRK_MAX = 0x0000_7FFF_FFFF_F000` constant |
+| 7 | 3 syscalls missing `is_user_buffer_mapped` | `syscall/mod.rs:3016-3103` | `sys_tcgetattr`, `sys_tcsetattr`, `sys_sigaction` read/write user buffers without mapping check | Added `is_user_buffer_mapped()` validation |
+| 8 | Signal handler address not validated | `syscall/mod.rs:3079-3103` | User could register handler at kernel address → kernel code execution | Validates handler is in user space (< `0x0000_8000_0000_0000`) |
+| 9 | Serial IRQ → `keyboard_wake` → SCHEDULER deadlock | `serial.rs`, `keyboard.rs`, `process/mod.rs` | Serial RX calls `keyboard_wake()` which acquires SCHEDULER lock → deadlock if timer tick also holds SCHEDULER | Added `KEYBOARD_WAKE_PENDING` atomic flag; timer tick checks and wakes |
+| 10 | Unhandled CPU exceptions (#NM/#NMI/#AC/#MC) | `idt.rs` | Missing handlers cause double fault on hardware errors | Added handlers for all 4 with diagnostics and halt |
+| 11 | `copy_user_pages` refcount leak on rollback | `vmm.rs:607-615,715-716` | If copy fails midway, incremented refcounts on data frames aren't decremented | Added `incref_frames` Vec tracking; decrements all on failure |
+| 12 | `spawn_user` leaks PML4 + OOM panic | `process/mod.rs:98-120` | ELF load failure doesn't free PML4; guard/stack page allocation panics on OOM | Added PML4 cleanup on failure; `match` instead of `.expect()` |
+| 13 | Init spawn failure has no recovery | `main.rs:2977-2981` | If `/bin/init` fails to load, kernel continues silently without init | Now halts with diagnostic message |
+| 14 | `sys_mmap`/`sys_munmap` missing CR3 switch | `syscall/mod.rs` | `vmm::map_page`/`translate_addr` need identity map (kernel PML4 only); running on user PML4 causes kernel page fault | Added kernel CR3 switch before vmm operations, restore after |
+| 15 | `sys_brk` missing CR3 switch | `syscall/mod.rs` | Same identity map issue as mmap | Added kernel CR3 switch |
+| 16 | Process table / PMM crash diagnostics | `scheduler.rs`, `pmm.rs`, `idt.rs` | Kernel faults gave no process/memory state | Added `process_dump()`, `memory_dump()`, called on kernel fault |
+
+### New Userspace Tests (6)
+
+| # | Test | What It Validates |
+|---|------|-------------------|
+| 10 | CoW multi-generation fork | Parent→child→grandchild all see correct CoW values |
+| 11 | CoW fork write isolation | Parent and child writes don't corrupt each other |
+| 12 | Fork stress | 20 rapid fork+waitpid cycles |
+| 13 | Memory stress | 10 mmap/munmap cycles + brk grow/shrink |
+| 14 | Pipe stress | 15 rapid pipe create/read/close cycles |
+| 15 | CoW fork bomb | 4 simultaneous children writing to shared page |
+
+### Key Lesson Learned
+**Syscalls that call VMM functions must switch to kernel PML4 first.** The identity map (physical == virtual) is only present in the kernel PML4. User PML4s don't have it. Any code that accesses physical page table entries via `phys_to_virt()` will page fault if running on a user PML4. This affected `sys_mmap`, `sys_munmap`, and `sys_brk`.
+
+---
+
 ## 15. Phase 12 — Full Interactive Userspace & Shell
 
 ### Overview

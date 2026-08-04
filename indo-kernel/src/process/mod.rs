@@ -35,6 +35,11 @@ pub static PIPES: spin::Mutex<[Option<pipe::Pipe>; MAX_PIPES]> = spin::Mutex::ne
     [NONE; MAX_PIPES]
 });
 
+/// Flag set by interrupt handlers (serial RX, keyboard IRQ) to indicate
+/// that processes may need waking.  Checked in the timer tick handler
+/// which runs in a safe context for acquiring the SCHEDULER lock.
+pub static KEYBOARD_WAKE_PENDING: core::sync::atomic::AtomicBool = core::sync::atomic::AtomicBool::new(false);
+
 /// Allocate a pipe from the global table. Returns its index.
 pub fn alloc_pipe() -> Option<usize> {
     let mut pipes = PIPES.lock();
@@ -101,22 +106,36 @@ pub fn spawn_user(elf_data: &[u8], parent: Option<Pid>) -> Option<Pid> {
             crate::serial::write_str("[PROC] ELF load failed: ");
             crate::serial::write_str(e.description());
             crate::serial::write_nl();
+            // Free the allocated PML4 to prevent memory leak
+            unsafe { crate::memory::vmm::free_user_address_space(user_pml4); }
             return None;
         }
     };
 
     // 4. Map user stack with guard page below (ASLR randomized stack top)
     let stack_top = crate::aslr::randomize_stack_base();
-    let guard_page_frame = vmm::PmmFrameAllocator.allocate_frame()
-        .expect("PMM: out of memory for user stack guard page");
+    let guard_page_frame = match vmm::PmmFrameAllocator.allocate_frame() {
+        Some(f) => f,
+        None => {
+            crate::serial::write_str("[PROC] OOM: guard page allocation failed\n");
+            unsafe { crate::memory::vmm::free_user_address_space(user_pml4); }
+            return None;
+        }
+    };
     let guard_page_virt = VirtAddr::new(stack_top - 9 * crate::memory::PAGE_SIZE);
     let guard_flags = PageTableFlags::PRESENT; // No USER_ACCESSIBLE, no WRITABLE
     vmm::map_page(user_pml4, guard_page_virt, memory::PhysAddr::new(guard_page_frame.start_address().as_u64()), guard_flags);
 
     // Map 8 stack pages (32 KiB)
     for i in 0..8 {
-        let frame = vmm::PmmFrameAllocator.allocate_frame()
-            .expect("PMM: out of memory for user stack page");
+        let frame = match vmm::PmmFrameAllocator.allocate_frame() {
+            Some(f) => f,
+            None => {
+                crate::serial::write_str("[PROC] OOM: stack page allocation failed\n");
+                unsafe { crate::memory::vmm::free_user_address_space(user_pml4); }
+                return None;
+            }
+        };
         let offset = (8 - i) * crate::memory::PAGE_SIZE;
         let stack_virt = VirtAddr::new(stack_top - offset);
         let stack_flags = PageTableFlags::PRESENT
