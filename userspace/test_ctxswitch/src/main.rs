@@ -77,36 +77,50 @@ fn verify5(
 
 fn test_yield() -> bool {
     write_str_nl(b"== Test 1: yield() ==");
-    let mut rbx: u64; let mut rbp: u64;
-    let mut r8: u64;  let mut r9: u64;
-    let mut r10: u64; let mut r12: u64;
-    let mut r13: u64; let mut r14: u64; let mut r15: u64;
+    let mut cr8: u64 = 0; let mut cr9: u64 = 0; let mut cr10: u64 = 0;
+    let mut cr12: u64 = 0; let mut cr13: u64 = 0; let mut cr14: u64 = 0;
+    let mut cr15: u64 = 0;
+    let mut buf = [0u64; 2]; // [0]=rbx [1]=rbp
 
     unsafe {
         core::arch::asm!(
-            "mov {rbx_op}, 0xAAAAAAAAAAAAAAAA",
-            "mov {rbp_op}, 0xBBBBBBBBBBBBBBBB",
-            "mov {r8_op},  0x1111111111111111",
-            "mov {r9_op},  0x2222222222222222",
-            "mov {r10_op}, 0x3333333333333333",
-            "mov {r12_op}, 0x5555555555555555",
-            "mov {r13_op}, 0x6666666666666666",
-            "mov {r14_op}, 0x7777777777777777",
-            "mov {r15_op}, 0x8888888888888888",
+            "push rbx",
+            "push rbp",
+            "mov rbx, 0xAAAAAAAAAAAAAAAA",
+            "mov rbp, 0xBBBBBBBBBBBBBBBB",
+            "mov r8,  0x1111111111111111",
+            "mov r9,  0x2222222222222222",
+            "mov r10, 0x3333333333333333",
+            "mov r12, 0x5555555555555555",
+            "mov r13, 0x6666666666666666",
+            "mov r14, 0x7777777777777777",
+            "mov r15, 0x8888888888888888",
             "mov rax, 2",   // SYS_YIELD
             "syscall",
-            rbx_op = out(reg) rbx, rbp_op = out(reg) rbp,
-            r8_op = out(reg) r8, r9_op = out(reg) r9,
-            r10_op = out(reg) r10, r12_op = out(reg) r12,
-            r13_op = out(reg) r13, r14_op = out(reg) r14,
-            r15_op = out(reg) r15,
-            lateout("rax") _, lateout("rcx") _, lateout("rdi") _,
-            lateout("rsi") _, lateout("rdx") _, lateout("r11") _,
-            options(nostack),
+            "mov [rdi], rbx",
+            "mov [rdi + 8], rbp",
+            "pop rbp",
+            "pop rbx",
+            out("r8") cr8,
+            out("r9") cr9,
+            out("r10") cr10,
+            out("r12") cr12,
+            out("r13") cr13,
+            out("r14") cr14,
+            out("r15") cr15,
+            inout("rdi") buf.as_mut_ptr() => _,
+            lateout("rax") _,
+            lateout("rcx") _,
+            lateout("rsi") _,
+            lateout("rdx") _,
+            lateout("r11") _,
         );
     }
 
-    let ok = verify_all9(rbx, rbp, r8, r9, r10, r12, r13, r14, r15);
+    let crbx = buf[0];
+    let crbp = buf[1];
+
+    let ok = verify_all9(crbx, crbp, cr8, cr9, cr10, cr12, cr13, cr14, cr15);
     if ok { write_str_nl(b"  PASS: yield()"); }
     ok
 }
@@ -115,37 +129,51 @@ fn test_yield() -> bool {
 
 fn test_sleep() -> bool {
     write_str_nl(b"== Test 2: sleep() ==");
-    let mut rbx: u64; let mut rbp: u64;
-    let mut r8: u64;  let mut r9: u64;
-    let mut r10: u64; let mut r12: u64;
-    let mut r13: u64; let mut r14: u64; let mut r15: u64;
+    let mut cr8: u64 = 0; let mut cr9: u64 = 0; let mut cr10: u64 = 0;
+    let mut cr12: u64 = 0; let mut cr13: u64 = 0; let mut cr14: u64 = 0;
+    let mut cr15: u64 = 0;
+    let mut buf = [0u64; 2]; // [0]=rbx [1]=rbp
 
     unsafe {
         core::arch::asm!(
-            "mov {rbx_op}, 0xAAAAAAAAAAAAAAAA",
-            "mov {rbp_op}, 0xBBBBBBBBBBBBBBBB",
-            "mov {r8_op},  0x1111111111111111",
-            "mov {r9_op},  0x2222222222222222",
-            "mov {r10_op}, 0x3333333333333333",
-            "mov {r12_op}, 0x5555555555555555",
-            "mov {r13_op}, 0x6666666666666666",
-            "mov {r14_op}, 0x7777777777777777",
-            "mov {r15_op}, 0x8888888888888888",
+            "push rbx",
+            "push rbp",
+            "mov rbx, 0xAAAAAAAAAAAAAAAA",
+            "mov rbp, 0xBBBBBBBBBBBBBBBB",
+            "mov r8,  0x1111111111111111",
+            "mov r9,  0x2222222222222222",
+            "mov r10, 0x3333333333333333",
+            "mov r12, 0x5555555555555555",
+            "mov r13, 0x6666666666666666",
+            "mov r14, 0x7777777777777777",
+            "mov r15, 0x8888888888888888",
             "mov rax, 5",   // SYS_SLEEP
             "mov rdi, 2",   // 2 ticks
             "syscall",
-            rbx_op = out(reg) rbx, rbp_op = out(reg) rbp,
-            r8_op = out(reg) r8, r9_op = out(reg) r9,
-            r10_op = out(reg) r10, r12_op = out(reg) r12,
-            r13_op = out(reg) r13, r14_op = out(reg) r14,
-            r15_op = out(reg) r15,
-            lateout("rax") _, lateout("rcx") _, lateout("rdi") _,
-            lateout("rsi") _, lateout("rdx") _, lateout("r11") _,
-            options(nostack),
+            "mov [rsi], rbx",
+            "mov [rsi + 8], rbp",
+            "pop rbp",
+            "pop rbx",
+            out("r8") cr8,
+            out("r9") cr9,
+            out("r10") cr10,
+            out("r12") cr12,
+            out("r13") cr13,
+            out("r14") cr14,
+            out("r15") cr15,
+            inout("rsi") buf.as_mut_ptr() => _,
+            lateout("rax") _,
+            lateout("rcx") _,
+            lateout("rdi") _,
+            lateout("rdx") _,
+            lateout("r11") _,
         );
     }
 
-    let ok = verify_all9(rbx, rbp, r8, r9, r10, r12, r13, r14, r15);
+    let crbx = buf[0];
+    let crbp = buf[1];
+
+    let ok = verify_all9(crbx, crbp, cr8, cr9, cr10, cr12, cr13, cr14, cr15);
     if ok { write_str_nl(b"  PASS: sleep()"); }
     ok
 }
@@ -170,41 +198,54 @@ fn test_blocking_read() -> bool {
         sys::exit(0);
     }
 
-    // 5 registers only (2 inputs + 5 outputs + 6 clobbers = 13, fits in 14 GP regs)
-    let mut rbx: u64; let mut rbp: u64;
-    let mut r12: u64; let mut r13: u64; let mut r14: u64;
+    let mut cr12: u64 = 0; let mut cr13: u64 = 0; let mut cr14: u64 = 0;
     let mut buf = [0u8; 1];
+    let mut rbuf = [0u64; 2]; // [0]=rbx [1]=rbp
 
     unsafe {
         core::arch::asm!(
-            "mov {rbx_op}, 0xAAAAAAAAAAAAAAAA",
-            "mov {rbp_op}, 0xBBBBBBBBBBBBBBBB",
-            "mov {r12_op}, 0x5555555555555555",
-            "mov {r13_op}, 0x6666666666666666",
-            "mov {r14_op}, 0x7777777777777777",
+            "push rbx",
+            "push rbp",
+            "mov rbx, 0xAAAAAAAAAAAAAAAA",
+            "mov rbp, 0xBBBBBBBBBBBBBBBB",
+            "mov r12, 0x5555555555555555",
+            "mov r13, 0x6666666666666666",
+            "mov r14, 0x7777777777777777",
             "mov rax, 6",           // SYS_READ
             "mov rdi, {fd_op}",
             "mov rsi, {buf_op}",
             "mov rdx, 1",
             "syscall",
-            rbx_op = out(reg) rbx, rbp_op = out(reg) rbp,
-            r12_op = out(reg) r12, r13_op = out(reg) r13,
-            r14_op = out(reg) r14,
+            "mov [r15], rbx",
+            "mov [r15 + 8], rbp",
+            "pop rbp",
+            "pop rbx",
+            out("r12") cr12,
+            out("r13") cr13,
+            out("r14") cr14,
+            inout("r15") rbuf.as_mut_ptr() => _,
+            lateout("rax") _,
+            lateout("rcx") _,
+            lateout("rdi") _,
+            lateout("rsi") _,
+            lateout("rdx") _,
+            lateout("r8") _,
+            lateout("r9") _,
+            lateout("r10") _,
+            lateout("r11") _,
             fd_op = in(reg) read_fd,
             buf_op = in(reg) buf.as_mut_ptr(),
-            lateout("rax") _, lateout("rcx") _, lateout("rdi") _,
-            lateout("rsi") _, lateout("rdx") _,
-            lateout("r8") _, lateout("r9") _, lateout("r10") _,
-            lateout("r11") _, lateout("r15") _,
-            options(nostack),
         );
     }
+
+    let crbx = rbuf[0];
+    let crbp = rbuf[1];
 
     sys::waitpid_blocking(child as u64);
     sys::close(read_fd);
     sys::close(write_fd);
 
-    let ok = verify5(rbx, rbp, r12, r13, r14);
+    let ok = verify5(crbx, crbp, cr12, cr13, cr14);
     if ok { write_str_nl(b"  PASS: blocking read()"); }
     ok
 }
@@ -219,33 +260,47 @@ fn test_waitpid() -> bool {
         sys::exit(42);
     }
 
-    let mut rbx: u64; let mut rbp: u64;
-    let mut r12: u64; let mut r13: u64; let mut r14: u64;
+    let mut cr12: u64 = 0; let mut cr13: u64 = 0; let mut cr14: u64 = 0;
+    let mut buf = [0u64; 2]; // [0]=rbx [1]=rbp
 
     unsafe {
         core::arch::asm!(
-            "mov {rbx_op}, 0xAAAAAAAAAAAAAAAA",
-            "mov {rbp_op}, 0xBBBBBBBBBBBBBBBB",
-            "mov {r12_op}, 0x5555555555555555",
-            "mov {r13_op}, 0x6666666666666666",
-            "mov {r14_op}, 0x7777777777777777",
+            "push rbx",
+            "push rbp",
+            "mov rbx, 0xAAAAAAAAAAAAAAAA",
+            "mov rbp, 0xBBBBBBBBBBBBBBBB",
+            "mov r12, 0x5555555555555555",
+            "mov r13, 0x6666666666666666",
+            "mov r14, 0x7777777777777777",
             "mov rax, 4",           // SYS_WAITPID
             "mov rdi, {child_op}",
             "mov rsi, 0",
             "syscall",
-            rbx_op = out(reg) rbx, rbp_op = out(reg) rbp,
-            r12_op = out(reg) r12, r13_op = out(reg) r13,
-            r14_op = out(reg) r14,
+            "mov [r15], rbx",
+            "mov [r15 + 8], rbp",
+            "pop rbp",
+            "pop rbx",
+            out("r12") cr12,
+            out("r13") cr13,
+            out("r14") cr14,
+            inout("r15") buf.as_mut_ptr() => _,
+            lateout("rax") _,
+            lateout("rcx") _,
+            lateout("rdi") _,
+            lateout("rsi") _,
+            lateout("rdx") _,
+            lateout("r8") _,
+            lateout("r9") _,
+            lateout("r10") _,
+            lateout("r11") _,
             child_op = in(reg) child as u64,
-            lateout("rax") _, lateout("rcx") _, lateout("rdi") _,
-            lateout("rsi") _, lateout("rdx") _,
-            lateout("r8") _, lateout("r9") _, lateout("r10") _,
-            lateout("r11") _, lateout("r15") _,
-            options(nostack),
         );
     }
 
-    let ok = verify5(rbx, rbp, r12, r13, r14);
+    let crbx = buf[0];
+    let crbp = buf[1];
+
+    let ok = verify5(crbx, crbp, cr12, cr13, cr14);
     if ok { write_str_nl(b"  PASS: waitpid()"); }
     ok
 }
@@ -255,135 +310,111 @@ fn test_waitpid() -> bool {
 fn test_timer_preemption() -> bool {
     write_str_nl(b"== Test 5: timer preemption ==");
 
-    // Set 5 registers, spin for >20ms (timer interrupt preempts us),
-    // read them back via a 5-in/5-out asm block.
-    let mut rbx: u64; let mut rbp: u64;
-    let mut r12: u64; let mut r13: u64; let mut r14: u64;
+    // Single asm block: set regs, spin for >20ms (timer preempts us),
+    // read regs back. push/pop preserves compiler's frame pointer.
+    let mut cr12: u64 = 0; let mut cr13: u64 = 0; let mut cr14: u64 = 0;
+    let mut buf = [0u64; 2]; // [0]=rbx [1]=rbp
 
     unsafe {
         core::arch::asm!(
-            "mov {rbx_op}, 0xAAAAAAAAAAAAAAAA",
-            "mov {rbp_op}, 0xBBBBBBBBBBBBBBBB",
-            "mov {r12_op}, 0x5555555555555555",
-            "mov {r13_op}, 0x6666666666666666",
-            "mov {r14_op}, 0x7777777777777777",
-            rbx_op = out(reg) rbx, rbp_op = out(reg) rbp,
-            r12_op = out(reg) r12, r13_op = out(reg) r13,
-            r14_op = out(reg) r14,
-            options(nostack),
+            "push rbx",
+            "push rbp",
+            "mov rbx, 0xAAAAAAAAAAAAAAAA",
+            "mov rbp, 0xBBBBBBBBBBBBBBBB",
+            "mov r12, 0x5555555555555555",
+            "mov r13, 0x6666666666666666",
+            "mov r14, 0x7777777777777777",
+            // Spin loop in asm: ~20ms at 50 Hz timer
+            "xor rcx, rcx",
+            "2:",
+            "inc rcx",
+            "pause",
+            "cmp rcx, 2000000",
+            "jl 2b",
+            // Read back
+            "mov [rdi], rbx",
+            "mov [rdi + 8], rbp",
+            "pop rbp",
+            "pop rbx",
+            out("r12") cr12,
+            out("r13") cr13,
+            out("r14") cr14,
+            inout("rdi") buf.as_mut_ptr() => _,
+            lateout("rcx") _,
         );
     }
 
-    // Spin for >20ms (>1 timer tick at 50 Hz)
-    let mut counter: u64 = 0;
-    loop {
-        unsafe { let _ = core::ptr::read_volatile(&counter as *const u64); }
-        counter = counter.wrapping_add(1);
-        core::hint::spin_loop();
-        if counter > 500_000 { break; }
-    }
+    let crbx = buf[0];
+    let crbp = buf[1];
 
-    // Read back — 5 in + 5 out = 10 named operands, fits easily
-    let mut rbx2: u64 = 0; let mut rbp2: u64 = 0;
-    let mut r122: u64 = 0; let mut r132: u64 = 0; let mut r142: u64 = 0;
-
-    unsafe {
-        core::arch::asm!(
-            "mov {rbx_op}, {rbx_in}",
-            "mov {rbp_op}, {rbp_in}",
-            "mov {r12_op}, {r12_in}",
-            "mov {r13_op}, {r13_in}",
-            "mov {r14_op}, {r14_in}",
-            rbx_op = out(reg) rbx2, rbp_op = out(reg) rbp2,
-            r12_op = out(reg) r122, r13_op = out(reg) r132,
-            r14_op = out(reg) r142,
-            rbx_in = in(reg) rbx, rbp_in = in(reg) rbp,
-            r12_in = in(reg) r12, r13_in = in(reg) r13,
-            r14_in = in(reg) r14,
-            options(nostack),
-        );
-    }
-
-    let ok = verify5(rbx2, rbp2, r122, r132, r142);
+    let ok = verify5(crbx, crbp, cr12, cr13, cr14);
     if ok { write_str_nl(b"  PASS: timer preemption"); }
     ok
 }
 
 // ── Test 6: fork() ─────────────────────────────────────────────────────────
+//
+// CRITICAL: Register setup + syscall MUST be in a single asm block.
+// out(reg) lets the compiler pick ANY register. sys_fork reads from the
+// syscall frame which has the ACTUAL CPU register values. If we set registers
+// in one asm block and call fork() separately, the compiler can clobber them
+// (e.g., use RBX for a local) between the two. Combining them in one block
+// ensures the actual CPU registers have the expected values at syscall time.
+//
+// RBX/RBP cannot be used as asm operands (reserved by LLVM). Instead we use
+// rdi as a buffer pointer (preserved across syscall) and mov [rdi], rbx etc.
 
 fn test_fork() -> bool {
     write_str_nl(b"== Test 6: fork() ==");
 
-    let mut rbx: u64; let mut rbp: u64;
-    let mut r12: u64; let mut r13: u64; let mut r14: u64;
+    let child: u64;
+    let mut cr12: u64 = 0; let mut cr13: u64 = 0; let mut cr14: u64 = 0;
+    let mut buf = [0u64; 2]; // [0]=rbx [1]=rbp
 
     unsafe {
         core::arch::asm!(
-            "mov {rbx_op}, 0xAAAAAAAAAAAAAAAA",
-            "mov {rbp_op}, 0xBBBBBBBBBBBBBBBB",
-            "mov {r12_op}, 0x5555555555555555",
-            "mov {r13_op}, 0x6666666666666666",
-            "mov {r14_op}, 0x7777777777777777",
-            rbx_op = out(reg) rbx, rbp_op = out(reg) rbp,
-            r12_op = out(reg) r12, r13_op = out(reg) r13,
-            r14_op = out(reg) r14,
-            options(nostack),
+            "push rbx",
+            "push rbp",
+            "mov rbx, 0xAAAAAAAAAAAAAAAA",
+            "mov rbp, 0xBBBBBBBBBBBBBBBB",
+            "mov r12, 0x5555555555555555",
+            "mov r13, 0x6666666666666666",
+            "mov r14, 0x7777777777777777",
+            "mov rax, 8",
+            "syscall",
+            "mov [rdi], rbx",
+            "mov [rdi + 8], rbp",
+            "pop rbp",
+            "pop rbx",
+            out("r12") cr12,
+            out("r13") cr13,
+            out("r14") cr14,
+            inout("rdi") buf.as_mut_ptr() => _,
+            out("rax") child,
+            lateout("rcx") _,
+            lateout("rsi") _,
+            lateout("rdx") _,
+            lateout("r8") _,
+            lateout("r9") _,
+            lateout("r10") _,
+            lateout("r11") _,
+            lateout("r15") _,
         );
     }
 
-    let child = sys::fork();
+    let crbx = buf[0];
+    let crbp = buf[1];
+
     if child == 0 {
-        // Child: verify registers match parent's
-        let mut crbx: u64 = 0; let mut crbp: u64 = 0;
-        let mut cr12: u64 = 0; let mut cr13: u64 = 0; let mut cr14: u64 = 0;
-
-        unsafe {
-            core::arch::asm!(
-                "mov {rbx_op}, {rbx_in}",
-                "mov {rbp_op}, {rbp_in}",
-                "mov {r12_op}, {r12_in}",
-                "mov {r13_op}, {r13_in}",
-                "mov {r14_op}, {r14_in}",
-                rbx_op = out(reg) crbx, rbp_op = out(reg) crbp,
-                r12_op = out(reg) cr12, r13_op = out(reg) cr13,
-                r14_op = out(reg) cr14,
-                rbx_in = in(reg) rbx, rbp_in = in(reg) rbp,
-                r12_in = in(reg) r12, r13_in = in(reg) r13,
-                r14_in = in(reg) r14,
-                options(nostack),
-            );
-        }
-
         let ok = verify5(crbx, crbp, cr12, cr13, cr14);
         if ok { write_str_nl(b"  PASS: fork() child registers"); }
         else { write_str_nl(b"  FAIL: fork() child registers"); }
         sys::exit(if ok { 0 } else { 1 });
     }
 
-    // Parent: verify its own registers unchanged
-    let mut prbx: u64 = 0; let mut prbp: u64 = 0;
-    let mut pr12: u64 = 0; let mut pr13: u64 = 0; let mut pr14: u64 = 0;
+    sys::waitpid_blocking(child);
 
-    unsafe {
-        core::arch::asm!(
-            "mov {rbx_op}, {rbx_in}",
-            "mov {rbp_op}, {rbp_in}",
-            "mov {r12_op}, {r12_in}",
-            "mov {r13_op}, {r13_in}",
-            "mov {r14_op}, {r14_in}",
-            rbx_op = out(reg) prbx, rbp_op = out(reg) prbp,
-            r12_op = out(reg) pr12, r13_op = out(reg) pr13,
-            r14_op = out(reg) pr14,
-            rbx_in = in(reg) rbx, rbp_in = in(reg) rbp,
-            r12_in = in(reg) r12, r13_in = in(reg) r13,
-            r14_in = in(reg) r14,
-            options(nostack),
-        );
-    }
-
-    sys::waitpid_blocking(child as u64);
-
-    let ok = verify5(prbx, prbp, pr12, pr13, pr14);
+    let ok = verify5(crbx, crbp, cr12, cr13, cr14);
     if ok { write_str_nl(b"  PASS: fork() parent registers"); }
     ok
 }
@@ -394,59 +425,8 @@ extern "C" fn sigusr1_handler(_signum: u64) {}
 
 fn test_signal() -> bool {
     write_str_nl(b"== Test 7: signal delivery ==");
-
-    let handler_addr = sigusr1_handler as *const () as u64;
-    let ret = sys::sigaction(10, handler_addr, 0);
-    if sys::is_error(ret) {
-        write_str_nl(b"  SKIP: sigaction() failed");
-        return false;
-    }
-
-    let mut rbx: u64; let mut rbp: u64;
-    let mut r12: u64; let mut r13: u64; let mut r14: u64;
-
-    unsafe {
-        core::arch::asm!(
-            "mov {rbx_op}, 0xAAAAAAAAAAAAAAAA",
-            "mov {rbp_op}, 0xBBBBBBBBBBBBBBBB",
-            "mov {r12_op}, 0x5555555555555555",
-            "mov {r13_op}, 0x6666666666666666",
-            "mov {r14_op}, 0x7777777777777777",
-            rbx_op = out(reg) rbx, rbp_op = out(reg) rbp,
-            r12_op = out(reg) r12, r13_op = out(reg) r13,
-            r14_op = out(reg) r14,
-            options(nostack),
-        );
-    }
-
-    // Send ourselves SIGUSR1 — handler runs and returns
-    let my_pid = sys::getpid();
-    sys::kill(my_pid, 10);
-
-    // Verify registers restored after signal handler
-    let mut rbx2: u64 = 0; let mut rbp2: u64 = 0;
-    let mut r122: u64 = 0; let mut r132: u64 = 0; let mut r142: u64 = 0;
-
-    unsafe {
-        core::arch::asm!(
-            "mov {rbx_op}, {rbx_in}",
-            "mov {rbp_op}, {rbp_in}",
-            "mov {r12_op}, {r12_in}",
-            "mov {r13_op}, {r13_in}",
-            "mov {r14_op}, {r14_in}",
-            rbx_op = out(reg) rbx2, rbp_op = out(reg) rbp2,
-            r12_op = out(reg) r122, r13_op = out(reg) r132,
-            r14_op = out(reg) r142,
-            rbx_in = in(reg) rbx, rbp_in = in(reg) rbp,
-            r12_in = in(reg) r12, r13_in = in(reg) r13,
-            r14_in = in(reg) r14,
-            options(nostack),
-        );
-    }
-
-    let ok = verify5(rbx2, rbp2, r122, r132, r142);
-    if ok { write_str_nl(b"  PASS: signal delivery"); }
-    ok
+    write_str_nl(b"  SKIP: kernel signal delivery bug (RIP=0x600000000 page fault)");
+    false
 }
 
 // ── Test 8: multi-context-switch ───────────────────────────────────────────
